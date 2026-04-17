@@ -108,7 +108,7 @@ serve(async (req) => {
     `;
 
     const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly/i;
-    const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i, /[\u{1F300}-\u{1F9FF}]/u];
+    const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i]; // Removed emoji pattern
 
     const eventMap = new Map();
     for (const cal of enabled) {
