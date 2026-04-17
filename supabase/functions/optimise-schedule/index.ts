@@ -17,7 +17,14 @@ serve(async (req) => {
     console.log("[optimise-schedule] START - Theme-Aware Redistribution");
     
     const authHeader = req.headers.get('Authorization')
-    const { durationOverride, maxTasksOverride, slotAlignment = 15, selectedDays = [1, 2, 3, 4, 5], placeholderDate } = await req.json();
+    const { 
+      durationOverride, 
+      maxTasksOverride, 
+      slotAlignment = 15, 
+      selectedDays = [1, 2, 3, 4, 5], 
+      placeholderDate,
+      vettedEventIds = [] // New: IDs that should be treated as locked
+    } = await req.json();
     
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -47,8 +54,9 @@ serve(async (req) => {
     const dayThemes = themesRes.data || [];
     const workKeywords = settings.work_keywords || [];
 
-    const fixedEvents = allEvents.filter(e => e.is_locked);
-    const movableEvents = allEvents.filter(e => !e.is_locked);
+    // Treat vetted events as locked for this run
+    const fixedEvents = allEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
+    const movableEvents = allEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
 
     if (movableEvents.length === 0) {
       return new Response(JSON.stringify({ message: 'No movable events found.', changes: [] }), { headers: corsHeaders });
@@ -88,7 +96,6 @@ serve(async (req) => {
       is_work: workKeywords.some(kw => event.title.toLowerCase().includes(kw.toLowerCase()))
     }));
 
-    // Sort to keep similar tasks together in the processing queue
     if (settings.group_similar_tasks !== false) {
       categorizedEvents.sort((a, b) => a.temp_category.localeCompare(b.temp_category));
     }
@@ -108,7 +115,6 @@ serve(async (req) => {
       return new Date(Math.ceil(date.getTime() / ms) * ms);
     };
 
-    // Pre-calculate fixed event impact
     fixedEvents.forEach(f => {
       const dayKey = new Date(f.start_time).toISOString().split('T')[0];
       const isWork = workKeywords.some(kw => f.title.toLowerCase().includes(kw.toLowerCase()));
@@ -125,13 +131,11 @@ serve(async (req) => {
       const durationMs = effectiveDuration * 60000;
       let foundSlot = false;
 
-      // Pass 1: Try to find a day that matches the theme
-      // Pass 2: Fallback to any allowed day
       for (let pass = 1; pass <= 2; pass++) {
         if (foundSlot) break;
         
         let dayOffset = 1;
-        while (!foundSlot && dayOffset <= 14) { // Search up to 2 weeks
+        while (!foundSlot && dayOffset <= 14) {
           let currentPointer = new Date();
           currentPointer.setDate(currentPointer.getDate() + dayOffset);
           currentPointer.setHours(0, 0, 0, 0);
@@ -140,10 +144,8 @@ serve(async (req) => {
           const dayKey = currentPointer.toISOString().split('T')[0];
           const dayTheme = dayThemes.find(t => t.day_of_week === dayOfWeek)?.theme || "General";
           
-          // Skip if not an allowed day
           if (!selectedDays.includes(dayOfWeek)) { dayOffset++; continue; }
 
-          // In Pass 1, only look for days that match the task's category
           if (pass === 1 && event.temp_category !== "General" && dayTheme !== event.temp_category) {
             dayOffset++;
             continue;
@@ -208,7 +210,6 @@ serve(async (req) => {
         }
       }
 
-      // Surplus handling
       if (!foundSlot && placeholderDate) {
         const pDate = new Date(placeholderDate);
         const offset = getOffset(pDate);

@@ -152,10 +152,10 @@ const Plan = () => {
     finally { setIsProcessing(false); }
   };
 
-  const runOptimisation = async () => {
+  const runOptimisation = async (isResuggest = false) => {
     if (selectedDays.length === 0) { showError("Select at least one day."); return; }
     setIsProcessing(true);
-    setStatusText('Optimising...');
+    setStatusText(isResuggest ? 'Reshuffling unvetted tasks...' : 'Optimising...');
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -166,22 +166,31 @@ const Plan = () => {
           maxTasksOverride, 
           slotAlignment: parseInt(slotAlignment), 
           selectedDays,
-          placeholderDate
+          placeholderDate,
+          vettedEventIds: isResuggest ? appliedChanges : [] // Pass vetted IDs to treat as locked
         }
       });
       if (error) throw error;
 
+      // Merge new changes with existing vetted changes if resuggesting
+      let finalChanges = data.changes;
+      if (isResuggest && proposal) {
+        const vettedChanges = proposal.proposed_changes.filter((c: any) => appliedChanges.includes(c.event_id));
+        const newUnvettedChanges = data.changes.filter((c: any) => !appliedChanges.includes(c.event_id));
+        finalChanges = [...vettedChanges, ...newUnvettedChanges];
+      }
+
       const { data: newProposal } = await supabase.from('optimisation_history').insert({
         user_id: user.id,
-        proposed_changes: data.changes,
+        proposed_changes: finalChanges.map((c: any) => ({ ...c, applied: appliedChanges.includes(c.event_id) })),
         status: 'proposed',
-        metadata: { selectedDays, maxTasksOverride, maxHoursOverride, durationOverride }
+        metadata: { selectedDays, maxTasksOverride, maxHoursOverride, durationOverride, isResuggest }
       }).select().single();
 
       setProposal(newProposal);
-      setAppliedChanges([]);
+      // Keep appliedChanges as they are
       setCurrentStep('active_plan');
-      showSuccess("Optimisation complete!");
+      showSuccess(isResuggest ? "Day resuggested!" : "Optimisation complete!");
     } catch (err: any) { showError(err.message); }
     finally { setIsProcessing(false); }
   };
@@ -192,6 +201,7 @@ const Plan = () => {
     try {
       await supabase.from('optimisation_history').update({ status: 'cancelled' }).eq('id', proposal.id);
       setProposal(null);
+      setAppliedChanges([]);
       setCurrentStep('initial');
       showSuccess("Plan cleared");
     } catch (err: any) { showError("Failed to reset"); }
@@ -349,7 +359,7 @@ const Plan = () => {
         </div>
       </div>
       
-      <Button onClick={runOptimisation} className="w-full bg-indigo-600 text-white rounded-xl py-6 text-xs font-black uppercase tracking-widest shadow-lg shadow-indigo-100">
+      <Button onClick={() => runOptimisation(false)} className="w-full bg-indigo-600 text-white rounded-xl py-6 text-xs font-black uppercase tracking-widest shadow-lg shadow-indigo-100">
         <Wand2 size={14} className="mr-2" /> Re-Generate Plan
       </Button>
     </div>
@@ -491,7 +501,7 @@ const Plan = () => {
               appliedChanges={appliedChanges}
               onApplyDay={handleApplyDay}
               onUndoApplyDay={handleUndoApplyDay}
-              onResuggestDay={runOptimisation}
+              onResuggestDay={() => runOptimisation(true)} // Pass true for isResuggest
               maxHours={maxHoursOverride}
               maxTasks={maxTasksOverride}
               workKeywords={settings?.work_keywords}
