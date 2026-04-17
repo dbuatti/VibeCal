@@ -78,7 +78,30 @@ serve(async (req) => {
     if (!homeSetPath) throw new Error("Could not find Calendar Home Set.");
     const homeSetUrl = getFullUrl(homeSetPath, discoveryRes.url);
 
-    // 2. Get Enabled Calendars
+    // 2. Discovery of all calendars (to ensure the list is up to date)
+    const calendarsRes = await fetch(homeSetUrl, {
+      method: 'PROPFIND',
+      headers: { 'Authorization': `Basic ${auth}`, 'Depth': '1' },
+      body: `<?xml version="1.0" encoding="utf-8" ?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/></d:prop></d:propfind>`
+    });
+    const calendarsXml = await calendarsRes.text();
+    const calendarMatches = calendarsXml.matchAll(/<d:response>[\s\S]*?<d:href>([^<]+)<\/d:href>[\s\S]*?<d:displayname>([^<]+)<\/d:displayname>/gi);
+    const discoveredCals = [];
+    for (const match of calendarMatches) {
+      if (match[1].includes('calendar') || match[1].includes('tasks')) {
+        discoveredCals.push({
+          user_id: user.id,
+          calendar_id: match[1],
+          calendar_name: match[2],
+          provider: 'apple'
+        });
+      }
+    }
+    if (discoveredCals.length > 0) {
+      await supabaseAdmin.from('user_calendars').upsert(discoveredCals, { onConflict: 'user_id, calendar_id' });
+    }
+
+    // 3. Get Enabled Calendars
     const { data: enabled } = await supabaseAdmin
       .from('user_calendars')
       .select('calendar_id, calendar_name, is_enabled')
@@ -86,11 +109,13 @@ serve(async (req) => {
       .eq('provider', 'apple');
 
     const enabledCalendars = (enabled || []).filter(c => c.is_enabled);
+    console.log(`[sync-apple-calendar] Found ${enabled?.length || 0} Apple calendars. ${enabledCalendars.length} are enabled.`);
+
     if (enabledCalendars.length === 0) {
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
 
-    // 3. Fetch Events - Start from yesterday
+    // 4. Fetch Events - Start from yesterday
     const syncStartTime = new Date();
     syncStartTime.setDate(syncStartTime.getDate() - 1);
     const syncEndTime = new Date();
@@ -166,13 +191,17 @@ serve(async (req) => {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
     }
 
-    // Cleanup: Remove events for this provider that weren't in the latest sync
-    await supabaseAdmin.from('calendar_events_cache')
-      .delete()
-      .eq('user_id', user.id)
-      .eq('provider', 'apple')
-      .lt('last_synced_at', syncTimestamp);
+    // Cleanup: Only remove events for this provider that weren't in the latest sync
+    // This prevents "disappearing" events if a single sync run fails or returns partial data
+    if (uniqueEvents.length > 0) {
+      await supabaseAdmin.from('calendar_events_cache')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('provider', 'apple')
+        .lt('last_synced_at', syncTimestamp);
+    }
 
+    console.log(`[sync-apple-calendar] FINISHED - Cached ${uniqueEvents.length} unique events from Apple.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders });
   } catch (error) {
     console.error("[sync-apple-calendar] FATAL ERROR:", error.message);
