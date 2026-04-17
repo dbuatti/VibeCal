@@ -21,6 +21,66 @@ const Optimise = () => {
   const [isApplying, setIsApplying] = useState(false);
   const [events, setEvents] = useState<any[]>([]);
 
+  const fetchEventsAndReview = async (providerLabel: string) => {
+    setStep('Preparing review list...');
+    setProgress(90);
+    const { data: fetchedEvents, error: fetchError } = await supabase
+      .from('calendar_events_cache')
+      .select('*')
+      .order('start_time', { ascending: true });
+
+    if (fetchError) throw fetchError;
+
+    setEvents(fetchedEvents || []);
+    setSyncReport({
+      total: fetchedEvents?.length || 0,
+      googleCount: fetchedEvents?.filter(e => e.provider === 'google').length || 0,
+      appleCount: fetchedEvents?.filter(e => e.provider === 'apple').length || 0,
+    });
+
+    setIsReviewing(true);
+    setProgress(100);
+    showSuccess(`${providerLabel} synced! Please review your tasks.`);
+  };
+
+  const runGoogleSync = async () => {
+    setIsOptimising(true);
+    setProgress(0);
+    try {
+      setStep('Syncing Google Calendar...');
+      setProgress(20);
+      const { data: { session } } = await supabase.auth.getSession();
+      const providerToken = session?.provider_token;
+
+      if (!providerToken) throw new Error("Google token not found. Please re-login.");
+
+      await supabase.functions.invoke('sync-calendar', {
+        body: { googleAccessToken: providerToken }
+      });
+      
+      await fetchEventsAndReview('Google');
+    } catch (err: any) {
+      showError(err.message);
+    } finally {
+      setIsOptimising(false);
+    }
+  };
+
+  const runAppleSync = async () => {
+    setIsOptimising(true);
+    setProgress(0);
+    try {
+      setStep('Syncing Apple Calendar...');
+      setProgress(20);
+      await supabase.functions.invoke('sync-apple-calendar');
+      await fetchEventsAndReview('Apple');
+    } catch (err: any) {
+      showError(err.message);
+    } finally {
+      setIsOptimising(false);
+    }
+  };
+
   const runFullAlignment = async () => {
     setIsOptimising(true);
     setProgress(0);
@@ -29,7 +89,6 @@ const Optimise = () => {
     setIsReviewing(false);
     
     try {
-      // 1. Google Sync
       setStep('Syncing Google Calendar...');
       setProgress(10);
       const { data: { session } } = await supabase.auth.getSession();
@@ -41,31 +100,11 @@ const Optimise = () => {
         });
       }
 
-      // 2. Apple Sync
       setProgress(40);
       setStep('Syncing Apple Calendar...');
       await supabase.functions.invoke('sync-apple-calendar');
 
-      // 3. Fetch Combined Cache
-      setProgress(70);
-      setStep('Preparing review list...');
-      const { data: fetchedEvents, error: fetchError } = await supabase
-        .from('calendar_events_cache')
-        .select('*')
-        .order('start_time', { ascending: true });
-
-      if (fetchError) throw fetchError;
-
-      setEvents(fetchedEvents || []);
-      setSyncReport({
-        total: fetchedEvents?.length || 0,
-        googleCount: fetchedEvents?.filter(e => e.provider === 'google').length || 0,
-        appleCount: fetchedEvents?.filter(e => e.provider === 'apple').length || 0,
-      });
-
-      setIsReviewing(true);
-      setProgress(100);
-      showSuccess("Calendars synced! Please review your tasks.");
+      await fetchEventsAndReview('All Calendars');
     } catch (err: any) {
       showError(err.message);
     } finally {
@@ -105,7 +144,7 @@ const Optimise = () => {
       showSuccess("Optimisation complete!");
     } catch (err: any) {
       showError(err.message);
-      setIsReviewing(true); // Go back to review if it fails
+      setIsReviewing(true);
     } finally {
       setIsOptimising(false);
     }
@@ -159,36 +198,62 @@ const Optimise = () => {
 
         {/* INITIAL STATE */}
         {!isOptimising && !isReviewing && !optimisationResult && (
-          <Card className="border-none shadow-2xl shadow-indigo-100/50 rounded-[2.5rem] overflow-hidden bg-white">
-            <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-12 text-white text-center">
-              <div className="w-20 h-20 bg-white/20 rounded-3xl flex items-center justify-center mx-auto mb-8 backdrop-blur-md">
-                <Zap size={40} />
+          <div className="space-y-8">
+            <Card className="border-none shadow-2xl shadow-indigo-100/50 rounded-[2.5rem] overflow-hidden bg-white">
+              <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-12 text-white text-center">
+                <div className="w-20 h-20 bg-white/20 rounded-3xl flex items-center justify-center mx-auto mb-8 backdrop-blur-md">
+                  <Zap size={40} />
+                </div>
+                <h2 className="text-3xl font-black mb-4">Full Schedule Alignment</h2>
+                <p className="text-indigo-100 text-lg max-w-md mx-auto mb-10">
+                  Sync both Google and Apple calendars, then manually review which tasks should be movable.
+                </p>
+                <Button 
+                  onClick={runFullAlignment}
+                  className="bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl px-12 py-8 text-xl font-black shadow-xl transition-all hover:scale-[1.02] active:scale-[0.98]"
+                >
+                  Start Sync & Review
+                </Button>
               </div>
-              <h2 className="text-3xl font-black mb-4">Full Schedule Alignment</h2>
-              <p className="text-indigo-100 text-lg max-w-md mx-auto mb-10">
-                Sync both Google and Apple calendars, then manually review which tasks should be movable.
-              </p>
-              <Button 
-                onClick={runFullAlignment}
-                className="bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl px-12 py-8 text-xl font-black shadow-xl transition-all hover:scale-[1.02] active:scale-[0.98]"
-              >
-                Start Sync & Review
-              </Button>
+              <CardContent className="p-8 bg-gray-50/50 border-t border-gray-100">
+                <div className="flex justify-center gap-12">
+                  <div className="flex items-center gap-3 text-gray-500 font-bold">
+                    <Globe size={20} className="text-blue-500" /> Google
+                  </div>
+                  <div className="flex items-center gap-3 text-gray-500 font-bold">
+                    <Apple size={20} className="text-gray-900" /> Apple
+                  </div>
+                  <div className="flex items-center gap-3 text-gray-500 font-bold">
+                    <Sparkles size={20} className="text-indigo-500" /> AI Optimise
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <Card className="border-none shadow-sm rounded-3xl bg-white p-6 flex flex-col items-center text-center">
+                <div className="w-12 h-12 bg-blue-50 rounded-xl flex items-center justify-center mb-4">
+                  <Globe className="text-blue-600" size={24} />
+                </div>
+                <h3 className="font-bold text-gray-900 mb-2">Debug: Google Only</h3>
+                <p className="text-sm text-gray-500 mb-6">Sync only Google Calendar events for testing.</p>
+                <Button variant="outline" onClick={runGoogleSync} className="w-full rounded-xl border-gray-200">
+                  Sync Google
+                </Button>
+              </Card>
+
+              <Card className="border-none shadow-sm rounded-3xl bg-white p-6 flex flex-col items-center text-center">
+                <div className="w-12 h-12 bg-gray-50 rounded-xl flex items-center justify-center mb-4">
+                  <Apple className="text-gray-900" size={24} />
+                </div>
+                <h3 className="font-bold text-gray-900 mb-2">Debug: Apple Only</h3>
+                <p className="text-sm text-gray-500 mb-6">Sync only Apple Calendar events for testing.</p>
+                <Button variant="outline" onClick={runAppleSync} className="w-full rounded-xl border-gray-200">
+                  Sync Apple
+                </Button>
+              </Card>
             </div>
-            <CardContent className="p-8 bg-gray-50/50 border-t border-gray-100">
-              <div className="flex justify-center gap-12">
-                <div className="flex items-center gap-3 text-gray-500 font-bold">
-                  <Globe size={20} className="text-blue-500" /> Google
-                </div>
-                <div className="flex items-center gap-3 text-gray-500 font-bold">
-                  <Apple size={20} className="text-gray-900" /> Apple
-                </div>
-                <div className="flex items-center gap-3 text-gray-500 font-bold">
-                  <Sparkles size={20} className="text-indigo-500" /> AI Optimise
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+          </div>
         )}
 
         {/* LOADING STATE */}
@@ -216,13 +281,18 @@ const Optimise = () => {
                 <h2 className="text-2xl font-bold text-gray-900">Review & Lock Tasks</h2>
                 <p className="text-gray-500 font-medium">Decide which events the AI is allowed to move.</p>
               </div>
-              <Button 
-                onClick={runOptimisation}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl px-8 py-6 h-auto font-black flex gap-3 shadow-lg shadow-indigo-100"
-              >
-                Calculate Optimisation
-                <ChevronRight size={20} />
-              </Button>
+              <div className="flex gap-3">
+                <Button variant="outline" onClick={() => setIsReviewing(false)} className="rounded-xl">
+                  Back
+                </Button>
+                <Button 
+                  onClick={runOptimisation}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl px-8 py-6 h-auto font-black flex gap-3 shadow-lg shadow-indigo-100"
+                >
+                  Calculate Optimisation
+                  <ChevronRight size={20} />
+                </Button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 gap-4">
