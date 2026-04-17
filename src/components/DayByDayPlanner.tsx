@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { format, parseISO } from 'date-fns';
+import { format, parseISO, isBefore, isAfter, startOfDay, endOfDay } from 'date-fns';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -72,7 +72,9 @@ const DayByDayPlanner = ({
   }, [events, currentDateStr]);
 
   const isDayVetted = useMemo(() => {
-    return dayChanges.length === 0 || dayChanges.every(c => appliedChanges.includes(c.event_id));
+    // A day is vetted if all proposed changes for that day have been applied
+    if (dayChanges.length === 0) return true;
+    return dayChanges.every(c => appliedChanges.includes(c.event_id));
   }, [dayChanges, appliedChanges]);
 
   useEffect(() => {
@@ -93,9 +95,27 @@ const DayByDayPlanner = ({
     const activeChanges = dayChanges.filter(c => !c.is_surplus);
     const surplusCount = dayChanges.filter(c => c.is_surplus).length;
     
-    const totalTasks = activeChanges.length + dayLockedEvents.filter(e => !e.title.toLowerCase().includes('break')).length;
-    const totalMinutes = [...activeChanges, ...dayLockedEvents].reduce((acc, e) => acc + (e.duration || e.duration_minutes || 0), 0);
-    const totalHours = totalMinutes / 60;
+    // Calculate non-overlapping work hours
+    const workEvents = [...activeChanges, ...dayLockedEvents]
+      .filter(e => e.is_work || e.title.toLowerCase().includes('work') || e.title.toLowerCase().includes('session'))
+      .sort((a, b) => parseISO(a.start_time || a.new_start).getTime() - parseISO(b.start_time || b.new_start).getTime());
+
+    let totalWorkMinutes = 0;
+    let lastEnd = new Date(0);
+
+    workEvents.forEach(e => {
+      const start = parseISO(e.start_time || e.new_start);
+      const end = parseISO(e.end_time || e.new_end);
+      
+      if (isAfter(end, lastEnd)) {
+        const effectiveStart = isBefore(start, lastEnd) ? lastEnd : start;
+        totalWorkMinutes += (end.getTime() - effectiveStart.getTime()) / 60000;
+        lastEnd = end;
+      }
+    });
+
+    const totalTasks = activeChanges.length + dayLockedEvents.filter(e => !e.title.toLowerCase().includes('break') && !e.title.toLowerCase().includes('lunch') && !e.title.toLowerCase().includes('dinner')).length;
+    const totalHours = totalWorkMinutes / 60;
     
     return {
       tasks: totalTasks,

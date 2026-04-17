@@ -13,7 +13,7 @@ serve(async (req) => {
   }
 
   try {
-    console.log("[sync-apple-calendar] Starting Apple Sync...");
+    console.log("[sync-apple-calendar] START - Apple Sync");
     
     const authHeader = req.headers.get('Authorization')
     const supabaseAdmin = createClient(
@@ -29,7 +29,6 @@ serve(async (req) => {
     const { data: { user } } = await supabaseUser.auth.getUser()
     if (!user) throw new Error("Unauthorized");
 
-    // Fetch user settings for both movable and locked keywords
     const { data: settings } = await supabaseAdmin
       .from('user_settings')
       .select('movable_keywords, locked_keywords')
@@ -40,7 +39,10 @@ serve(async (req) => {
     const lockedKeywords = settings?.locked_keywords || [];
 
     const { data: profile } = await supabaseAdmin.from('profiles').select('apple_id, apple_app_password, timezone').eq('id', user.id).single();
-    if (!profile?.apple_id || !profile?.apple_app_password) throw new Error('Apple credentials missing.');
+    if (!profile?.apple_id || !profile?.apple_app_password) {
+      console.log("[sync-apple-calendar] Apple credentials missing. Skipping.");
+      return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
+    }
 
     const userTimezone = profile.timezone || 'UTC';
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
@@ -88,7 +90,10 @@ serve(async (req) => {
 
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
 
-    if (!enabled || enabled.length === 0) return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
+    if (!enabled || enabled.length === 0) {
+      console.log("[sync-apple-calendar] No enabled Apple calendars found.");
+      return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
+    }
 
     // 3. Fetch Events
     const now = new Date();
@@ -102,12 +107,12 @@ serve(async (req) => {
       </c:calendar-query>
     `;
 
-    // Shared locking logic - Removed 'gig' from default fixed keywords
     const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly/i;
     const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i, /[\u{1F300}-\u{1F9FF}]/u];
 
     const eventMap = new Map();
     for (const cal of enabled) {
+      console.log(`[sync-apple-calendar] Fetching events for: ${cal.calendar_name}`);
       const res = await fetch(getFullUrl(cal.calendar_id, homeSetUrl), {
         method: 'REPORT',
         headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/xml', 'Depth': '1' },
@@ -135,6 +140,8 @@ serve(async (req) => {
                            fixedKeywords.test(summary) || 
                            fixedPatterns.some(p => p.test(summary))));
           
+          console.log(`[sync-apple-calendar] Event: "${summary}" | Locked: ${isLocked}`);
+
           eventMap.set(uid, {
             user_id: user.id,
             event_id: uid,
@@ -156,8 +163,10 @@ serve(async (req) => {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
     }
 
+    console.log(`[sync-apple-calendar] FINISHED - Cached ${uniqueEvents.length} unique events`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders });
   } catch (error) {
+    console.error("[sync-apple-calendar] FATAL ERROR:", error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 });

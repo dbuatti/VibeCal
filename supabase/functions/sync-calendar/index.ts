@@ -13,12 +13,13 @@ serve(async (req) => {
   }
 
   try {
-    console.log("[sync-calendar] Starting Google Sync...");
+    console.log("[sync-calendar] START - Google Sync");
     
     const authHeader = req.headers.get('Authorization')
     const { googleAccessToken } = await req.json();
 
     if (!googleAccessToken) {
+      console.error("[sync-calendar] ERROR: Missing Google Access Token");
       throw new Error("Missing Google Access Token");
     }
 
@@ -43,6 +44,7 @@ serve(async (req) => {
     
     const movableKeywords = settings?.movable_keywords || [];
     const lockedKeywords = settings?.locked_keywords || [];
+    console.log(`[sync-calendar] Keywords - Movable: ${movableKeywords.length}, Locked: ${lockedKeywords.length}`);
 
     const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
       headers: { Authorization: `Bearer ${googleAccessToken}` }
@@ -65,22 +67,26 @@ serve(async (req) => {
     
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google');
 
-    if (!enabled || enabled.length === 0) return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders })
+    if (!enabled || enabled.length === 0) {
+      console.log("[sync-calendar] No enabled Google calendars found.");
+      return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
+    }
 
     const now = new Date()
-    // Extend to 30 days
     const end = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
     const eventMap = new Map();
 
-    // Shared locking logic - Removed 'gig' from default fixed keywords
     const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly/i;
     const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i, /[\u{1F300}-\u{1F9FF}]/u];
 
     for (const cal of enabled) {
+      console.log(`[sync-calendar] Fetching events for: ${cal.calendar_name}`);
       const encodedId = encodeURIComponent(cal.calendar_id);
       const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodedId}/events?timeMin=${now.toISOString()}&timeMax=${end.toISOString()}&singleEvents=true&orderBy=startTime`, { headers: { Authorization: `Bearer ${googleAccessToken}` } })
       const data = await res.json()
+      
       if (data.items) {
+        console.log(`[sync-calendar] Found ${data.items.length} events in ${cal.calendar_name}`);
         data.items.forEach(event => {
           const title = event.summary || 'Untitled';
           const start = new Date(event.start.dateTime || event.start.date)
@@ -89,7 +95,6 @@ serve(async (req) => {
           const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
           const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
           
-          // Enhanced locking logic: check keywords, attendees, and recurring status
           const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && (
             !!event.recurringEventId || 
             (event.attendees?.length > 1) ||
@@ -97,6 +102,8 @@ serve(async (req) => {
             fixedPatterns.some(p => p.test(title))
           ));
           
+          console.log(`[sync-calendar] Event: "${title}" | Locked: ${isLocked} | Reason: ${isExplicitlyLocked ? 'Explicit' : isExplicitlyMovable ? 'Movable' : 'Heuristic'}`);
+
           eventMap.set(event.id, {
             user_id: user.id,
             event_id: event.id,
@@ -117,8 +124,10 @@ serve(async (req) => {
     const uniqueEvents = Array.from(eventMap.values());
     if (uniqueEvents.length > 0) await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
 
+    console.log(`[sync-calendar] FINISHED - Cached ${uniqueEvents.length} unique events`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders })
   } catch (error) {
+    console.error("[sync-calendar] FATAL ERROR:", error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders })
   }
 })

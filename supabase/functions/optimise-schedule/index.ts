@@ -14,7 +14,7 @@ serve(async (req) => {
   }
 
   try {
-    console.log("[optimise-schedule] Starting theme-aware redistribution...");
+    console.log("[optimise-schedule] START - Redistribution");
     
     const authHeader = req.headers.get('Authorization')
     const { durationOverride, maxTasksOverride, slotAlignment = 15, selectedDays = [1, 2, 3, 4, 5], placeholderDate } = await req.json();
@@ -50,7 +50,10 @@ serve(async (req) => {
     const fixedEvents = allEvents.filter(e => e.is_locked);
     const movableEvents = allEvents.filter(e => !e.is_locked);
 
+    console.log(`[optimise-schedule] Stats - Fixed: ${fixedEvents.length}, Movable: ${movableEvents.length}`);
+
     if (movableEvents.length === 0) {
+      console.log("[optimise-schedule] No movable events found. Exiting.");
       return new Response(JSON.stringify({ message: 'No movable events found.', changes: [] }), { headers: corsHeaders });
     }
 
@@ -71,8 +74,7 @@ serve(async (req) => {
           if (jsonMatch) categories = JSON.parse(jsonMatch[0]);
         }
       } catch (e) { 
-        console.warn("[optimise-schedule] AI Categorization failed (likely quota). Using keyword fallback.");
-        // Simple keyword fallback for categorization
+        console.warn("[optimise-schedule] AI Categorization failed. Using keyword fallback.");
         categories = movableEvents.map(event => {
           const title = event.title.toLowerCase();
           const matchedTheme = themeList.find(theme => title.includes(theme.toLowerCase()));
@@ -123,7 +125,9 @@ serve(async (req) => {
       let foundSlot = false;
       let dayOffset = 1;
 
-      while (!foundSlot && dayOffset <= 7) {
+      console.log(`[optimise-schedule] Processing: "${event.title}" (${effectiveDuration}m)`);
+
+      while (!foundSlot && dayOffset <= 30) { // Extended search to 30 days
         let currentPointer = new Date();
         currentPointer.setDate(currentPointer.getDate() + dayOffset);
         currentPointer.setHours(0, 0, 0, 0);
@@ -185,12 +189,14 @@ serve(async (req) => {
               is_work: event.is_work,
               is_surplus: false
             });
+            console.log(`[optimise-schedule] Scheduled "${event.title}" on ${dayKey} at ${searchPointer.toISOString()}`);
           }
         }
         if (!foundSlot) dayOffset++;
       }
 
       if (!foundSlot && placeholderDate) {
+        console.log(`[optimise-schedule] No slot found for "${event.title}". Moving to surplus.`);
         const pDate = new Date(placeholderDate);
         const offset = getOffset(pDate);
         const [startH, startM] = settings.day_start_time.split(':').map(Number);
@@ -214,9 +220,10 @@ serve(async (req) => {
       }
     }
 
+    console.log(`[optimise-schedule] FINISHED - Generated ${proposedChanges.length} changes`);
     return new Response(JSON.stringify({ changes: proposedChanges }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
-    console.error("[optimise-schedule] Fatal Error:", error);
+    console.error("[optimise-schedule] FATAL ERROR:", error);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })
