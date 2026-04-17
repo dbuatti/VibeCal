@@ -11,15 +11,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { cn } from '@/lib/utils';
-import { Save, Clock, Shield, Target, Apple, Mail, Lock, Eye, EyeOff, RefreshCw, ListOrdered, Calendar, Globe, Square, Plus, X, Sparkles, Ban } from 'lucide-react';
+import { Save, Clock, Shield, Target, Apple, Mail, Lock, Eye, EyeOff, RefreshCw, ListOrdered, Calendar, Globe, Square, Plus, X, Sparkles } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 
 const Settings = () => {
   const [loading, setLoading] = useState(true);
   const [isTesting, setIsTesting] = useState(false);
   const [calendars, setCalendars] = useState<any[]>([]);
-  const [newMovableKeyword, setNewMovableKeyword] = useState('');
-  const [newLockedKeyword, setNewLockedKeyword] = useState('');
+  const [newKeyword, setNewKeyword] = useState('');
   const [settings, setSettings] = useState<any>({
     day_start_time: '09:00',
     day_end_time: '17:00',
@@ -28,8 +27,7 @@ const Settings = () => {
     optimisation_aggressiveness: 'balanced',
     preview_mode_enabled: true,
     group_similar_tasks: true,
-    movable_keywords: ['arrangement', 'email', 'outreach', 'draft', 'exploration'],
-    locked_keywords: ['meeting', 'call', 'appointment', 'rehearsal', 'lesson']
+    movable_keywords: ['arrangement', 'email', 'outreach', 'draft', 'exploration']
   });
 
   const [profile, setProfile] = useState<any>({
@@ -54,8 +52,8 @@ const Settings = () => {
         if (!user) return;
 
         const [settingsRes, profileRes, calendarsRes, themesRes] = await Promise.all([
-          supabase.from('user_settings').select('*').eq('user_id', user.id).single(),
-          supabase.from('profiles').select('apple_id, apple_app_password').eq('id', user.id).single(),
+          supabase.from('user_settings').select('*').eq('user_id', user.id).maybeSingle(),
+          supabase.from('profiles').select('apple_id, apple_app_password').eq('id', user.id).maybeSingle(),
           supabase.from('user_calendars').select('*').eq('user_id', user.id).order('provider', { ascending: true }),
           supabase.from('day_themes').select('*').eq('user_id', user.id)
         ]);
@@ -63,8 +61,7 @@ const Settings = () => {
         if (settingsRes.data) {
           setSettings({
             ...settingsRes.data,
-            movable_keywords: settingsRes.data.movable_keywords || ['arrangement', 'email', 'outreach', 'draft', 'exploration'],
-            locked_keywords: settingsRes.data.locked_keywords || ['meeting', 'call', 'appointment', 'rehearsal', 'lesson']
+            movable_keywords: settingsRes.data.movable_keywords || ['arrangement', 'email', 'outreach', 'draft', 'exploration']
           });
         }
         if (profileRes.data) setProfile(profileRes.data);
@@ -92,9 +89,13 @@ const Settings = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
+      // Explicitly specify user_id as the conflict target to avoid 409s
       const { error: settingsError } = await supabase
         .from('user_settings')
-        .upsert({ user_id: user.id, ...settings });
+        .upsert({ 
+          user_id: user.id, 
+          ...settings 
+        }, { onConflict: 'user_id' });
 
       if (settingsError) throw settingsError;
 
@@ -126,11 +127,11 @@ const Settings = () => {
     }
   };
 
-  const addMovableKeyword = async () => {
-    if (!newMovableKeyword.trim()) return;
-    const trimmed = newMovableKeyword.trim().toLowerCase();
+  const addKeyword = async () => {
+    if (!newKeyword.trim()) return;
+    const trimmed = newKeyword.trim().toLowerCase();
     if (settings.movable_keywords.includes(trimmed)) {
-      setNewMovableKeyword('');
+      setNewKeyword('');
       return;
     }
     
@@ -139,64 +140,46 @@ const Settings = () => {
       ...prev,
       movable_keywords: newKeywords
     }));
-    setNewMovableKeyword('');
+    setNewKeyword('');
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-      await supabase.from('user_settings').upsert({ user_id: user.id, movable_keywords: newKeywords });
-      showSuccess(`Added movable: "${trimmed}"`);
+      
+      const { error } = await supabase
+        .from('user_settings')
+        .upsert({ 
+          user_id: user.id, 
+          movable_keywords: newKeywords 
+        }, { onConflict: 'user_id' });
+      
+      if (error) throw error;
+      showSuccess(`Added "${trimmed}"`);
     } catch (err: any) {
       showError("Failed to save keyword");
     }
   };
 
-  const addLockedKeyword = async () => {
-    if (!newLockedKeyword.trim()) return;
-    const trimmed = newLockedKeyword.trim().toLowerCase();
-    if (settings.locked_keywords.includes(trimmed)) {
-      setNewLockedKeyword('');
-      return;
-    }
-    
-    const newKeywords = [...settings.locked_keywords, trimmed];
+  const removeKeyword = async (kw: string) => {
+    const newKeywords = settings.movable_keywords.filter((k: string) => k !== kw);
     setSettings(prev => ({
       ...prev,
-      locked_keywords: newKeywords
+      movable_keywords: newKeywords
     }));
-    setNewLockedKeyword('');
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-      await supabase.from('user_settings').upsert({ user_id: user.id, locked_keywords: newKeywords });
-      showSuccess(`Added locked: "${trimmed}"`);
-    } catch (err: any) {
-      showError("Failed to save keyword");
-    }
-  };
-
-  const removeMovableKeyword = async (kw: string) => {
-    const newKeywords = settings.movable_keywords.filter((k: string) => k !== kw);
-    setSettings(prev => ({ ...prev, movable_keywords: newKeywords }));
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      await supabase.from('user_settings').upsert({ user_id: user.id, movable_keywords: newKeywords });
-      showSuccess(`Removed movable: "${kw}"`);
-    } catch (err: any) {
-      showError("Failed to remove keyword");
-    }
-  };
-
-  const removeLockedKeyword = async (kw: string) => {
-    const newKeywords = settings.locked_keywords.filter((k: string) => k !== kw);
-    setSettings(prev => ({ ...prev, locked_keywords: newKeywords }));
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      await supabase.from('user_settings').upsert({ user_id: user.id, locked_keywords: newKeywords });
-      showSuccess(`Removed locked: "${kw}"`);
+      
+      const { error } = await supabase
+        .from('user_settings')
+        .upsert({ 
+          user_id: user.id, 
+          movable_keywords: newKeywords 
+        }, { onConflict: 'user_id' });
+      
+      if (error) throw error;
+      showSuccess(`Removed "${kw}"`);
     } catch (err: any) {
       showError("Failed to remove keyword");
     }
@@ -319,75 +302,42 @@ const Settings = () => {
             </CardContent>
           </Card>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            <Card className="border-none shadow-sm rounded-2xl">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Sparkles className="text-indigo-600" size={20} />
-                  Movable Task Detection
-                </CardTitle>
-                <CardDescription>Keywords that mark a task as "Movable".</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                <div className="flex gap-2">
-                  <Input 
-                    placeholder="e.g. 🎹, draft, practice" 
-                    value={newMovableKeyword}
-                    onChange={(e) => setNewMovableKeyword(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && addMovableKeyword()}
-                    className="rounded-xl"
-                  />
-                  <Button onClick={addMovableKeyword} variant="secondary" className="rounded-xl">
-                    <Plus size={18} />
-                  </Button>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {settings.movable_keywords.map((kw: string) => (
-                    <Badge key={kw} variant="secondary" className="px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 border-indigo-100 flex items-center gap-2">
-                      {kw}
-                      <button onClick={() => removeMovableKeyword(kw)} className="hover:text-indigo-900">
-                        <X size={14} />
-                      </button>
-                    </Badge>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-none shadow-sm rounded-2xl">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Ban className="text-red-500" size={20} />
-                  Locked Task Detection
-                </CardTitle>
-                <CardDescription>Keywords that mark a task as "NOT MOVABLE".</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                <div className="flex gap-2">
-                  <Input 
-                    placeholder="e.g. meeting, call, appt" 
-                    value={newLockedKeyword}
-                    onChange={(e) => setNewLockedKeyword(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && addLockedKeyword()}
-                    className="rounded-xl"
-                  />
-                  <Button onClick={addLockedKeyword} variant="secondary" className="rounded-xl">
-                    <Plus size={18} />
-                  </Button>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {settings.locked_keywords?.map((kw: string) => (
-                    <Badge key={kw} variant="secondary" className="px-3 py-1.5 rounded-lg bg-red-50 text-red-700 border-red-100 flex items-center gap-2">
-                      {kw}
-                      <button onClick={() => removeLockedKeyword(kw)} className="hover:text-red-900">
-                        <X size={14} />
-                      </button>
-                    </Badge>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+          <Card className="border-none shadow-sm rounded-2xl">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Sparkles className="text-indigo-600" size={20} />
+                Movable Task Detection
+              </CardTitle>
+              <CardDescription>Teach the app which tasks are movable. Keywords here override the "Locked" default.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="flex gap-2">
+                <Input 
+                  placeholder="Add keyword or emoji (e.g. 🎹, outreach, draft)" 
+                  value={newKeyword}
+                  onChange={(e) => setNewKeyword(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addKeyword()}
+                  className="rounded-xl"
+                />
+                <Button onClick={addKeyword} variant="secondary" className="rounded-xl">
+                  <Plus size={18} />
+                </Button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {settings.movable_keywords.map((kw: string) => (
+                  <Badge key={kw} variant="secondary" className="px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 border-indigo-100 flex items-center gap-2">
+                    {kw}
+                    <button onClick={() => removeKeyword(kw)} className="hover:text-indigo-900">
+                      <X size={14} />
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+              <p className="text-xs text-gray-400 italic">
+                Tip: Add emojis like 🎹 or 📣 to ensure tasks with those icons are treated as movable.
+              </p>
+            </CardContent>
+          </Card>
 
           <Card className="border-none shadow-sm rounded-2xl">
             <CardHeader>
