@@ -286,15 +286,25 @@ const Plan = () => {
             {currentStep === 'active_plan' ? 'Review and confirm your schedule one day at a time.' : 'Align your schedule with your life.'}
           </p>
         </div>
-        {currentStep === 'active_plan' && (
+        <div className="flex gap-2">
           <Button 
             variant="ghost" 
-            onClick={handleResetPlan}
-            className="text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-xl font-bold"
+            onClick={() => runAnalysis(false)}
+            disabled={isProcessing}
+            className="text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl font-bold"
           >
-            <Trash2 size={18} className="mr-2" /> Reset Plan
+            <RefreshCw size={18} className={cn("mr-2", isProcessing && "animate-spin")} /> Resync
           </Button>
-        )}
+          {currentStep === 'active_plan' && (
+            <Button 
+              variant="ghost" 
+              onClick={handleResetPlan}
+              className="text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-xl font-bold"
+            >
+              <Trash2 size={18} className="mr-2" /> Reset Plan
+            </Button>
+          )}
+        </div>
       </div>
 
       {isProcessing ? (
