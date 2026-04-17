@@ -48,6 +48,14 @@ serve(async (req) => {
       throw new Error(`Google API Error: ${listData.error.message}`);
     }
 
+    // CLEANUP: Purge any existing 'import' calendars from the DB for this user
+    await supabaseAdmin
+      .from('user_calendars')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('provider', 'google')
+      .like('calendar_id', '%@import.calendar.google.com%');
+
     if (listData.items) {
       // STRICT FILTER: Ignore anything that is an import or contains 'icloud'
       const filteredItems = listData.items.filter(cal => 
@@ -90,8 +98,8 @@ serve(async (req) => {
     const end = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
     const eventMap = new Map();
 
-    // Heuristic for "Fixed" events
-    const fixedKeywords = /appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|ceremony|work session|gig|rehearsal/i;
+    // Robust heuristic for "Fixed" events
+    const fixedKeywords = /appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|gig|work session|check in|grocery|lecture/i;
     const fixedPatterns = [
       /\$\d+/, // Price like $50
       /\d+\s*min/i, // Duration like 45 minutes
@@ -140,7 +148,8 @@ serve(async (req) => {
 
     const uniqueEvents = Array.from(eventMap.values());
     if (uniqueEvents.length > 0) {
-      await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' })
+      const { error: upsertError } = await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
+      if (upsertError) throw upsertError;
     }
 
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders })

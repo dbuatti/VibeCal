@@ -248,7 +248,12 @@ const Optimise = () => {
                     <div key={i} className="bg-slate-900 p-4 rounded-2xl font-mono text-xs text-emerald-400 border border-slate-800">
                       <div className="flex justify-between mb-2 border-b border-slate-800 pb-2">
                         <span className="text-slate-400">#{i + 1} {event.title}</span>
-                        <span className="text-indigo-400">[{event.provider || 'google'}]</span>
+                        <div className="flex items-center gap-2">
+                          <span className={event.is_locked ? "text-red-400" : "text-emerald-400"}>
+                            {event.is_locked ? '[LOCKED]' : '[MOVABLE]'}
+                          </span>
+                          <span className="text-indigo-400">[{event.provider || 'google'}]</span>
+                        </div>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
                         <div>Start: {format(new Date(event.start_time), 'MMM d, HH:mm')}</div>
