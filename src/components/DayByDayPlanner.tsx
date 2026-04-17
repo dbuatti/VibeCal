@@ -73,15 +73,20 @@ const DayByDayPlanner = ({
   }, [events, currentDateStr]);
 
   const stats = useMemo(() => {
-    const totalTasks = dayChanges.length + dayLockedEvents.filter(e => !e.title.toLowerCase().includes('break')).length;
-    const totalMinutes = [...dayChanges, ...dayLockedEvents].reduce((acc, e) => acc + (e.duration || e.duration_minutes || 0), 0);
+    // Only count non-surplus changes and locked events for capacity
+    const activeChanges = dayChanges.filter(c => !c.is_surplus);
+    const surplusCount = dayChanges.filter(c => c.is_surplus).length;
+    
+    const totalTasks = activeChanges.length + dayLockedEvents.filter(e => !e.title.toLowerCase().includes('break')).length;
+    const totalMinutes = [...activeChanges, ...dayLockedEvents].reduce((acc, e) => acc + (e.duration || e.duration_minutes || 0), 0);
     const totalHours = totalMinutes / 60;
     
-    console.log(`[DayByDayPlanner] Stats for ${currentDateStr}:`, { totalTasks, totalHours, maxTasks, maxHours });
+    console.log(`[DayByDayPlanner] Stats for ${currentDateStr}:`, { totalTasks, totalHours, surplusCount, maxTasks, maxHours });
     
     return {
       tasks: totalTasks,
       hours: totalHours,
+      surplusCount,
       isOverTasks: totalTasks > maxTasks,
       isOverHours: totalHours > maxHours,
       isFull: totalTasks >= maxTasks || totalHours >= maxHours
@@ -239,6 +244,20 @@ const DayByDayPlanner = ({
                 </div>
               </div>
 
+              {stats.surplusCount > 0 && (
+                <div className="p-5 bg-indigo-50 rounded-[1.5rem] border border-indigo-100 flex gap-4">
+                  <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center shrink-0">
+                    <Inbox className="text-indigo-600" size={20} />
+                  </div>
+                  <div>
+                    <p className="text-xs text-indigo-900 font-black uppercase tracking-widest mb-1">Backlog Alert</p>
+                    <p className="text-xs text-indigo-700 font-bold leading-relaxed">
+                      {stats.surplusCount} tasks are parked in your backlog for this day.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {stats.isFull ? (
                 <div className="p-5 bg-amber-50 rounded-[1.5rem] border border-amber-100 flex gap-4">
                   <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center shrink-0">
@@ -254,7 +273,7 @@ const DayByDayPlanner = ({
                     <CheckCircle2 className="text-green-600" size={20} />
                   </div>
                   <p className="text-xs text-green-800 font-bold leading-relaxed">
-                    You have space today! The AI has suggested {dayChanges.length} tasks to fill your gaps.
+                    You have space today! The AI has suggested {dayChanges.filter(c => !c.is_surplus).length} tasks to fill your gaps.
                   </p>
                 </div>
               )}
@@ -368,7 +387,7 @@ const DayByDayPlanner = ({
               </div>
             </CardHeader>
             <CardContent className="p-0 flex-1 overflow-hidden">
-              <div className="h-[700px] overflow-y-auto scrollbar-hide">
+              <div className="h-[800px] overflow-y-auto scrollbar-hide">
                 <VisualSchedule 
                   events={events.filter(e => format(parseISO(e.start_time), 'yyyy-MM-dd') === currentDateStr)} 
                   changes={dayChanges} 
