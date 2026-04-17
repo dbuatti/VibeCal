@@ -47,10 +47,7 @@ const Plan = () => {
     setLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        console.warn("[Plan] No user found");
-        return;
-      }
+      if (!user) return;
 
       const { data: history } = await supabase
         .from('optimisation_history')
@@ -61,31 +58,33 @@ const Plan = () => {
         .limit(1)
         .maybeSingle();
 
-      console.log("[Plan] Optimisation history:", history);
-
       const [eventsRes, settingsRes] = await Promise.all([
         supabase.from('calendar_events_cache').select('*').eq('user_id', user.id),
         supabase.from('user_settings').select('*').eq('user_id', user.id).maybeSingle()
       ]);
 
       if (settingsRes.data) {
-        console.log("[Plan] User settings loaded:", settingsRes.data);
         setSettings(settingsRes.data);
         setMaxHoursOverride(settingsRes.data.max_hours_per_day || 6);
         setMaxTasksOverride(settingsRes.data.max_tasks_per_day || 5);
       }
 
       if (history) {
-        console.log("[Plan] Found active proposal, setting step to active_plan");
+        console.log("[Plan] Found active proposal");
         setProposal(history);
+        
+        // Load applied changes from the history metadata or JSONB
+        const appliedIds = history.proposed_changes
+          .filter((c: any) => c.applied === true)
+          .map((c: any) => c.event_id);
+        
+        setAppliedChanges(appliedIds);
         setCurrentStep('active_plan');
       } else {
-        console.log("[Plan] No active proposal found, setting step to initial");
         setCurrentStep('initial');
       }
 
       if (eventsRes.data) {
-        console.log("[Plan] Events cache loaded:", eventsRes.data.length, "events");
         setEvents(eventsRes.data);
       }
     } catch (err: any) {
@@ -101,38 +100,27 @@ const Plan = () => {
   }, []);
 
   const runAnalysis = async () => {
-    console.log("[Plan] Running analysis...");
     setIsProcessing(true);
     setStatusText('Syncing Calendars...');
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.provider_token) {
-        console.log("[Plan] Syncing Google Calendar...");
         await supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: session.provider_token } });
       }
-      console.log("[Plan] Syncing Apple Calendar...");
       await supabase.functions.invoke('sync-apple-calendar');
-      
       const { data: fetchedEvents } = await supabase.from('calendar_events_cache').select('*').order('start_time', { ascending: true });
-      console.log("[Plan] Fetched events after sync:", fetchedEvents?.length);
       setEvents(fetchedEvents || []);
       setCurrentStep('vetting_tasks');
       showSuccess('Calendar analysed!');
-    } catch (err: any) { 
-      console.error("[Plan] Analysis failed:", err);
-      showError(err.message); 
-    }
+    } catch (err: any) { showError(err.message); }
     finally { setIsProcessing(false); }
   };
 
   const runAIClassification = async () => {
-    console.log("[Plan] Running AI classification...");
     setIsProcessing(true);
     setStatusText('AI is learning your preferences...');
     try {
       const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords').single();
-      console.log("[Plan] Using keywords for AI:", { movable: settings?.movable_keywords, locked: settings?.locked_keywords });
-      
       const { data, error } = await supabase.functions.invoke('classify-tasks', {
         body: { 
           tasks: events.map(e => e.title), 
@@ -140,10 +128,7 @@ const Plan = () => {
           lockedKeywords: settings?.locked_keywords || []
         }
       });
-      
       if (error) throw error;
-      console.log("[Plan] AI classification results:", data.classifications);
-      
       const updatedEvents = [...events];
       for (let i = 0; i < updatedEvents.length; i++) {
         const isMovable = data.classifications[i];
@@ -152,27 +137,12 @@ const Plan = () => {
       }
       setEvents(updatedEvents);
       showSuccess("AI has updated your task classifications!");
-    } catch (err: any) { 
-      console.error("[Plan] AI classification failed:", err);
-      showError(err.message); 
-    }
+    } catch (err: any) { showError(err.message); }
     finally { setIsProcessing(false); }
   };
 
   const runOptimisation = async () => {
-    console.log("[Plan] Running optimisation with params:", {
-      durationOverride,
-      maxTasksOverride,
-      maxHoursOverride,
-      selectedDays,
-      placeholderDate
-    });
-    
-    if (selectedDays.length === 0) { 
-      showError("Select at least one day."); 
-      return; 
-    }
-    
+    if (selectedDays.length === 0) { showError("Select at least one day."); return; }
     setIsProcessing(true);
     setStatusText('Calculating optimal alignment...');
     try {
@@ -188,10 +158,7 @@ const Plan = () => {
           placeholderDate
         }
       });
-      
       if (error) throw error;
-      console.log("[Plan] Optimisation successful. Changes proposed:", data.changes.length);
-      console.log("[Plan] Proposed changes sample:", data.changes.slice(0, 3));
 
       const { data: newProposal } = await supabase.from('optimisation_history').insert({
         user_id: user.id,
@@ -201,19 +168,16 @@ const Plan = () => {
       }).select().single();
 
       setProposal(newProposal);
+      setAppliedChanges([]);
       setCurrentStep('active_plan');
       showSuccess("Optimisation complete!");
-    } catch (err: any) { 
-      console.error("[Plan] Optimisation failed:", err);
-      showError(err.message); 
-    }
+    } catch (err: any) { showError(err.message); }
     finally { setIsProcessing(false); }
   };
 
   const handleResetPlan = async () => {
-    console.log("[Plan] Resetting plan...");
     if (!proposal) return;
-    if (!confirm("Are you sure you want to clear this proposed plan? You will need to run the optimiser again.")) return;
+    if (!confirm("Are you sure you want to clear this proposed plan?")) return;
 
     try {
       await supabase
@@ -225,24 +189,20 @@ const Plan = () => {
       setCurrentStep('initial');
       showSuccess("Plan cleared");
     } catch (err: any) {
-      console.error("[Plan] Reset failed:", err);
       showError("Failed to reset plan");
     }
   };
 
   const handleApplyDay = async (dateChanges: any[]) => {
-    console.log("[Plan] Applying changes for day:", dateChanges.length, "tasks");
+    console.log("[Plan] Applying changes for day...");
     try {
       const { data: { session } } = await supabase.auth.getSession();
+      const newAppliedIds = [...appliedChanges];
       
       for (const change of dateChanges) {
         const eventInCache = events.find(e => e.event_id === change.event_id);
-        if (!eventInCache) {
-          console.warn("[Plan] Event not found in cache for change:", change.event_id);
-          continue;
-        }
+        if (!eventInCache) continue;
 
-        console.log(`[Plan] Pushing update to ${eventInCache.provider} for: ${change.title}`);
         await supabase.functions.invoke('push-to-provider', {
           body: { 
             eventId: change.event_id, 
@@ -263,25 +223,35 @@ const Plan = () => {
           })
           .eq('event_id', change.event_id);
         
-        setAppliedChanges(prev => [...prev, change.event_id]);
+        newAppliedIds.push(change.event_id);
       }
-      console.log("[Plan] Day application complete");
+
+      // Update the history record to persist applied status
+      const updatedProposedChanges = proposal.proposed_changes.map((c: any) => ({
+        ...c,
+        applied: newAppliedIds.includes(c.event_id)
+      }));
+
+      await supabase
+        .from('optimisation_history')
+        .update({ proposed_changes: updatedProposedChanges })
+        .eq('id', proposal.id);
+
+      setAppliedChanges(newAppliedIds);
+      setProposal({ ...proposal, proposed_changes: updatedProposedChanges });
+      
+      console.log("[Plan] Day application complete and persisted");
     } catch (err: any) {
-      console.error("[Plan] Error applying day:", err);
       showError(err.message);
       throw err;
     }
   };
 
   const toggleLock = async (eventId: string, currentStatus: boolean) => {
-    console.log(`[Plan] Toggling lock for ${eventId}: ${currentStatus} -> ${!currentStatus}`);
     try {
       await supabase.from('calendar_events_cache').update({ is_locked: !currentStatus }).eq('event_id', eventId);
       setEvents(events.map(e => e.event_id === eventId ? { ...e, is_locked: !currentStatus } : e));
-    } catch (err: any) { 
-      console.error("[Plan] Lock toggle failed:", err);
-      showError("Failed to update lock status"); 
-    }
+    } catch (err: any) { showError("Failed to update lock status"); }
   };
 
   return (
