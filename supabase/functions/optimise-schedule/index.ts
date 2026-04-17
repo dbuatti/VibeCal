@@ -24,14 +24,13 @@ serve(async (req) => {
 
     const { data: { user } } = await supabaseClient.auth.getUser()
     
-    // Fetch settings, profile (for timezone), and events
     const [settingsRes, profileRes, eventsRes] = await Promise.all([
       supabaseClient.from('user_settings').select('*').eq('user_id', user.id).single(),
       supabaseClient.from('profiles').select('timezone').eq('id', user.id).single(),
       supabaseClient.from('calendar_events_cache').select('*').eq('user_id', user.id).order('start_time', { ascending: true })
     ]);
 
-    const settings = settingsRes.data || { day_start_time: '09:00', day_end_time: '17:00' };
+    const settings = settingsRes.data || { day_start_time: '09:00', day_end_time: '17:00', max_hours_per_day: 6, max_tasks_per_day: 5 };
     const userTimezone = profileRes.data?.timezone || 'UTC';
     const allEvents = eventsRes.data || [];
 
@@ -44,41 +43,11 @@ serve(async (req) => {
 
     const proposedChanges = [];
     
-    // Helper to get a Date object for a specific time in the user's timezone
-    const getLocalTime = (dateStr: string, timeStr: string) => {
-      // Create a string that represents the local time, then parse it
-      // This is a simplified way to handle offsets without a heavy library
-      const [hours, minutes] = timeStr.split(':').map(Number);
-      const d = new Date(dateStr);
-      
-      // We use the user's timezone offset to calculate the correct UTC time
-      const formatter = new Intl.DateTimeFormat('en-US', {
-        timeZone: userTimezone,
-        year: 'numeric', month: 'numeric', day: 'numeric',
-        hour: 'numeric', minute: 'numeric', second: 'numeric',
-        hour12: false
-      });
-      
-      // This is a bit complex in vanilla JS, so we'll use a more robust approach:
-      // We'll calculate the offset for the user's timezone at that specific date
-      const parts = formatter.formatToParts(d);
-      const localDate = new Date(d);
-      
-      // Set the hours/minutes in "local" terms
-      // Note: This logic assumes we are moving things to "Tomorrow" onwards
-      return { hours, minutes };
-    };
-
-    // Let's use a simpler approach for the test: 
-    // We'll calculate the UTC offset of the user's timezone
     const now = new Date();
     const tzDate = new Date(now.toLocaleString('en-US', { timeZone: userTimezone }));
     const offsetMs = tzDate.getTime() - now.getTime();
     const offsetHours = Math.round(offsetMs / 3600000);
 
-    console.log(`[optimise-schedule] User Timezone: ${userTimezone}, Estimated Offset: ${offsetHours}h`);
-
-    // Start from tomorrow
     let currentDay = new Date();
     currentDay.setDate(currentDay.getDate() + 1);
     currentDay.setHours(0, 0, 0, 0);
@@ -87,29 +56,39 @@ serve(async (req) => {
     const [startH, startM] = settings.day_start_time.split(':').map(Number);
     const [endH, endM] = settings.day_end_time.split(':').map(Number);
 
-    // Adjust pointer to start of work day in UTC
-    currentPointer.setUTCHours(startH - offsetHours, startM, 0, 0);
+    // Track tasks and hours per day
+    const dailyStats = new Map();
 
     for (const event of movableEvents) {
       const durationMs = event.duration_minutes * 60000;
       let foundSlot = false;
       let attempts = 0;
 
-      while (!foundSlot && attempts < 14) { // Look up to 14 days ahead
+      while (!foundSlot && attempts < 14) {
+        const dayKey = currentPointer.toISOString().split('T')[0];
+        if (!dailyStats.has(dayKey)) {
+          dailyStats.set(dayKey, { tasks: 0, hours: 0 });
+        }
+        const stats = dailyStats.get(dayKey);
+
         const dayEnd = new Date(currentPointer);
         dayEnd.setUTCHours(endH - offsetHours, endM, 0, 0);
 
         const potentialEnd = new Date(currentPointer.getTime() + durationMs);
+        const potentialHours = stats.hours + (event.duration_minutes / 60);
 
-        // If this task would push past the end of the work day, move to next day
-        if (potentialEnd > dayEnd) {
+        // Check limits: Workday end, Max Hours, and Max Tasks
+        const pastWorkday = potentialEnd > dayEnd;
+        const pastHoursLimit = potentialHours > (settings.max_hours_per_day || 24);
+        const pastTasksLimit = stats.tasks >= (settings.max_tasks_per_day || 999);
+
+        if (pastWorkday || pastHoursLimit || pastTasksLimit) {
           currentPointer.setUTCDate(currentPointer.getUTCDate() + 1);
           currentPointer.setUTCHours(startH - offsetHours, startM, 0, 0);
           attempts++;
           continue;
         }
 
-        // Check for collisions with fixed events on this day
         const collision = fixedEvents.find(f => {
           const fStart = new Date(f.start_time);
           const fEnd = new Date(f.end_time);
@@ -117,10 +96,11 @@ serve(async (req) => {
         });
 
         if (collision) {
-          // Move pointer to after the fixed event + 10 min buffer
           currentPointer = new Date(new Date(collision.end_time).getTime() + 10 * 60000);
         } else {
           foundSlot = true;
+          stats.tasks += 1;
+          stats.hours += (event.duration_minutes / 60);
         }
       }
 
@@ -134,7 +114,6 @@ serve(async (req) => {
           duration: event.duration_minutes
         });
 
-        // Advance pointer for next task + 10 min buffer
         currentPointer = new Date(currentPointer.getTime() + durationMs + 10 * 60000);
       }
     }

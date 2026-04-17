@@ -37,7 +37,6 @@ serve(async (req) => {
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
     const initialBase = "https://caldav.icloud.com";
 
-    // Helper to build full URLs using the current server shard
     const getFullUrl = (path: string, currentBase: string) => {
       if (path.startsWith('http')) return path;
       const urlObj = new URL(currentBase);
@@ -45,7 +44,6 @@ serve(async (req) => {
     };
 
     // 1. Find the Principal URL
-    console.log("[sync-apple-calendar] Step 1: Finding Principal...");
     const principalRes = await fetch(initialBase, {
       method: 'PROPFIND',
       headers: {
@@ -61,12 +59,9 @@ serve(async (req) => {
     const principalPath = principalXml.match(/<(?:[^:>]*:)?current-user-principal[^>]*>\s*<(?:[^:>]*:)?href[^>]*>([^<]+)/i)?.[1];
     if (!principalPath) throw new Error("Could not find Principal path.");
     
-    // Use the final URL from the response in case of redirects (shards)
     const principalUrl = getFullUrl(principalPath, principalRes.url);
-    console.log("[sync-apple-calendar] Principal URL:", principalUrl);
 
     // 2. Find the Calendar Home Set
-    console.log("[sync-apple-calendar] Step 2: Finding Calendar Home Set...");
     const homeSetRes = await fetch(principalUrl, {
       method: 'PROPFIND',
       headers: {
@@ -82,10 +77,8 @@ serve(async (req) => {
     if (!homeSetPath) throw new Error("Could not find Calendar Home Set.");
     
     const homeSetUrl = getFullUrl(homeSetPath, homeSetRes.url);
-    console.log("[sync-apple-calendar] Home Set URL:", homeSetUrl);
 
-    // 3. Find individual calendars within the Home Set
-    console.log("[sync-apple-calendar] Step 3: Listing individual calendars...");
+    // 3. Find individual calendars
     const listRes = await fetch(homeSetUrl, {
       method: 'PROPFIND',
       headers: {
@@ -98,17 +91,13 @@ serve(async (req) => {
 
     const listXml = await listRes.text();
     const calendarPaths = [];
-    // Split by response tag, handling optional namespaces
     const responses = listXml.split(/<(?:[^:>]*:)?response[^>]*>/i);
-    
     const normHomePath = homeSetPath.replace(/\/$/, '');
 
     for (const resp of responses) {
-      // Look for the specific 'calendar' resource type tag
       if (resp.includes('<calendar') || resp.includes(':calendar')) {
         const hrefMatch = resp.match(/<(?:[^:>]*:)?href[^>]*>([^<]+)/i);
         const href = hrefMatch?.[1];
-        
         if (href) {
           const normHref = href.replace(/\/$/, '');
           if (normHref !== normHomePath && !calendarPaths.includes(href)) {
@@ -120,12 +109,7 @@ serve(async (req) => {
 
     console.log(`[sync-apple-calendar] Found ${calendarPaths.length} individual calendars.`);
 
-    if (calendarPaths.length === 0) {
-      throw new Error("No individual calendars found. Please ensure you have at least one calendar in iCloud.");
-    }
-
-    // 4. Fetch events from each calendar
-    console.log(`[sync-apple-calendar] Step 4: Fetching events from ${calendarPaths.length} calendars...`);
+    // 4. Fetch events in parallel
     const now = new Date();
     const start = now.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const end = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
@@ -143,59 +127,65 @@ serve(async (req) => {
       </c:calendar-query>
     `;
 
-    const allEvents = [];
-    for (const path of calendarPaths) {
+    const fetchPromises = calendarPaths.map(async (path) => {
       const calUrl = getFullUrl(path, homeSetUrl);
-      console.log(`[sync-apple-calendar] Querying calendar: ${calUrl}`);
-      
-      const response = await fetch(calUrl, {
-        method: 'REPORT',
-        headers: {
-          'Authorization': `Basic ${auth}`,
-          'Content-Type': 'application/xml; charset=utf-8',
-          'Depth': '1'
-        },
-        body: reportXml
-      });
+      try {
+        const response = await fetch(calUrl, {
+          method: 'REPORT',
+          headers: {
+            'Authorization': `Basic ${auth}`,
+            'Content-Type': 'application/xml; charset=utf-8',
+            'Depth': '1'
+          },
+          body: reportXml
+        });
 
-      if (!response.ok) {
-        console.warn(`[sync-apple-calendar] Failed to fetch from ${path}: ${response.status}`);
-        continue;
-      }
+        if (!response.ok) return [];
 
-      const xmlData = await response.text();
-      const eventBlocks = xmlData.split('BEGIN:VEVENT');
-      
-      for (let i = 1; i < eventBlocks.length; i++) {
-        const block = eventBlocks[i];
-        const summary = block.match(/SUMMARY:(.*)/)?.[1]?.trim() || 'Untitled Apple Event';
-        const dtStart = block.match(/DTSTART(?:;VALUE=DATE)?:(.*)/)?.[1]?.trim();
-        const dtEnd = block.match(/DTEND(?:;VALUE=DATE)?:(.*)/)?.[1]?.trim();
-        const uid = block.match(/UID:(.*)/)?.[1]?.trim() || `apple-${Math.random()}`;
+        const xmlData = await response.text();
+        const eventBlocks = xmlData.split('BEGIN:VEVENT');
+        const events = [];
+        
+        for (let i = 1; i < eventBlocks.length; i++) {
+          const block = eventBlocks[i];
+          const summary = block.match(/SUMMARY:(.*)/)?.[1]?.trim() || 'Untitled Apple Event';
+          const dtStart = block.match(/DTSTART(?:;VALUE=DATE)?:(.*)/)?.[1]?.trim();
+          const dtEnd = block.match(/DTEND(?:;VALUE=DATE)?:(.*)/)?.[1]?.trim();
+          const uid = block.match(/UID:(.*)/)?.[1]?.trim() || `apple-${Math.random()}`;
 
-        if (dtStart && dtEnd) {
-          const startDate = parseIcsDate(dtStart);
-          const endDate = parseIcsDate(dtEnd);
-          allEvents.push({
-            user_id: user.id,
-            event_id: uid,
-            title: summary,
-            start_time: startDate.toISOString(),
-            end_time: endDate.toISOString(),
-            duration_minutes: Math.round((endDate.getTime() - startDate.getTime()) / 60000),
-            is_locked: true,
-            provider: 'apple',
-            last_synced_at: new Date().toISOString()
-          });
+          if (dtStart && dtEnd) {
+            const startDate = parseIcsDate(dtStart);
+            const endDate = parseIcsDate(dtEnd);
+            events.push({
+              user_id: user.id,
+              event_id: uid,
+              title: summary,
+              start_time: startDate.toISOString(),
+              end_time: endDate.toISOString(),
+              duration_minutes: Math.round((endDate.getTime() - startDate.getTime()) / 60000),
+              is_locked: true,
+              provider: 'apple',
+              last_synced_at: new Date().toISOString()
+            });
+          }
         }
+        return events;
+      } catch (e) {
+        console.error(`[sync-apple-calendar] Error fetching ${path}:`, e.message);
+        return [];
       }
-    }
+    });
+
+    const results = await Promise.all(fetchPromises);
+    const allEvents = results.flat();
 
     if (allEvents.length > 0) {
       await supabaseClient
         .from('calendar_events_cache')
         .upsert(allEvents, { onConflict: 'user_id, event_id' });
     }
+
+    console.log(`[sync-apple-calendar] Sync complete. Total events: ${allEvents.length}`);
 
     return new Response(
       JSON.stringify({ message: 'Apple Sync successful', count: allEvents.length }),

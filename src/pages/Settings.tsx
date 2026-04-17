@@ -10,7 +10,7 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
-import { Save, Clock, Shield, Target, Apple, Mail, Lock, Eye, EyeOff, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { Save, Clock, Shield, Target, Apple, Mail, Lock, Eye, EyeOff, RefreshCw, CheckCircle2, ListOrdered } from 'lucide-react';
 
 const Settings = () => {
   const [loading, setLoading] = useState(true);
@@ -20,6 +20,7 @@ const Settings = () => {
     day_start_time: '09:00',
     day_end_time: '17:00',
     max_hours_per_day: 6,
+    max_tasks_per_day: 5,
     optimisation_aggressiveness: 'balanced',
     preview_mode_enabled: true,
     group_similar_tasks: true
@@ -93,7 +94,6 @@ const Settings = () => {
   const testAppleConnection = async () => {
     setIsTesting(true);
     try {
-      // First save the current credentials to ensure the edge function uses the latest ones
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
@@ -143,26 +143,43 @@ const Settings = () => {
             <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
                 <Label>Day Start</Label>
-                <Input 
+                <input 
                   type="time" 
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                   value={settings.day_start_time} 
                   onChange={(e) => setSettings({...settings, day_start_time: e.target.value})}
                 />
               </div>
               <div className="space-y-2">
                 <Label>Day End</Label>
-                <Input 
+                <input 
                   type="time" 
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                   value={settings.day_end_time} 
                   onChange={(e) => setSettings({...settings, day_end_time: e.target.value})}
                 />
               </div>
               <div className="space-y-2">
-                <Label>Max Workload (Hours/Day)</Label>
+                <Label className="flex items-center gap-2">
+                  <Clock size={14} className="text-gray-400" />
+                  Max Workload (Hours/Day)
+                </Label>
                 <Input 
                   type="number" 
                   value={settings.max_hours_per_day} 
                   onChange={(e) => setSettings({...settings, max_hours_per_day: parseInt(e.target.value)})}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2">
+                  <ListOrdered size={14} className="text-gray-400" />
+                  Max Tasks Per Day
+                </Label>
+                <Input 
+                  type="number" 
+                  placeholder="e.g. 5"
+                  value={settings.max_tasks_per_day || ''} 
+                  onChange={(e) => setSettings({...settings, max_tasks_per_day: parseInt(e.target.value)})}
                 />
               </div>
             </CardContent>
