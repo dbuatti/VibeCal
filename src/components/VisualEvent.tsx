@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { format, parseISO } from 'date-fns';
-import { Lock, Sparkles, Clock, Utensils, Music, Laptop, Coffee, Inbox, Briefcase } from 'lucide-react';
+import { Lock, Sparkles, Clock, Utensils, Music, Laptop, Coffee, Inbox, Briefcase, ChevronRight } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
@@ -42,13 +42,13 @@ const VisualEvent = ({ event, isApplied, isVetted, isWork }: VisualEventProps) =
 
   return (
     <div className={cn(
-      "p-4 rounded-2xl border transition-all duration-300 group relative overflow-hidden", 
+      "p-5 rounded-[1.5rem] border transition-all duration-300 group relative overflow-hidden hover:scale-[1.01] active:scale-[0.99]", 
       styles, 
       (isApplied || isVetted) && "opacity-40 grayscale"
     )}>
       {/* Work Watermark */}
       {isWork && (
-        <div className="absolute -right-2 -bottom-2 opacity-[0.07] pointer-events-none rotate-12">
+        <div className="absolute -right-2 -bottom-2 opacity-[0.07] pointer-events-none rotate-12 group-hover:rotate-0 transition-transform duration-500">
           <Briefcase size={64} />
         </div>
       )}
@@ -56,37 +56,45 @@ const VisualEvent = ({ event, isApplied, isVetted, isWork }: VisualEventProps) =
       <div className="flex items-center justify-between gap-4 relative z-10">
         <div className="flex items-center gap-4 flex-1">
           <div className={cn(
-            "w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-all", 
+            "w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-all duration-500 group-hover:rotate-6", 
             event.type === 'locked' ? "bg-gray-50/50" : "bg-white/80 shadow-sm"
           )}>
             {event.is_surplus ? (
-              <Inbox size={16} className="text-amber-500" />
+              <Inbox size={18} className="text-amber-500" />
             ) : (
-              icon || (event.type === 'locked' ? <Lock size={14} className="opacity-30" /> : <Sparkles size={16} className="text-indigo-500" />)
+              icon || (event.type === 'locked' ? <Lock size={16} className="opacity-30" /> : <Sparkles size={18} className="text-indigo-500" />)
             )}
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h4 className={cn("font-black leading-tight tracking-tight", event.is_surplus ? "text-xs" : "text-sm")}>
+              <h4 className={cn("font-black leading-tight tracking-tight", event.is_surplus ? "text-xs" : "text-base")}>
                 {event.title}
               </h4>
               {isWork && (
-                <Badge variant="secondary" className="bg-slate-200/50 text-slate-600 text-[7px] font-black px-1 py-0 h-3 uppercase tracking-tighter border-none">
+                <Badge variant="secondary" className="bg-slate-200/50 text-slate-600 text-[8px] font-black px-1.5 py-0 h-4 uppercase tracking-tighter border-none">
                   Work
                 </Badge>
               )}
             </div>
-            <div className="flex items-center gap-1.5 mt-1 text-[8px] font-black uppercase tracking-widest opacity-50">
+            <div className="flex items-center gap-1.5 mt-1 text-[9px] font-black uppercase tracking-widest opacity-50">
               <Clock size={10} />
               {format(parseISO(event.start_time), 'HH:mm')} – {format(parseISO(event.end_time), 'HH:mm')}
             </div>
           </div>
         </div>
-        {event.is_surplus && (
-          <Badge variant="outline" className="text-[7px] font-black border-amber-200 text-amber-600 bg-white px-1.5 py-0">
-            BACKLOG
-          </Badge>
-        )}
+        
+        <div className="flex items-center gap-3">
+          {event.is_surplus && (
+            <Badge variant="outline" className="text-[8px] font-black border-amber-200 text-amber-600 bg-white px-2 py-0.5">
+              BACKLOG
+            </Badge>
+          )}
+          {event.type === 'proposed' && !isApplied && (
+            <div className="w-8 h-8 rounded-full bg-indigo-600/10 flex items-center justify-center text-indigo-600 opacity-0 group-hover:opacity-100 transition-opacity">
+              <ChevronRight size={16} />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
