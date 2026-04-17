@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, Bug, ArrowRight, Zap, Apple } from 'lucide-react';
+import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, Bug, ArrowRight, Zap, Apple, Info } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { format } from 'date-fns';
@@ -45,7 +45,7 @@ const Optimise = () => {
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
 
-      await finalizeSync(data.count);
+      await finalizeSync(data.count, data.events);
     } catch (err: any) {
       showError(err.message);
     } finally {
@@ -67,7 +67,7 @@ const Optimise = () => {
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
 
-      await finalizeSync(data.count);
+      await finalizeSync(data.count, data.events);
     } catch (err: any) {
       showError(err.message);
     } finally {
@@ -75,7 +75,7 @@ const Optimise = () => {
     }
   };
 
-  const finalizeSync = async (count: number) => {
+  const finalizeSync = async (count: number, rawEvents?: any[]) => {
     setStep('Verifying database records...');
     setProgress(80);
 
@@ -92,7 +92,8 @@ const Optimise = () => {
         start: events?.[0]?.start_time,
         end: events?.[events.length - 1]?.start_time
       },
-      samples: events?.slice(0, 5) || [],
+      samples: events || [],
+      rawResponse: rawEvents,
       lastSync: new Date().toISOString()
     });
     
@@ -129,7 +130,6 @@ const Optimise = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("User not found");
 
-      // Update the local cache with new times
       for (const change of optimisationResult.changes) {
         const { error } = await supabase
           .from('calendar_events_cache')
@@ -224,23 +224,40 @@ const Optimise = () => {
                 <h2 className="text-xl font-bold text-gray-900">Calendar Synced</h2>
                 <p className="text-gray-500 text-sm mt-1">{syncReport.total} events found in the next 14 days.</p>
               </div>
-              <Button onClick={runOptimisation} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-8 py-6 h-auto font-bold flex gap-2">
-                <Zap size={18} />
-                Run Optimisation
-              </Button>
+              <div className="flex gap-3">
+                <Button variant="outline" onClick={() => setSyncReport(null)} className="rounded-xl">
+                  Back
+                </Button>
+                <Button onClick={runOptimisation} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-8 py-6 h-auto font-bold flex gap-2">
+                  <Zap size={18} />
+                  Run Optimisation
+                </Button>
+              </div>
             </div>
 
             {showDebug && (
-              <Card className="border-none shadow-sm bg-slate-900 rounded-3xl overflow-hidden">
-                <CardHeader className="border-b border-slate-800 px-8 py-4">
-                  <CardTitle className="text-sm font-mono text-slate-400">Sync Debug Info</CardTitle>
-                </CardHeader>
-                <CardContent className="p-6">
-                  <pre className="text-[10px] text-emerald-400 font-mono overflow-auto max-h-64">
-                    {JSON.stringify(syncReport, null, 2)}
-                  </pre>
-                </CardContent>
-              </Card>
+              <div className="space-y-4">
+                <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                  <Info size={20} className="text-indigo-600" />
+                  Discovered Events Debug
+                </h3>
+                <div className="grid grid-cols-1 gap-3">
+                  {syncReport.samples.map((event: any, i: number) => (
+                    <div key={i} className="bg-slate-900 p-4 rounded-2xl font-mono text-xs text-emerald-400 border border-slate-800">
+                      <div className="flex justify-between mb-2 border-b border-slate-800 pb-2">
+                        <span className="text-slate-400">#{i + 1} {event.title}</span>
+                        <span className="text-indigo-400">[{event.provider || 'google'}]</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>Start: {format(new Date(event.start_time), 'MMM d, HH:mm')}</div>
+                        <div>End: {format(new Date(event.end_time), 'MMM d, HH:mm')}</div>
+                        <div>Duration: {event.duration_minutes}m</div>
+                        <div>Calendar: {event.source_calendar || 'primary'}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
         )}

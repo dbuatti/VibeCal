@@ -143,15 +143,12 @@ serve(async (req) => {
         if (!response.ok) return [];
 
         const xmlData = await response.text();
-        // Unfold lines (ICS standard: lines starting with space are continuations)
         const unfolded = xmlData.replace(/\r?\n /g, '');
         const eventBlocks = unfolded.split('BEGIN:VEVENT');
         const events = [];
         
         for (let i = 1; i < eventBlocks.length; i++) {
           const block = eventBlocks[i];
-          
-          // Improved regex to handle parameters like ;TZID=...
           const summary = block.match(/^SUMMARY[^:]*:(.*)$/m)?.[1]?.trim() || 'Untitled Apple Event';
           const dtStart = block.match(/^DTSTART[^:]*:(.*)$/m)?.[1]?.trim();
           const dtEnd = block.match(/^DTEND[^:]*:(.*)$/m)?.[1]?.trim();
@@ -161,7 +158,6 @@ serve(async (req) => {
             try {
               const startDate = parseIcsDate(dtStart);
               const endDate = parseIcsDate(dtEnd);
-              
               if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) continue;
 
               events.push({
@@ -173,6 +169,7 @@ serve(async (req) => {
                 duration_minutes: Math.round((endDate.getTime() - startDate.getTime()) / 60000),
                 is_locked: true,
                 provider: 'apple',
+                source_calendar: path.split('/').filter(Boolean).pop(),
                 last_synced_at: new Date().toISOString()
               });
             } catch (e) {
@@ -199,7 +196,11 @@ serve(async (req) => {
     console.log(`[sync-apple-calendar] Sync complete. Total events: ${allEvents.length}`);
 
     return new Response(
-      JSON.stringify({ message: 'Apple Sync successful', count: allEvents.length }),
+      JSON.stringify({ 
+        message: 'Apple Sync successful', 
+        count: allEvents.length,
+        events: allEvents // Returning events for debugging
+      }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (error) {
@@ -212,25 +213,16 @@ serve(async (req) => {
 });
 
 function parseIcsDate(icsDate: string) {
-  // Remove any non-numeric characters except T and Z
   const clean = icsDate.trim().replace(/[^0-9TZ]/g, '');
-  
   const y = parseInt(clean.substring(0, 4));
   const m = parseInt(clean.substring(4, 6)) - 1;
   const d = parseInt(clean.substring(6, 8));
-  
   if (clean.includes('T')) {
     const h = parseInt(clean.substring(9, 11));
     const min = parseInt(clean.substring(11, 13));
     const s = parseInt(clean.substring(13, 15));
-    
-    if (clean.endsWith('Z')) {
-      return new Date(Date.UTC(y, m, d, h, min, s));
-    }
-    // Floating time - treat as local
+    if (clean.endsWith('Z')) return new Date(Date.UTC(y, m, d, h, min, s));
     return new Date(y, m, d, h, min, s);
   }
-  
-  // All-day event
   return new Date(y, m, d);
 }
