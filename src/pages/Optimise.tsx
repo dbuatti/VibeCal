@@ -366,7 +366,15 @@ const Optimise = () => {
                       <div className="bg-indigo-50/50 px-6 py-4 md:w-48 flex flex-col justify-center border-t md:border-t-0 md:border-l border-indigo-100/50">
                         <div className="flex items-center gap-2 text-indigo-600 font-bold text-sm">
                           <Clock size={14} />
-                          {change.duration} mins
+                          {change.old_duration !== change.duration ? (
+                            <span className="flex items-center gap-1">
+                              <span className="line-through opacity-50">{change.old_duration}m</span>
+                              <ArrowRight size={10} />
+                              {change.duration}m
+                            </span>
+                          ) : (
+                            <span>{change.duration}m</span>
+                          )}
                         </div>
                         <p className="text-[10px] text-indigo-400 font-bold uppercase mt-1">Duration</p>
                       </div>

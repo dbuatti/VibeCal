@@ -119,6 +119,7 @@ serve(async (req) => {
           event_id: event.event_id,
           title: event.title,
           old_start: event.start_time,
+          old_duration: event.duration_minutes,
           new_start: currentPointer.toISOString(),
           new_end: new Date(currentPointer.getTime() + durationMs).toISOString(),
           duration: effectiveDuration
