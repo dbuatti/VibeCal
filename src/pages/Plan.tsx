@@ -40,18 +40,25 @@ const Plan = () => {
   const [placeholderDate, setPlaceholderDate] = useState<string>(format(nextSaturday(new Date()), 'yyyy-MM-dd'));
 
   const fetchData = async () => {
+    console.log("[Plan] fetchData START");
     setLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      if (!user) {
+        console.log("[Plan] No user found, skipping fetch");
+        return;
+      }
 
       // Check for token in session and cache it if found
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.provider_token) {
-        console.log("[Plan] Found fresh Google token in session, caching...");
-        await supabase.from('profiles').update({ google_access_token: session.provider_token }).eq('id', user.id);
+        console.log("[Plan] Found fresh Google token in session, caching to DB...");
+        const { error: cacheError } = await supabase.from('profiles').update({ google_access_token: session.provider_token }).eq('id', user.id);
+        if (cacheError) console.error("[Plan] Token cache error:", cacheError);
+        else console.log("[Plan] Token cached successfully");
       }
 
+      console.log("[Plan] Fetching history, events, and settings...");
       const { data: history } = await supabase
         .from('optimisation_history')
         .select('*')
@@ -67,6 +74,7 @@ const Plan = () => {
       ]);
 
       if (settingsRes.data) {
+        console.log("[Plan] Settings loaded:", settingsRes.data);
         const s = settingsRes.data;
         setSettings(s);
         setMaxHoursOverride(s.max_hours_per_day || 6);
@@ -77,22 +85,30 @@ const Plan = () => {
         if (s.placeholder_date) setPlaceholderDate(s.placeholder_date);
       }
 
-      if (eventsRes.data) setEvents(eventsRes.data);
+      if (eventsRes.data) {
+        console.log(`[Plan] ${eventsRes.data.length} events loaded from cache`);
+        setEvents(eventsRes.data);
+      }
 
       if (history) {
+        console.log("[Plan] Active proposal found:", history.id);
         setProposal(history);
         const appliedIds = history.proposed_changes
           .filter((c: any) => c.applied === true)
           .map((c: any) => c.event_id);
+        console.log(`[Plan] ${appliedIds.length} changes already applied`);
         setAppliedChanges(appliedIds);
         setCurrentStep('active_plan');
       } else {
+        console.log("[Plan] No active proposal found, setting to initial");
         setCurrentStep('initial');
       }
     } catch (err: any) {
+      console.error("[Plan] fetchData FATAL ERROR:", err);
       showError("Failed to load your plan");
     } finally {
       setLoading(false);
+      console.log("[Plan] fetchData END");
     }
   };
 
@@ -101,6 +117,7 @@ const Plan = () => {
   }, []);
 
   const runAnalysis = async (skipSync = false) => {
+    console.log(`[Plan] runAnalysis START (skipSync: ${skipSync})`);
     setIsProcessing(true);
     setTokenMissing(false);
     setStatusText(skipSync ? 'Loading cached data...' : 'Syncing Calendars...');
@@ -110,8 +127,8 @@ const Plan = () => {
         const { data: { session } } = await supabase.auth.getSession();
         const { data: { user } } = await supabase.auth.getUser();
         
-        // Try to use session token first, then fallback to database token in the Edge Function
         let token = session?.provider_token;
+        console.log("[Plan] Syncing... Provider:", session?.user?.app_metadata?.provider, "Token in session:", !!token);
         
         if (!token && user?.app_metadata?.provider === 'google') {
           console.log("[Plan] Session token missing, Edge Function will attempt to use database cache.");
@@ -123,6 +140,7 @@ const Plan = () => {
         });
 
         if (syncError || syncData?.error) {
+          console.error("[Plan] sync-calendar error:", syncError || syncData?.error);
           if (syncData?.error?.includes("Missing Google Access Token") || syncData?.error?.includes("401")) {
             setTokenMissing(true);
             setIsProcessing(false);
@@ -130,58 +148,79 @@ const Plan = () => {
           }
           throw new Error(syncError?.message || syncData?.error);
         }
+        console.log("[Plan] sync-calendar success:", syncData);
 
         console.log("[Plan] Invoking sync-apple-calendar...");
-        await supabase.functions.invoke('sync-apple-calendar');
+        const { data: appleData, error: appleError } = await supabase.functions.invoke('sync-apple-calendar');
+        if (appleError) console.error("[Plan] sync-apple-calendar error:", appleError);
+        else console.log("[Plan] sync-apple-calendar success:", appleData);
       }
       
+      console.log("[Plan] Refreshing local event state...");
       const { data: fetchedEvents } = await supabase.from('calendar_events_cache').select('*').order('start_time', { ascending: true });
       setEvents(fetchedEvents || []);
       
       if (currentStep !== 'active_plan') {
+        console.log("[Plan] Navigating to /vet");
         navigate('/vet');
       }
       
       showSuccess(skipSync ? 'Loaded from cache!' : 'Calendar synced!');
     } catch (err: any) { 
-      console.error("[Plan] Sync Error:", err);
+      console.error("[Plan] runAnalysis FATAL ERROR:", err);
       showError(err.message); 
     }
-    finally { setIsProcessing(false); }
+    finally { 
+      setIsProcessing(false); 
+      console.log("[Plan] runAnalysis END");
+    }
   };
 
   const handleReauth = () => {
+    console.log("[Plan] handleReauth triggered");
     navigate('/login');
   };
 
   const handleFullReset = async () => {
+    console.log("[Plan] handleFullReset START");
     setIsProcessing(true);
     setStatusText('Performing full system reset...');
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+      
+      console.log("[Plan] Deleting cache and history...");
       await supabase.from('calendar_events_cache').delete().eq('user_id', user.id);
       await supabase.from('optimisation_history').delete().eq('user_id', user.id);
+      
       setEvents([]);
       setProposal(null);
       setAppliedChanges([]);
       setCurrentStep('initial');
+      
+      console.log("[Plan] Reset complete, triggering fresh sync...");
       await runAnalysis(false);
     } catch (err: any) {
+      console.error("[Plan] handleFullReset error:", err);
       showError("Reset failed: " + err.message);
     } finally {
       setIsProcessing(false);
+      console.log("[Plan] handleFullReset END");
     }
   };
 
   const runOptimisation = async (isResuggest = false) => {
+    console.log(`[Plan] runOptimisation START (isResuggest: ${isResuggest})`);
     if (selectedDays.length === 0) { showError("Select at least one day."); return; }
+    
     setIsProcessing(true);
     setStatusText(isResuggest ? 'Reshuffling unvetted tasks...' : 'Optimising...');
+    
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
+      console.log("[Plan] Saving requirements to settings...");
       await supabase.from('user_settings').upsert({
         user_id: user.id,
         max_hours_per_day: maxHoursOverride,
@@ -193,6 +232,7 @@ const Plan = () => {
       }, { onConflict: 'user_id' });
 
       const currentApplied = isResuggest ? appliedChanges : [];
+      console.log("[Plan] Invoking optimise-schedule with vetted IDs:", currentApplied);
 
       const { data, error } = await supabase.functions.invoke('optimise-schedule', {
         body: { 
@@ -204,15 +244,19 @@ const Plan = () => {
           vettedEventIds: currentApplied 
         }
       });
+      
       if (error) throw error;
+      console.log(`[Plan] optimise-schedule success. ${data.changes.length} changes proposed.`);
 
       let finalChanges = data.changes;
       if (isResuggest && proposal) {
+        console.log("[Plan] Merging resuggested changes with existing vetted changes...");
         const vettedChanges = proposal.proposed_changes.filter((c: any) => currentApplied.includes(c.event_id));
         const newUnvettedChanges = data.changes.filter((c: any) => !currentApplied.includes(c.event_id));
         finalChanges = [...vettedChanges, ...newUnvettedChanges];
       }
 
+      console.log("[Plan] Saving new proposal to history...");
       const { data: newProposal } = await supabase.from('optimisation_history').insert({
         user_id: user.id,
         proposed_changes: finalChanges.map((c: any) => ({ ...c, applied: currentApplied.includes(c.event_id) })),
@@ -224,11 +268,18 @@ const Plan = () => {
       setAppliedChanges(currentApplied);
       setCurrentStep('active_plan');
       showSuccess(isResuggest ? "Day resuggested!" : "Optimisation complete!");
-    } catch (err: any) { showError(err.message); }
-    finally { setIsProcessing(false); }
+    } catch (err: any) { 
+      console.error("[Plan] runOptimisation FATAL ERROR:", err);
+      showError(err.message); 
+    }
+    finally { 
+      setIsProcessing(false); 
+      console.log("[Plan] runOptimisation END");
+    }
   };
 
   const handleResetPlan = async () => {
+    console.log("[Plan] handleResetPlan triggered");
     if (!proposal) return;
     if (!confirm("Clear this plan?")) return;
     try {
@@ -237,10 +288,14 @@ const Plan = () => {
       setAppliedChanges([]);
       setCurrentStep('initial');
       showSuccess("Plan cleared");
-    } catch (err: any) { showError("Failed to reset"); }
+    } catch (err: any) { 
+      console.error("[Plan] handleResetPlan error:", err);
+      showError("Failed to reset"); 
+    }
   };
 
   const handleApplyDay = async (dateChanges: any[]) => {
+    console.log(`[Plan] handleApplyDay START (${dateChanges.length} changes)`);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const { data: { user } } = await supabase.auth.getUser();
@@ -250,16 +305,22 @@ const Plan = () => {
       // Get token from session or database
       let token = session?.provider_token;
       if (!token && user) {
+        console.log("[Plan] Session token missing for apply, checking DB cache...");
         const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
         token = profile?.google_access_token;
       }
 
       for (const change of dateChanges) {
+        console.log(`[Plan] Applying change for event: ${change.title} (${change.event_id})`);
         const eventIdx = updatedEvents.findIndex(e => e.event_id === change.event_id);
-        if (eventIdx === -1) continue;
+        if (eventIdx === -1) {
+          console.warn(`[Plan] Event ${change.event_id} not found in local cache, skipping push`);
+          continue;
+        }
         const eventInCache = updatedEvents[eventIdx];
 
-        await supabase.functions.invoke('push-to-provider', {
+        console.log(`[Plan] Pushing to provider (${eventInCache.provider})...`);
+        const { data: pushData, error: pushError } = await supabase.functions.invoke('push-to-provider', {
           body: { 
             eventId: change.event_id, 
             provider: eventInCache.provider, 
@@ -270,6 +331,13 @@ const Plan = () => {
           }
         });
 
+        if (pushError) {
+          console.error(`[Plan] Push error for ${change.title}:`, pushError);
+          throw pushError;
+        }
+        console.log(`[Plan] Push success for ${change.title}:`, pushData);
+
+        console.log(`[Plan] Updating local DB cache for ${change.title}...`);
         await supabase.from('calendar_events_cache')
           .update({ 
             start_time: change.new_start, 
@@ -283,15 +351,23 @@ const Plan = () => {
         if (!newAppliedIds.includes(change.event_id)) newAppliedIds.push(change.event_id);
       }
 
+      console.log("[Plan] Updating proposal status in DB...");
       const updatedProposedChanges = proposal.proposed_changes.map((c: any) => ({ ...c, applied: newAppliedIds.includes(c.event_id) }));
       await supabase.from('optimisation_history').update({ proposed_changes: updatedProposedChanges }).eq('id', proposal.id);
+      
       setEvents(updatedEvents);
       setAppliedChanges(newAppliedIds);
       setProposal({ ...proposal, proposed_changes: updatedProposedChanges });
-    } catch (err: any) { showError(err.message); throw err; }
+      console.log("[Plan] handleApplyDay SUCCESS");
+    } catch (err: any) { 
+      console.error("[Plan] handleApplyDay FATAL ERROR:", err);
+      showError(err.message); 
+      throw err; 
+    }
   };
 
   const handleUndoApplyDay = async (dateChanges: any[]) => {
+    console.log(`[Plan] handleUndoApplyDay START (${dateChanges.length} changes)`);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const { data: { user } } = await supabase.auth.getUser();
@@ -302,16 +378,19 @@ const Plan = () => {
       // Get token from session or database
       let token = session?.provider_token;
       if (!token && user) {
+        console.log("[Plan] Session token missing for undo, checking DB cache...");
         const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
         token = profile?.google_access_token;
       }
 
       for (const change of dateChanges) {
+        console.log(`[Plan] Reverting change for event: ${change.title} (${change.event_id})`);
         const eventIdx = updatedEvents.findIndex(e => e.event_id === change.event_id);
         if (eventIdx === -1) continue;
         const eventInCache = updatedEvents[eventIdx];
         const oldEnd = addMinutes(parseISO(change.old_start), change.old_duration).toISOString();
 
+        console.log(`[Plan] Pushing revert to provider (${eventInCache.provider})...`);
         await supabase.functions.invoke('push-to-provider', {
           body: { 
             eventId: change.event_id, 
@@ -323,6 +402,7 @@ const Plan = () => {
           }
         });
 
+        console.log(`[Plan] Reverting local DB cache for ${change.title}...`);
         await supabase.from('calendar_events_cache')
           .update({ start_time: change.old_start, end_time: oldEnd, duration_minutes: change.old_duration, last_synced_at: new Date().toISOString() })
           .eq('event_id', change.event_id);
@@ -330,13 +410,19 @@ const Plan = () => {
         updatedEvents[eventIdx] = { ...eventInCache, start_time: change.old_start, end_time: oldEnd, duration_minutes: change.old_duration };
       }
 
+      console.log("[Plan] Updating proposal status in DB...");
       const updatedProposedChanges = proposal.proposed_changes.map((c: any) => ({ ...c, applied: newAppliedIds.includes(c.event_id) }));
       await supabase.from('optimisation_history').update({ proposed_changes: updatedProposedChanges }).eq('id', proposal.id);
+      
       setEvents(updatedEvents);
       setAppliedChanges(newAppliedIds);
       setProposal({ ...proposal, proposed_changes: updatedProposedChanges });
       showSuccess("Day reverted.");
-    } catch (err: any) { showError("Failed to undo: " + err.message); }
+      console.log("[Plan] handleUndoApplyDay SUCCESS");
+    } catch (err: any) { 
+      console.error("[Plan] handleUndoApplyDay FATAL ERROR:", err);
+      showError("Failed to undo: " + err.message); 
+    }
   };
 
   const renderRequirementsForm = () => (

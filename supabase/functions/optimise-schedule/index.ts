@@ -13,8 +13,10 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders })
   }
 
+  const functionName = "optimise-schedule";
+
   try {
-    console.log("[optimise-schedule] START - Theme-Aware Redistribution");
+    console.log(`[${functionName}] START - Theme-Aware Redistribution`);
     
     const authHeader = req.headers.get('Authorization')
     const { 
@@ -26,6 +28,8 @@ serve(async (req) => {
       vettedEventIds = [] 
     } = await req.json();
     
+    console.log(`[${functionName}] Params:`, { durationOverride, maxTasksOverride, slotAlignment, selectedDays, placeholderDate, vettedCount: vettedEventIds.length });
+
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_ANON_KEY') ?? '',
@@ -33,6 +37,7 @@ serve(async (req) => {
     )
 
     const { data: { user } } = await supabaseClient.auth.getUser()
+    console.log(`[${functionName}] User: ${user.id}`);
     
     const [settingsRes, profileRes, eventsRes, themesRes] = await Promise.all([
       supabaseClient.from('user_settings').select('*').eq('user_id', user.id).single(),
@@ -54,6 +59,8 @@ serve(async (req) => {
     const dayThemes = themesRes.data || [];
     const workKeywords = settings.work_keywords || [];
 
+    console.log(`[${functionName}] Timezone: ${userTimezone}, Total Events: ${allEvents.length}, Themes: ${dayThemes.length}`);
+
     // CRITICAL: Only process events from today onwards in user's timezone
     const nowInTz = new Date(new Date().toLocaleString('en-US', { timeZone: userTimezone }));
     const todayStart = new Date(nowInTz);
@@ -67,7 +74,10 @@ serve(async (req) => {
     const fixedEvents = currentEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
     const movableEvents = currentEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
 
+    console.log(`[${functionName}] Filtering: ${fixedEvents.length} Fixed, ${movableEvents.length} Movable`);
+
     if (movableEvents.length === 0) {
+      console.log(`[${functionName}] No movable events found. Exiting.`);
       return new Response(JSON.stringify({ message: 'No movable events found.', changes: [] }), { headers: corsHeaders });
     }
 
@@ -76,6 +86,7 @@ serve(async (req) => {
     const themeList = dayThemes.map(t => t.theme).filter(Boolean);
 
     if (themeList.length > 0) {
+      console.log(`[${functionName}] AI Categorization START for ${movableEvents.length} tasks...`);
       try {
         const geminiKey = Deno.env.get('GEMINI_API_KEY');
         if (geminiKey) {
@@ -87,10 +98,13 @@ serve(async (req) => {
           const aiResult = await model.generateContent(prompt);
           const text = (await aiResult.response).text();
           const jsonMatch = text.match(/\[.*\]/s);
-          if (jsonMatch) categories = JSON.parse(jsonMatch[0]);
+          if (jsonMatch) {
+            categories = JSON.parse(jsonMatch[0]);
+            console.log(`[${functionName}] AI Categorization SUCCESS:`, categories);
+          }
         }
       } catch (e) { 
-        console.warn("[optimise-schedule] AI Categorization failed. Using keyword fallback.");
+        console.warn(`[${functionName}] AI Categorization failed. Using keyword fallback.`, e.message);
         categories = movableEvents.map(event => {
           const title = event.title.toLowerCase();
           const matchedTheme = themeList.find(theme => title.includes(theme.toLowerCase()));
@@ -106,6 +120,7 @@ serve(async (req) => {
     }));
 
     if (settings.group_similar_tasks !== false) {
+      console.log(`[${functionName}] Sorting events by category to minimize context switching...`);
       categorizedEvents.sort((a, b) => a.temp_category.localeCompare(b.temp_category));
     }
 
@@ -124,21 +139,26 @@ serve(async (req) => {
       return new Date(Math.ceil(date.getTime() / ms) * ms);
     };
 
+    console.log(`[${functionName}] Pre-calculating daily stats from fixed events...`);
     fixedEvents.forEach(f => {
       const dayKey = new Date(f.start_time).toISOString().split('T')[0];
       const isWork = workKeywords.some(kw => f.title.toLowerCase().includes(kw.toLowerCase()));
       if (isWork) {
         if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
-        dailyStats.get(dayKey).hours += (f.duration_minutes / 60);
+        const duration = (new Date(f.end_time).getTime() - new Date(f.start_time).getTime()) / 3600000;
+        dailyStats.get(dayKey).hours += duration;
       }
     });
 
     let surplusCount = 0;
 
+    console.log(`[${functionName}] Scheduling loop START...`);
     for (const event of categorizedEvents) {
       const effectiveDuration = durationOverride || event.duration_minutes;
       const durationMs = effectiveDuration * 60000;
       let foundSlot = false;
+
+      console.log(`[${functionName}] Finding slot for: "${event.title}" (Category: ${event.temp_category}, Duration: ${effectiveDuration}m)`);
 
       for (let pass = 1; pass <= 2; pass++) {
         if (foundSlot) break;
@@ -154,6 +174,7 @@ serve(async (req) => {
           
           if (!selectedDays.includes(dayOfWeek)) { dayOffset++; continue; }
 
+          // Pass 1: Only schedule on days matching the theme
           if (pass === 1 && event.temp_category !== "General" && dayTheme !== event.temp_category) {
             dayOffset++;
             continue;
@@ -185,7 +206,10 @@ serve(async (req) => {
             const pastHoursLimit = (stats.hours + taskWorkHours) > maxWorkHours;
             const pastTasksLimit = stats.tasks >= maxTasks;
 
-            if (pastWorkday || pastHoursLimit || pastTasksLimit) break;
+            if (pastWorkday || pastHoursLimit || pastTasksLimit) {
+              // console.log(`[${functionName}] Day ${dayKey} full. Hours: ${stats.hours}, Tasks: ${stats.tasks}`);
+              break;
+            }
 
             const collision = fixedEvents.find(f => {
               const fStart = new Date(f.start_time);
@@ -213,6 +237,7 @@ serve(async (req) => {
                 is_surplus: false,
                 category: event.temp_category
               });
+              console.log(`[${functionName}] Scheduled "${event.title}" on ${dayKey} at ${searchPointer.toISOString()}`);
             }
           }
           if (!foundSlot) dayOffset++;
@@ -220,6 +245,7 @@ serve(async (req) => {
       }
 
       if (!foundSlot && placeholderDate) {
+        console.log(`[${functionName}] No slot found for "${event.title}". Moving to surplus on ${placeholderDate}`);
         const pDate = new Date(placeholderDate);
         const offset = getOffset(pDate);
         const [startH, startM] = settings.day_start_time.split(':').map(Number);
@@ -244,9 +270,10 @@ serve(async (req) => {
       }
     }
 
+    console.log(`[${functionName}] SUCCESS. Total changes: ${proposedChanges.length}`);
     return new Response(JSON.stringify({ changes: proposedChanges }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
-    console.error("[optimise-schedule] FATAL ERROR:", error);
+    console.error(`[${functionName}] FATAL ERROR:`, error);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })

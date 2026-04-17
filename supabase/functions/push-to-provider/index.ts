@@ -12,12 +12,14 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders })
   }
 
+  const functionName = "push-to-provider";
+
   try {
     const authHeader = req.headers.get('Authorization')
     const { eventId, provider, startTime, endTime, googleAccessToken, calendarId } = await req.json();
 
-    console.log(`[push-to-provider] START - Updating ${provider} event: ${eventId}`);
-    console.log(`[push-to-provider] Payload - Start: ${startTime}, End: ${endTime}, Calendar: ${calendarId}`);
+    console.log(`[${functionName}] START - Updating ${provider} event: ${eventId}`);
+    console.log(`[${functionName}] Payload - Start: ${startTime}, End: ${endTime}, Calendar: ${calendarId}`);
 
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -33,14 +35,22 @@ serve(async (req) => {
     if (!user) throw new Error("Unauthorized");
 
     if (provider === 'google') {
-      if (!googleAccessToken) throw new Error("Missing Google Access Token");
+      let token = googleAccessToken;
+      if (!token) {
+        console.log(`[${functionName}] Token missing from request, checking DB cache...`);
+        const { data: profile } = await supabaseAdmin.from('profiles').select('google_access_token').eq('id', user.id).single();
+        token = profile?.google_access_token;
+      }
+
+      if (!token) throw new Error("Missing Google Access Token");
       
       const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId || 'primary')}/events/${eventId}`;
+      console.log(`[${functionName}] PATCHing Google API: ${url}`);
       
       const res = await fetch(url, {
         method: 'PATCH',
         headers: { 
-          'Authorization': `Bearer ${googleAccessToken}`,
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
@@ -52,17 +62,18 @@ serve(async (req) => {
       const data = await res.json();
       
       if (!res.ok) {
-        console.error("[push-to-provider] Google API Error:", JSON.stringify(data));
+        console.error(`[${functionName}] Google API Error:`, JSON.stringify(data));
         throw new Error(`Google API Error: ${data.error?.message || 'Unknown error'}`);
       }
       
-      console.log("[push-to-provider] SUCCESS");
+      console.log(`[${functionName}] SUCCESS`);
       return new Response(JSON.stringify({ success: true, data }), { headers: corsHeaders });
     }
 
+    console.warn(`[${functionName}] Unsupported provider: ${provider}`);
     return new Response(JSON.stringify({ success: false, message: "Unsupported provider" }), { headers: corsHeaders });
   } catch (error) {
-    console.error("[push-to-provider] FATAL ERROR:", error.message);
+    console.error(`[${functionName}] FATAL ERROR:`, error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })
