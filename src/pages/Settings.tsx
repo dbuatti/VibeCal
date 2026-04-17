@@ -89,12 +89,14 @@ const Settings = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
-      // Explicitly specify user_id as the conflict target to avoid 409s
+      // Remove the 'id' field if it exists to avoid primary key conflicts during upsert
+      const { id, created_at, ...settingsToSave } = settings;
+
       const { error: settingsError } = await supabase
         .from('user_settings')
         .upsert({ 
           user_id: user.id, 
-          ...settings 
+          ...settingsToSave 
         }, { onConflict: 'user_id' });
 
       if (settingsError) throw settingsError;
