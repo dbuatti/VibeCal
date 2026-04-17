@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0'
+import ICAL from "https://esm.sh/ical.js@1.5.0"
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -143,7 +144,6 @@ serve(async (req) => {
     const startStr = syncStartTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endStr = syncEndTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
-    // FIXED XML: Removed the invalid </expand> closing tag
     const reportXml = `
       <c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
         <d:prop>
@@ -186,43 +186,26 @@ serve(async (req) => {
       const eventDataMatches = xml.matchAll(/<c:calendar-data>([\s\S]*?)<\/c:calendar-data>/gi);
       
       for (const match of eventDataMatches) {
-        const ics = match[1].replace(/</g, '<').replace(/>/g, '>').replace(/&/g, '&');
-        const eventBlocks = ics.split('BEGIN:VEVENT');
+        const icsData = match[1].replace(/</g, '<').replace(/>/g, '>').replace(/&/g, '&');
         
-        for (let i = 1; i < eventBlocks.length; i++) {
-          const block = eventBlocks[i].replace(/\r?\n[ \t]/g, '');
-          
-          const getProp = (prop) => {
-            const re = new RegExp(`^${prop}(?:;[^:]*)?:(.*)$`, 'im');
-            return block.match(re)?.[1]?.trim();
-          };
+        try {
+          const jcalData = ICAL.parse(icsData);
+          const vcalendar = new ICAL.Component(jcalData);
+          const vevents = vcalendar.getAllSubcomponents('vevent');
 
-          const summary = getProp('SUMMARY') || 'Untitled';
-          const dtStart = getProp('DTSTART');
-          const dtEnd = getProp('DTEND');
-          const duration = getProp('DURATION');
-          const uid = getProp('UID');
+          for (const vevent of vevents) {
+            const event = new ICAL.Event(vevent);
+            const summary = event.summary || 'Untitled';
+            const start = event.startDate.toJSDate();
+            const end = event.endDate.toJSDate();
+            const uid = event.uid;
 
-          if (dtStart && uid) {
-            try {
-              const start = parseIcsDate(dtStart, userTimezone);
-              let end;
-              
-              if (dtEnd) {
-                end = parseIcsDate(dtEnd, userTimezone);
-              } else if (duration) {
-                const hours = parseInt(duration.match(/(\d+)H/)?.[1] || '0');
-                const mins = parseInt(duration.match(/(\d+)M/)?.[1] || '0');
-                end = new Date(start.getTime() + (hours * 60 + mins) * 60 * 1000);
-              } else {
-                end = new Date(start.getTime() + 60 * 60 * 1000);
-              }
-              
+            if (start && uid) {
               const isExplicitlyMovable = movableKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
               const isExplicitlyLocked = lockedKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
               const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && (fixedKeywords.test(summary) || fixedPatterns.some(p => p.test(summary))));
               
-              const uniqueId = `${uid}-${dtStart.replace(/[^a-zA-Z0-9]/g, '')}`;
+              const uniqueId = `${uid}-${start.getTime()}`;
               eventMap.set(uniqueId, {
                 user_id: user.id,
                 event_id: uniqueId,
@@ -236,10 +219,10 @@ serve(async (req) => {
                 source_calendar_id: cal.calendar_id,
                 last_synced_at: syncTimestamp
               });
-            } catch (parseErr) {
-              console.error(`[${functionName}] Error parsing event "${summary}":`, parseErr.message);
             }
           }
+        } catch (parseErr) {
+          console.error(`[${functionName}] ICAL Parse Error:`, parseErr.message);
         }
       }
     }
@@ -263,24 +246,3 @@ serve(async (req) => {
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 });
-
-function parseIcsDate(icsDate, timezone) {
-  const dateStr = icsDate.split(':').pop().trim();
-  const y = parseInt(dateStr.substring(0, 4));
-  const m = parseInt(dateStr.substring(4, 6)) - 1;
-  const d = parseInt(dateStr.substring(6, 8));
-  
-  if (dateStr.includes('T')) {
-    const h = parseInt(dateStr.substring(9, 11));
-    const min = parseInt(dateStr.substring(11, 13));
-    const s = parseInt(dateStr.substring(13, 15));
-    
-    if (dateStr.endsWith('Z')) {
-      return new Date(Date.UTC(y, m, d, h, min, s));
-    }
-    
-    return new Date(y, m, d, h, min, s);
-  }
-  
-  return new Date(y, m, d);
-}
