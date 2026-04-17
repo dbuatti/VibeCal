@@ -1,7 +1,7 @@
 "use client";
 
 import React from 'react';
-import { Brain, RefreshCw, Trash2, CheckSquare, Settings2, Eye, EyeOff } from 'lucide-react';
+import { Brain, Eye, EyeOff, CheckSquare, Settings2, RefreshCw, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
@@ -72,8 +72,8 @@ const PlanPageHeader = ({
               {renderRequirementsForm()}
             </PopoverContent>
           </Popover>
-        ) : currentStep === 'vetting_tasks' && (
-          <Button variant="outline" onClick={() => {}} className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
+        ) : currentStep === 'requirements' && (
+          <Button variant="outline" className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
             <Settings2 size={14} className="mr-2" /> Requirements
           </Button>
         )}
