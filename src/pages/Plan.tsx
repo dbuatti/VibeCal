@@ -5,7 +5,7 @@ import Layout from '@/components/Layout';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import DayByDayPlanner from '@/components/DayByDayPlanner';
-import { Brain, RefreshCw, Trash2, Eye, EyeOff, Sparkles, Calendar, Clock, ListOrdered, ChevronRight, BrainCircuit, Inbox, Unlock, Lock, History, Settings2, Wand2 } from 'lucide-react';
+import { Brain, RefreshCw, Trash2, Eye, EyeOff, Sparkles, Calendar, Clock, ListOrdered, ChevronRight, BrainCircuit, Inbox, Unlock, Lock, History, Settings2, Wand2, CheckSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
@@ -378,6 +378,38 @@ const Plan = () => {
     </div>
   );
 
+  const VettingOverlay = () => (
+    <div className="space-y-4 p-2">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Synced Events</p>
+        <Button variant="ghost" size="sm" onClick={runAIClassification} className="h-7 px-2 text-[8px] font-black uppercase tracking-widest text-indigo-600 hover:bg-indigo-50">
+          <BrainCircuit size={12} className="mr-1" /> AI Vet
+        </Button>
+      </div>
+      <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+        {events.map((event, i) => (
+          <div key={i} className={cn(
+            "p-3 rounded-xl border transition-all flex items-center justify-between",
+            event.is_locked ? "bg-white border-gray-100 opacity-60" : "bg-indigo-50/30 border-indigo-100 shadow-sm"
+          )}>
+            <div className="flex items-center gap-3 overflow-hidden">
+              <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center shrink-0", event.is_locked ? "bg-gray-50 text-gray-300" : "bg-white text-indigo-600 shadow-sm")}>
+                {event.is_locked ? <Lock size={14} /> : <Unlock size={14} />}
+              </div>
+              <div className="overflow-hidden">
+                <h3 className="font-black text-[11px] text-gray-900 tracking-tight truncate max-w-[160px]">{event.title}</h3>
+                <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest">
+                  {format(parseISO(event.start_time), 'EEE, HH:mm')}
+                </p>
+              </div>
+            </div>
+            <Switch checked={!event.is_locked} onCheckedChange={() => toggleLock(event.event_id, event.is_locked)} className="data-[state=checked]:bg-indigo-600 scale-90" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
   return (
     <Layout hideSidebar={deepFocus}>
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
@@ -399,6 +431,20 @@ const Plan = () => {
           <h1 className="text-3xl font-black text-gray-900 tracking-tight">Daily Plan</h1>
         </div>
         <div className="flex gap-2">
+          {(currentStep === 'active_plan' || currentStep === 'vetting_tasks') && (
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
+                  <CheckSquare size={14} className="mr-2" /> Vet Tasks
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-80 rounded-[2rem] shadow-2xl border-none p-6" align="end">
+                <h3 className="text-sm font-black text-gray-900 mb-4 uppercase tracking-widest">Vet Synced Tasks</h3>
+                <VettingOverlay />
+              </PopoverContent>
+            </Popover>
+          )}
+          
           {currentStep === 'active_plan' ? (
             <Popover>
               <PopoverTrigger asChild>
