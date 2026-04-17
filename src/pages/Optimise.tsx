@@ -17,6 +17,7 @@ const Optimise = () => {
   const [syncReport, setSyncReport] = useState<any>(null);
   const [optimisationResult, setOptimisationResult] = useState<any>(null);
   const [showDebug, setShowDebug] = useState(false);
+  const [isApplying, setIsApplying] = useState(false);
 
   const runGoogleSync = async () => {
     setIsOptimising(true);
@@ -117,6 +118,39 @@ const Optimise = () => {
       showError(err.message);
     } finally {
       setIsOptimising(false);
+    }
+  };
+
+  const applyChanges = async () => {
+    if (!optimisationResult?.changes) return;
+    
+    setIsApplying(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("User not found");
+
+      // Update the local cache with new times
+      for (const change of optimisationResult.changes) {
+        const { error } = await supabase
+          .from('calendar_events_cache')
+          .update({
+            start_time: change.new_start,
+            end_time: change.new_end,
+            last_synced_at: new Date().toISOString()
+          })
+          .eq('event_id', change.event_id)
+          .eq('user_id', user.id);
+        
+        if (error) throw error;
+      }
+
+      showSuccess("Changes applied to your local schedule!");
+      setOptimisationResult(null);
+      setSyncReport(null);
+    } catch (err: any) {
+      showError(err.message);
+    } finally {
+      setIsApplying(false);
     }
   };
 
@@ -265,14 +299,18 @@ const Optimise = () => {
                   <div className="flex items-center justify-between mb-6">
                     <div>
                       <h3 className="text-2xl font-bold">Ready to apply?</h3>
-                      <p className="opacity-80 text-sm mt-1">This will update {optimisationResult.changes.length} events in your Calendar.</p>
+                      <p className="opacity-80 text-sm mt-1">This will update {optimisationResult.changes.length} events in your local schedule.</p>
                     </div>
                     <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm">
                       <Zap size={28} />
                     </div>
                   </div>
-                  <Button className="w-full bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl py-7 text-lg font-black shadow-lg">
-                    Apply Changes to Calendar
+                  <Button 
+                    onClick={applyChanges}
+                    disabled={isApplying}
+                    className="w-full bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl py-7 text-lg font-black shadow-lg disabled:opacity-50"
+                  >
+                    {isApplying ? 'Applying...' : 'Apply Changes to Schedule'}
                   </Button>
                 </div>
               </div>
