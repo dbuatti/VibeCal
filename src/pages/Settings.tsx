@@ -10,7 +10,7 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
-import { Save, Clock, Shield, Target, Apple, Mail, Lock, Eye, EyeOff, RefreshCw, CheckCircle2, ListOrdered, Calendar, Globe, Square } from 'lucide-react';
+import { Save, Clock, Shield, Target, Apple, Mail, Lock, Eye, EyeOff, RefreshCw, ListOrdered, Calendar, Globe, Square } from 'lucide-react';
 
 const Settings = () => {
   const [loading, setLoading] = useState(true);
@@ -33,13 +33,13 @@ const Settings = () => {
   });
 
   const [themes, setThemes] = useState<any[]>([
-    { day: 0, label: 'Sunday', theme: 'Rest' },
-    { day: 1, label: 'Monday', theme: 'Music' },
-    { day: 2, label: 'Tuesday', theme: 'Admin' },
-    { day: 3, label: 'Wednesday', theme: 'Kinesiology' },
-    { day: 4, label: 'Thursday', theme: 'Deep Work' },
-    { day: 5, label: 'Friday', theme: 'Creative' },
-    { day: 6, label: 'Saturday', theme: 'Social' },
+    { day_of_week: 0, label: 'Sunday', theme: '' },
+    { day_of_week: 1, label: 'Monday', theme: '' },
+    { day_of_week: 2, label: 'Tuesday', theme: '' },
+    { day_of_week: 3, label: 'Wednesday', theme: '' },
+    { day_of_week: 4, label: 'Thursday', theme: '' },
+    { day_of_week: 5, label: 'Friday', theme: '' },
+    { day_of_week: 6, label: 'Saturday', theme: '' },
   ]);
 
   useEffect(() => {
@@ -48,15 +48,24 @@ const Settings = () => {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
 
-        const [settingsRes, profileRes, calendarsRes] = await Promise.all([
+        const [settingsRes, profileRes, calendarsRes, themesRes] = await Promise.all([
           supabase.from('user_settings').select('*').eq('user_id', user.id).single(),
           supabase.from('profiles').select('apple_id, apple_app_password').eq('id', user.id).single(),
-          supabase.from('user_calendars').select('*').eq('user_id', user.id).order('provider', { ascending: true })
+          supabase.from('user_calendars').select('*').eq('user_id', user.id).order('provider', { ascending: true }),
+          supabase.from('day_themes').select('*').eq('user_id', user.id)
         ]);
 
         if (settingsRes.data) setSettings(settingsRes.data);
         if (profileRes.data) setProfile(profileRes.data);
         if (calendarsRes.data) setCalendars(calendarsRes.data);
+        
+        if (themesRes.data && themesRes.data.length > 0) {
+          const updatedThemes = themes.map(t => {
+            const dbTheme = themesRes.data.find((dt: any) => dt.day_of_week === t.day_of_week);
+            return dbTheme ? { ...t, theme: dbTheme.theme } : t;
+          });
+          setThemes(updatedThemes);
+        }
       } catch (err) {
         console.error("Error fetching settings:", err);
       } finally {
@@ -72,12 +81,14 @@ const Settings = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
+      // Save Settings
       const { error: settingsError } = await supabase
         .from('user_settings')
         .upsert({ user_id: user.id, ...settings });
 
       if (settingsError) throw settingsError;
 
+      // Save Profile
       const { error: profileError } = await supabase
         .from('profiles')
         .update({ 
@@ -87,6 +98,19 @@ const Settings = () => {
         .eq('id', user.id);
 
       if (profileError) throw profileError;
+
+      // Save Themes
+      const themePayload = themes.map(t => ({
+        user_id: user.id,
+        day_of_week: t.day_of_week,
+        theme: t.theme || 'General'
+      }));
+
+      const { error: themesError } = await supabase
+        .from('day_themes')
+        .upsert(themePayload, { onConflict: 'user_id, day_of_week' });
+
+      if (themesError) throw themesError;
 
       showSuccess('Settings saved successfully');
     } catch (err: any) {
@@ -110,38 +134,16 @@ const Settings = () => {
     }
   };
 
-  const uncheckAllApple = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { error } = await supabase
-        .from('user_calendars')
-        .update({ is_enabled: false })
-        .eq('user_id', user.id)
-        .eq('provider', 'apple');
-
-      if (error) throw error;
-
-      setCalendars(calendars.map(c => c.provider === 'apple' ? { ...c, is_enabled: false } : c));
-      showSuccess('All Apple calendars disabled');
-    } catch (err: any) {
-      showError(err.message);
-    }
-  };
-
   const discoverCalendars = async () => {
     setIsTesting(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
-      // Refresh Apple
       if (profile.apple_id && profile.apple_app_password) {
         await supabase.functions.invoke('sync-apple-calendar');
       }
 
-      // Refresh Google (requires session token)
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.provider_token) {
         await supabase.functions.invoke('sync-calendar', {
@@ -149,7 +151,6 @@ const Settings = () => {
         });
       }
       
-      // Refresh calendar list
       const { data: newCals } = await supabase
         .from('user_calendars')
         .select('*')
@@ -164,6 +165,8 @@ const Settings = () => {
       setIsTesting(false);
     }
   };
+
+  if (loading) return <Layout><div className="flex items-center justify-center h-64"><RefreshCw className="animate-spin text-indigo-600" /></div></Layout>;
 
   return (
     <Layout>
@@ -192,7 +195,7 @@ const Settings = () => {
                 <Label>Day Start</Label>
                 <input 
                   type="time" 
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                   value={settings.day_start_time} 
                   onChange={(e) => setSettings({...settings, day_start_time: e.target.value})}
                 />
@@ -201,7 +204,7 @@ const Settings = () => {
                 <Label>Day End</Label>
                 <input 
                   type="time" 
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                   value={settings.day_end_time} 
                   onChange={(e) => setSettings({...settings, day_end_time: e.target.value})}
                 />
@@ -232,144 +235,21 @@ const Settings = () => {
             </CardContent>
           </Card>
 
-          <Card className="border-none shadow-sm rounded-2xl border-l-4 border-l-gray-900">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0">
-              <div>
-                <CardTitle className="flex items-center gap-2">
-                  <Calendar className="text-gray-900" size={20} />
-                  Calendar Management
-                </CardTitle>
-                <CardDescription>Toggle which calendars the optimiser should analyze.</CardDescription>
-              </div>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={discoverCalendars}
-                disabled={isTesting}
-                className="rounded-xl border-gray-200 hover:bg-gray-50"
-              >
-                {isTesting ? (
-                  <RefreshCw size={14} className="mr-2 animate-spin" />
-                ) : (
-                  <RefreshCw size={14} className="mr-2" />
-                )}
-                Refresh All Calendars
-              </Button>
-            </CardHeader>
-            <CardContent className="space-y-8">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-2">
-                  <Label className="flex items-center gap-2">
-                    <Mail size={14} className="text-gray-400" />
-                    Apple ID Email
-                  </Label>
-                  <Input 
-                    placeholder="your@email.com"
-                    value={profile.apple_id || ''}
-                    onChange={(e) => setProfile({...profile, apple_id: e.target.value})}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="flex items-center gap-2">
-                    <Lock size={14} className="text-gray-400" />
-                    App-Specific Password
-                  </Label>
-                  <div className="relative">
-                    <Input 
-                      type={showPassword ? "text" : "password"}
-                      placeholder="xxxx-xxxx-xxxx-xxxx"
-                      value={profile.apple_app_password || ''}
-                      onChange={(e) => setProfile({...profile, apple_app_password: e.target.value})}
-                      className="pr-10"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
-                    >
-                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {calendars.length > 0 && (
-                <div className="space-y-6">
-                  <div className="space-y-3">
-                    <Label className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
-                      <Globe size={14} /> Google Calendars
-                    </Label>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      {calendars.filter(c => c.provider === 'google').map((cal) => (
-                        <div key={cal.id} className="flex items-center justify-between p-3 bg-blue-50/30 rounded-xl border border-blue-100/50">
-                          <div className="flex items-center gap-3 overflow-hidden">
-                            <div 
-                              className="w-3 h-3 rounded-full shrink-0" 
-                              style={{ backgroundColor: cal.color || '#6366f1' }} 
-                            />
-                            <span className="text-sm font-bold text-gray-700 truncate">{cal.calendar_name}</span>
-                          </div>
-                          <Switch 
-                            checked={cal.is_enabled} 
-                            onCheckedChange={(val) => toggleCalendar(cal.id, val)}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
-                        <Apple size={14} /> Apple Calendars
-                      </Label>
-                      <Button 
-                        variant="ghost" 
-                        size="sm" 
-                        onClick={uncheckAllApple}
-                        className="h-auto py-1 px-2 text-[10px] font-bold text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
-                      >
-                        <Square size={10} className="mr-1" /> Deselect All
-                      </Button>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      {calendars.filter(c => c.provider === 'apple').map((cal) => (
-                        <div key={cal.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
-                          <div className="flex items-center gap-3 overflow-hidden">
-                            <div 
-                              className="w-3 h-3 rounded-full shrink-0" 
-                              style={{ backgroundColor: cal.color || '#6366f1' }} 
-                            />
-                            <span className="text-sm font-bold text-gray-700 truncate">{cal.calendar_name}</span>
-                          </div>
-                          <Switch 
-                            checked={cal.is_enabled} 
-                            onCheckedChange={(val) => toggleCalendar(cal.id, val)}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
           <Card className="border-none shadow-sm rounded-2xl">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Target className="text-indigo-600" size={20} />
                 Day Themes
               </CardTitle>
-              <CardDescription>Assign focus areas to specific days of the week.</CardDescription>
+              <CardDescription>Assign focus areas to specific days. The AI will try to match tasks to these themes.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {themes.map((t, i) => (
                 <div key={i} className="flex items-center gap-4 p-3 bg-gray-50 rounded-xl">
-                  <span className="w-24 font-medium text-gray-600">{t.label}</span>
+                  <span className="w-24 font-bold text-gray-500">{t.label}</span>
                   <Input 
-                    placeholder="e.g. Music, Study, Admin" 
-                    className="bg-white"
+                    placeholder="e.g. Music, Admin, Deep Work" 
+                    className="bg-white border-gray-200 rounded-xl"
                     value={t.theme}
                     onChange={(e) => {
                       const newThemes = [...themes];
@@ -398,7 +278,7 @@ const Settings = () => {
                   value={settings.optimisation_aggressiveness}
                   onValueChange={(val) => setSettings({...settings, optimisation_aggressiveness: val})}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger className="rounded-xl">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -429,6 +309,42 @@ const Settings = () => {
                   checked={settings.group_similar_tasks}
                   onCheckedChange={(val) => setSettings({...settings, group_similar_tasks: val})}
                 />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-none shadow-sm rounded-2xl border-l-4 border-l-gray-900">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Calendar className="text-gray-900" size={20} />
+                Calendars
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={discoverCalendars}
+                disabled={isTesting}
+                className="w-full rounded-xl border-gray-200"
+              >
+                <RefreshCw size={14} className={cn("mr-2", isTesting && "animate-spin")} />
+                Refresh List
+              </Button>
+              
+              <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2">
+                {calendars.map((cal) => (
+                  <div key={cal.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
+                    <div className="flex items-center gap-3 overflow-hidden">
+                      <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: cal.color || '#6366f1' }} />
+                      <span className="text-xs font-bold text-gray-700 truncate">{cal.calendar_name}</span>
+                    </div>
+                    <Switch 
+                      checked={cal.is_enabled} 
+                      onCheckedChange={(val) => toggleCalendar(cal.id, val)}
+                    />
+                  </div>
+                ))}
               </div>
             </CardContent>
           </Card>

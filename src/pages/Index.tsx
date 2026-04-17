@@ -8,11 +8,12 @@ import { Sparkles, ArrowRight, Calendar as CalendarIcon, Clock, CheckCircle2, Za
 import { cn } from '@/lib/utils';
 import { Link } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
-import { format } from 'date-fns';
+import { format, startOfWeek, addDays } from 'date-fns';
 
 const Dashboard = () => {
   const [events, setEvents] = useState<any[]>([]);
   const [profile, setProfile] = useState<any>(null);
+  const [themes, setThemes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -20,24 +21,30 @@ const Dashboard = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // Fetch events
-      const { data: eventsData } = await supabase
-        .from('calendar_events_cache')
-        .select('*')
-        .order('start_time', { ascending: true })
-        .limit(5);
+      const [eventsRes, profileRes, themesRes] = await Promise.all([
+        supabase.from('calendar_events_cache').select('*').order('start_time', { ascending: true }).limit(5),
+        supabase.from('profiles').select('vibe_score, vibe_score_trend').eq('id', user.id).single(),
+        supabase.from('day_themes').select('*').eq('user_id', user.id).order('day_of_week', { ascending: true })
+      ]);
 
-      if (eventsData) setEvents(eventsData);
-
-      // Fetch profile for vibe score
-      const { data: profileData } = await supabase
-        .from('profiles')
-        .select('vibe_score, vibe_score_trend')
-        .eq('id', user.id)
-        .single();
-
-      if (profileData) setProfile(profileData);
+      if (eventsRes.data) setEvents(eventsRes.data);
+      if (profileRes.data) setProfile(profileRes.data);
       
+      // Prepare weekly themes display
+      const dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const today = new Date().getDay();
+      
+      const preparedThemes = dayLabels.map((label, index) => {
+        const dbTheme = themesRes.data?.find((t: any) => t.day_of_week === index);
+        return {
+          day: label,
+          theme: dbTheme?.theme || 'General',
+          active: index === today,
+          progress: index === today ? 100 : (index < today ? 100 : 0)
+        };
+      });
+      
+      setThemes(preparedThemes);
       setLoading(false);
     };
 
@@ -68,14 +75,14 @@ const Dashboard = () => {
           </CardHeader>
           <CardContent>
             <div className="flex items-baseline gap-2">
-              <div className="text-4xl font-black text-gray-900">{events.length > 0 ? events.length : '0'}</div>
+              <div className="text-4xl font-black text-gray-900">{events.length}</div>
               <div className="text-gray-400 font-medium">events</div>
             </div>
             <div className="mt-4 h-2 bg-gray-50 rounded-full overflow-hidden">
               <div className="h-full bg-green-500 rounded-full w-[40%]" />
             </div>
             <p className="text-xs text-green-600 mt-3 flex items-center gap-1 font-semibold">
-              <CheckCircle2 size={14} /> Synced from Google
+              <CheckCircle2 size={14} /> Synced & Ready
             </p>
           </CardContent>
         </Card>
@@ -177,13 +184,7 @@ const Dashboard = () => {
             </h2>
             <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm">
               <div className="space-y-6">
-                {[
-                  { day: 'Mon', theme: 'Music', progress: 100, active: true },
-                  { day: 'Tue', theme: 'Admin', progress: 40, active: false },
-                  { day: 'Wed', theme: 'Kinesiology', progress: 80, active: false },
-                  { day: 'Thu', theme: 'Deep Work', progress: 30, active: false },
-                  { day: 'Fri', theme: 'Creative', progress: 50, active: false },
-                ].map((item) => (
+                {themes.map((item) => (
                   <div key={item.day} className={cn(
                     "flex items-center justify-between p-2 rounded-2xl transition-colors",
                     item.active && "bg-indigo-50/50"

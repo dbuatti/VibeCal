@@ -1,0 +1,1 @@
+ALTER TABLE public.calendar_events_cache ADD COLUMN IF NOT EXISTS category TEXT;
