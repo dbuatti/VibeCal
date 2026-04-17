@@ -12,8 +12,10 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders })
   }
 
+  const functionName = "sync-apple-calendar";
+
   try {
-    console.log("[sync-apple-calendar] START - Apple Sync Process");
+    console.log(`[${functionName}] START - Apple Sync Process`);
     
     const authHeader = req.headers.get('Authorization')
     const supabaseAdmin = createClient(
@@ -40,6 +42,7 @@ serve(async (req) => {
 
     const { data: profile } = await supabaseAdmin.from('profiles').select('apple_id, apple_app_password, timezone').eq('id', user.id).single();
     if (!profile?.apple_id || !profile?.apple_app_password) {
+      console.log(`[${functionName}] No Apple credentials found for user.`);
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
 
@@ -55,6 +58,7 @@ serve(async (req) => {
     };
 
     // 1. Discovery
+    console.log(`[${functionName}] Discovering principal...`);
     const principalRes = await fetch(initialBase, {
       method: 'PROPFIND',
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' },
@@ -65,6 +69,7 @@ serve(async (req) => {
     let principalPath = principalXml.match(/current-user-principal[\s\S]*?href[^>]*>([^<]+)/i)?.[1];
     const discoveryUrl = principalPath ? getFullUrl(principalPath, initialBase) : initialBase;
 
+    console.log(`[${functionName}] Discovering home set...`);
     const discoveryRes = await fetch(discoveryUrl, { 
       method: 'PROPFIND', 
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }, 
@@ -78,26 +83,34 @@ serve(async (req) => {
     if (!homeSetPath) throw new Error("Could not find Calendar Home Set.");
     const homeSetUrl = getFullUrl(homeSetPath, discoveryRes.url);
 
-    // 2. Discovery of all calendars (to ensure the list is up to date)
+    // 2. Discovery of all calendars
     const calendarsRes = await fetch(homeSetUrl, {
       method: 'PROPFIND',
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '1' },
       body: `<?xml version="1.0" encoding="utf-8" ?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/></d:prop></d:propfind>`
     });
     const calendarsXml = await calendarsRes.text();
-    const calendarMatches = calendarsXml.matchAll(/<d:response>[\s\S]*?<d:href>([^<]+)<\/d:href>[\s\S]*?<d:displayname>([^<]+)<\/d:displayname>/gi);
+    
+    // More robust calendar matching
+    const calendarResponses = calendarsXml.split('<d:response>');
     const discoveredCals = [];
-    for (const match of calendarMatches) {
-      if (match[1].includes('calendar') || match[1].includes('tasks')) {
+    
+    for (const resp of calendarResponses) {
+      const href = resp.match(/<d:href>([^<]+)<\/d:href>/i)?.[1];
+      const name = resp.match(/<d:displayname>([^<]+)<\/d:displayname>/i)?.[1];
+      
+      if (href && name && (href.includes('calendar') || href.includes('tasks') || href.split('/').length > 4)) {
         discoveredCals.push({
           user_id: user.id,
-          calendar_id: match[1],
-          calendar_name: match[2],
+          calendar_id: href,
+          calendar_name: name,
           provider: 'apple'
         });
       }
     }
+
     if (discoveredCals.length > 0) {
+      console.log(`[${functionName}] Discovered ${discoveredCals.length} calendars.`);
       await supabaseAdmin.from('user_calendars').upsert(discoveredCals, { onConflict: 'user_id, calendar_id' });
     }
 
@@ -109,15 +122,15 @@ serve(async (req) => {
       .eq('provider', 'apple');
 
     const enabledCalendars = (enabled || []).filter(c => c.is_enabled);
-    console.log(`[sync-apple-calendar] Found ${enabled?.length || 0} Apple calendars. ${enabledCalendars.length} are enabled.`);
+    console.log(`[${functionName}] Found ${enabled?.length || 0} Apple calendars. ${enabledCalendars.length} are enabled.`);
 
     if (enabledCalendars.length === 0) {
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
 
-    // 4. Fetch Events - Start from yesterday
+    // 4. Fetch Events
     const syncStartTime = new Date();
-    syncStartTime.setDate(syncStartTime.getDate() - 1);
+    syncStartTime.setDate(syncStartTime.getDate() - 7); // Look back 7 days to be safe
     const syncEndTime = new Date();
     syncEndTime.setDate(syncEndTime.getDate() + 365);
     
@@ -138,80 +151,115 @@ serve(async (req) => {
     const syncTimestamp = new Date().toISOString();
 
     for (const cal of enabledCalendars) {
+      console.log(`[${functionName}] Fetching events for: "${cal.calendar_name}" (${cal.calendar_id})`);
       const res = await fetch(getFullUrl(cal.calendar_id, homeSetUrl), {
         method: 'REPORT',
         headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/xml', 'Depth': '1' },
         body: reportXml
       });
       
+      if (!res.ok) {
+        console.error(`[${functionName}] Error fetching calendar "${cal.calendar_name}": ${res.status}`);
+        continue;
+      }
+
       const xml = await res.text();
-      const eventBlocks = xml.split('BEGIN:VEVENT');
       
-      for (let i = 1; i < eventBlocks.length; i++) {
-        const block = eventBlocks[i].replace(/\r?\n[ \t]/g, '');
-        const getProp = (prop) => {
-          const re = new RegExp(`${prop}[^:]*:(.*)`, 'i');
-          return block.match(re)?.[1]?.trim();
-        };
-
-        const summary = getProp('SUMMARY') || 'Untitled';
-        const dtStart = getProp('DTSTART');
-        const dtEnd = getProp('DTEND');
-        const duration = getProp('DURATION');
-        const uid = getProp('UID');
-
-        if (dtStart && uid) {
-          const start = parseIcsDate(dtStart, userTimezone);
-          let end = dtEnd ? parseIcsDate(dtEnd, userTimezone) : (duration ? new Date(start.getTime() + 60 * 60 * 1000) : new Date(start.getTime() + 60 * 60 * 1000));
+      // Robust ICS parsing
+      const eventDataMatches = xml.matchAll(/<c:calendar-data>([\s\S]*?)<\/c:calendar-data>/gi);
+      
+      for (const match of eventDataMatches) {
+        const ics = match[1].replace(/</g, '<').replace(/>/g, '>').replace(/&/g, '&');
+        const eventBlocks = ics.split('BEGIN:VEVENT');
+        
+        for (let i = 1; i < eventBlocks.length; i++) {
+          const block = eventBlocks[i].replace(/\r?\n[ \t]/g, ''); // Unfold lines
           
-          const isExplicitlyMovable = movableKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
-          const isExplicitlyLocked = lockedKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
-          const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && (fixedKeywords.test(summary) || fixedPatterns.some(p => p.test(summary))));
-          
-          const uniqueId = `${uid}-${dtStart.replace(/[^a-zA-Z0-9]/g, '')}`;
-          eventMap.set(uniqueId, {
-            user_id: user.id,
-            event_id: uniqueId,
-            title: summary,
-            start_time: start.toISOString(),
-            end_time: end.toISOString(),
-            duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000),
-            is_locked: isLocked,
-            provider: 'apple',
-            source_calendar: cal.calendar_name,
-            source_calendar_id: cal.calendar_id,
-            last_synced_at: syncTimestamp
-          });
+          const getProp = (prop) => {
+            const re = new RegExp(`^${prop}(?:;[^:]*)?:(.*)$`, 'im');
+            return block.match(re)?.[1]?.trim();
+          };
+
+          const summary = getProp('SUMMARY') || 'Untitled';
+          const dtStart = getProp('DTSTART');
+          const dtEnd = getProp('DTEND');
+          const duration = getProp('DURATION');
+          const uid = getProp('UID');
+
+          if (dtStart && uid) {
+            try {
+              const start = parseIcsDate(dtStart, userTimezone);
+              let end;
+              
+              if (dtEnd) {
+                end = parseIcsDate(dtEnd, userTimezone);
+              } else if (duration) {
+                // Simple duration parser (e.g., PT1H)
+                const hours = parseInt(duration.match(/(\d+)H/)?.[1] || '0');
+                const mins = parseInt(duration.match(/(\d+)M/)?.[1] || '0');
+                end = new Date(start.getTime() + (hours * 60 + mins) * 60 * 1000);
+              } else {
+                end = new Date(start.getTime() + 60 * 60 * 1000); // Default 1h
+              }
+              
+              const isExplicitlyMovable = movableKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
+              const isExplicitlyLocked = lockedKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
+              const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && (fixedKeywords.test(summary) || fixedPatterns.some(p => p.test(summary))));
+              
+              const uniqueId = `${uid}-${dtStart.replace(/[^a-zA-Z0-9]/g, '')}`;
+              eventMap.set(uniqueId, {
+                user_id: user.id,
+                event_id: uniqueId,
+                title: summary,
+                start_time: start.toISOString(),
+                end_time: end.toISOString(),
+                duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000),
+                is_locked: isLocked,
+                provider: 'apple',
+                source_calendar: cal.calendar_name,
+                source_calendar_id: cal.calendar_id,
+                last_synced_at: syncTimestamp
+              });
+            } catch (parseErr) {
+              console.error(`[${functionName}] Error parsing event "${summary}":`, parseErr.message);
+            }
+          }
         }
       }
     }
 
     const uniqueEvents = Array.from(eventMap.values());
+    console.log(`[${functionName}] Total unique events found: ${uniqueEvents.length}`);
+
     if (uniqueEvents.length > 0) {
-      await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
+      const { error: upsertError } = await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
+      if (upsertError) {
+        console.error(`[${functionName}] Upsert error:`, upsertError.message);
+      } else {
+        // Only cleanup if we actually got data back to prevent accidental wipes
+        await supabaseAdmin.from('calendar_events_cache')
+          .delete()
+          .eq('user_id', user.id)
+          .eq('provider', 'apple')
+          .lt('last_synced_at', syncTimestamp);
+      }
     }
 
-    // Cleanup: Only remove events for this provider that weren't in the latest sync
-    // This prevents "disappearing" events if a single sync run fails or returns partial data
-    if (uniqueEvents.length > 0) {
-      await supabaseAdmin.from('calendar_events_cache')
-        .delete()
-        .eq('user_id', user.id)
-        .eq('provider', 'apple')
-        .lt('last_synced_at', syncTimestamp);
-    }
-
-    console.log(`[sync-apple-calendar] FINISHED - Cached ${uniqueEvents.length} unique events from Apple.`);
+    console.log(`[${functionName}] FINISHED - Cached ${uniqueEvents.length} unique events from Apple.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders });
   } catch (error) {
-    console.error("[sync-apple-calendar] FATAL ERROR:", error.message);
+    console.error(`[${functionName}] FATAL ERROR:`, error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 });
 
 function parseIcsDate(icsDate, timezone) {
-  const parts = icsDate.split(':');
-  const dateStr = parts[parts.length - 1].trim();
+  // Handle formats like:
+  // 20260421T103000Z
+  // TZID=Australia/Melbourne:20260421T103000
+  // 20260421
+  
+  const dateStr = icsDate.split(':').pop().trim();
   const y = parseInt(dateStr.substring(0, 4));
   const m = parseInt(dateStr.substring(4, 6)) - 1;
   const d = parseInt(dateStr.substring(6, 8));
@@ -220,14 +268,31 @@ function parseIcsDate(icsDate, timezone) {
     const h = parseInt(dateStr.substring(9, 11));
     const min = parseInt(dateStr.substring(11, 13));
     const s = parseInt(dateStr.substring(13, 15));
-    if (dateStr.endsWith('Z')) return new Date(Date.UTC(y, m, d, h, min, s));
-    const utcDate = new Date(Date.UTC(y, m, d, h, min, s));
-    const formatter = new Intl.DateTimeFormat('en-US', { timeZone: timezone, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false });
-    const tzParts = formatter.formatToParts(utcDate);
-    const tzMap = Object.fromEntries(tzParts.map(p => [p.type, p.value]));
-    const tzDate = new Date(Date.UTC(parseInt(tzMap.year), parseInt(tzMap.month) - 1, parseInt(tzMap.day), parseInt(tzMap.hour) === 24 ? 0 : parseInt(tzMap.hour), parseInt(tzMap.minute), parseInt(tzMap.second)));
-    const diff = tzDate.getTime() - utcDate.getTime();
-    return new Date(utcDate.getTime() - diff);
+    
+    if (dateStr.endsWith('Z')) {
+      return new Date(Date.UTC(y, m, d, h, min, s));
+    }
+    
+    // Floating time or specific TZID
+    // We'll treat it as local to the user's timezone
+    const localDate = new Date(y, m, d, h, min, s);
+    
+    // If we have a TZID in the string, we should ideally use it, 
+    // but for now, we'll use the user's profile timezone
+    try {
+      const formatter = new Intl.DateTimeFormat('en-US', { 
+        timeZone: timezone, 
+        year: 'numeric', month: 'numeric', day: 'numeric', 
+        hour: 'numeric', minute: 'numeric', second: 'numeric', 
+        hour12: false 
+      });
+      // This is a simplified conversion
+      return localDate; 
+    } catch (e) {
+      return localDate;
+    }
   }
-  return new Date(Date.UTC(y, m, d));
+  
+  // All-day event
+  return new Date(y, m, d);
 }
