@@ -46,20 +46,23 @@ serve(async (req) => {
         'Content-Type': 'application/xml; charset=utf-8',
         'Depth': '0'
       },
-      body: `
-        <d:propfind xmlns:d="DAV:">
-          <d:prop>
-            <d:current-user-principal />
-          </d:prop>
-        </d:propfind>
-      `
+      body: `<?xml version="1.0" encoding="utf-8" ?><d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal /></d:prop></d:propfind>`
     });
 
-    if (!principalRes.ok) throw new Error(`Principal Discovery Failed: ${principalRes.status}`);
-    const principalXml = await principalRes.text();
-    const principalPath = principalXml.match(/<current-user-principal>.*?<href>(.*?)<\/href>.*?<\/current-user-principal>/s)?.[1];
+    if (!principalRes.ok) {
+      const errText = await principalRes.text();
+      console.error("[sync-apple-calendar] Principal Request Failed:", principalRes.status, errText);
+      throw new Error(`Principal Discovery Failed: ${principalRes.status}`);
+    }
 
-    if (!principalPath) throw new Error("Could not find Principal path in Apple response.");
+    const principalXml = await principalRes.text();
+    // More robust regex to handle namespaces like <D:href> or <href>
+    const principalPath = principalXml.match(/current-user-principal[^>]*>\s*<[^>]*href[^>]*>([^<]+)/i)?.[1];
+
+    if (!principalPath) {
+      console.error("[sync-apple-calendar] XML Response Snippet:", principalXml.substring(0, 500));
+      throw new Error("Could not find Principal path in Apple response.");
+    }
     console.log("[sync-apple-calendar] Principal found:", principalPath);
 
     // 2. Find the Calendar Home Set
@@ -71,22 +74,19 @@ serve(async (req) => {
         'Content-Type': 'application/xml; charset=utf-8',
         'Depth': '0'
       },
-      body: `
-        <d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
-          <d:prop>
-            <c:calendar-home-set />
-          </d:prop>
-        </d:propfind>
-      `
+      body: `<?xml version="1.0" encoding="utf-8" ?><d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><c:calendar-home-set /></d:prop></d:propfind>`
     });
 
     const homeSetXml = await homeSetRes.text();
-    const homeSetPath = homeSetXml.match(/<calendar-home-set>.*?<href>(.*?)<\/href>.*?<\/calendar-home-set>/s)?.[1];
+    const homeSetPath = homeSetXml.match(/calendar-home-set[^>]*>\s*<[^>]*href[^>]*>([^<]+)/i)?.[1];
 
-    if (!homeSetPath) throw new Error("Could not find Calendar Home Set.");
+    if (!homeSetPath) {
+      console.error("[sync-apple-calendar] Home Set XML Snippet:", homeSetXml.substring(0, 500));
+      throw new Error("Could not find Calendar Home Set.");
+    }
     console.log("[sync-apple-calendar] Home Set found:", homeSetPath);
 
-    // 3. Fetch events from the home set (iCloud allows REPORT on the home set to search all calendars)
+    // 3. Fetch events from the home set
     console.log("[sync-apple-calendar] Step 3: Fetching events...");
     const now = new Date();
     const start = now.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
