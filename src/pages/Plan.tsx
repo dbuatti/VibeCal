@@ -5,7 +5,7 @@ import Layout from '@/components/Layout';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import DayByDayPlanner from '@/components/DayByDayPlanner';
-import { Brain, RefreshCw, Trash2, Eye, EyeOff, Sparkles, Calendar, Clock, ListOrdered, ChevronRight, BrainCircuit, Inbox, Unlock, Lock, History, Settings2 } from 'lucide-react';
+import { Brain, RefreshCw, Trash2, Eye, EyeOff, Sparkles, Calendar, Clock, ListOrdered, ChevronRight, BrainCircuit, Inbox, Unlock, Lock, History, Settings2, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
@@ -13,6 +13,7 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { format, nextSaturday, formatDistanceToNow, parseISO, addMinutes } from 'date-fns';
 import { cn } from '@/lib/utils';
 
@@ -115,7 +116,6 @@ const Plan = () => {
         setLastSynced(fetchedEvents[0].last_synced_at);
       }
       
-      // Only move to vetting if we aren't already in an active plan
       if (currentStep !== 'active_plan') {
         setCurrentStep('vetting_tasks');
       }
@@ -287,6 +287,74 @@ const Plan = () => {
     } catch (err: any) { showError("Failed to update lock"); }
   };
 
+  const RequirementsForm = () => (
+    <div className="space-y-6 p-2">
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Duration</Label>
+          <Select value={durationOverride} onValueChange={setDurationOverride}>
+            <SelectTrigger className="h-10 rounded-xl border-gray-100 font-bold text-xs px-3 bg-gray-50/50">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="rounded-xl">
+              <SelectItem value="original">Original</SelectItem>
+              <SelectItem value="15">15m</SelectItem>
+              <SelectItem value="30">30m</SelectItem>
+              <SelectItem value="45">45m</SelectItem>
+              <SelectItem value="60">60m</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Alignment</Label>
+          <Select value={slotAlignment} onValueChange={setSlotAlignment}>
+            <SelectTrigger className="h-10 rounded-xl border-gray-100 font-bold text-xs px-3 bg-gray-50/50">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="rounded-xl">
+              <SelectItem value="5">5m</SelectItem>
+              <SelectItem value="15">15m</SelectItem>
+              <SelectItem value="30">30m</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <Label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Allowed Days</Label>
+        <div className="flex flex-wrap gap-1.5">
+          {DAYS.map((day) => (
+            <button 
+              key={day.value} 
+              onClick={() => setSelectedDays(prev => prev.includes(day.value) ? prev.filter(d => d !== day.value) : [...prev, day.value])} 
+              className={cn(
+                "px-2.5 py-1.5 rounded-lg font-black text-[8px] uppercase tracking-widest transition-all border",
+                selectedDays.includes(day.value) ? "bg-indigo-600 border-indigo-600 text-white shadow-sm" : "bg-white border-gray-100 text-gray-400"
+              )}
+            >
+              {day.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Max Hours</Label>
+          <Input type="number" value={maxHoursOverride} onChange={(e) => setMaxHoursOverride(parseInt(e.target.value))} className="h-10 rounded-xl border-gray-100 font-bold text-sm px-3 bg-gray-50/50" />
+        </div>
+        <div className="space-y-2">
+          <Label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Max Tasks</Label>
+          <Input type="number" value={maxTasksOverride} onChange={(e) => setMaxTasksOverride(parseInt(e.target.value))} className="h-10 rounded-xl border-gray-100 font-bold text-sm px-3 bg-gray-50/50" />
+        </div>
+      </div>
+      
+      <Button onClick={runOptimisation} className="w-full bg-indigo-600 text-white rounded-xl py-6 text-xs font-black uppercase tracking-widest shadow-lg shadow-indigo-100">
+        <Wand2 size={14} className="mr-2" /> Re-Generate Plan
+      </Button>
+    </div>
+  );
+
   return (
     <Layout hideSidebar={deepFocus}>
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
@@ -308,7 +376,19 @@ const Plan = () => {
           <h1 className="text-3xl font-black text-gray-900 tracking-tight">Daily Plan</h1>
         </div>
         <div className="flex gap-2">
-          {(currentStep === 'active_plan' || currentStep === 'vetting_tasks') && (
+          {currentStep === 'active_plan' ? (
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
+                  <Settings2 size={14} className="mr-2" /> Requirements
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-80 rounded-[2rem] shadow-2xl border-none p-6" align="end">
+                <h3 className="text-sm font-black text-gray-900 mb-4 uppercase tracking-widest">Plan Requirements</h3>
+                <RequirementsForm />
+              </PopoverContent>
+            </Popover>
+          ) : currentStep === 'vetting_tasks' && (
             <Button variant="outline" onClick={() => setCurrentStep('requirements')} className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
               <Settings2 size={14} className="mr-2" /> Requirements
             </Button>
@@ -398,70 +478,8 @@ const Plan = () => {
               <CardHeader className="p-8 border-b border-gray-50">
                 <CardTitle className="text-2xl font-black tracking-tight">Requirements</CardTitle>
               </CardHeader>
-              <CardContent className="p-8 space-y-8">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  <div className="space-y-3">
-                    <Label className="text-sm font-black flex items-center gap-2"><Clock size={16} className="text-indigo-600" /> Duration</Label>
-                    <Select value={durationOverride} onValueChange={setDurationOverride}>
-                      <SelectTrigger className="h-12 rounded-xl border-gray-100 font-black text-base px-4 bg-gray-50/50">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="rounded-xl">
-                        <SelectItem value="original">Original</SelectItem>
-                        <SelectItem value="15">15m</SelectItem>
-                        <SelectItem value="30">30m</SelectItem>
-                        <SelectItem value="45">45m</SelectItem>
-                        <SelectItem value="60">60m</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-3">
-                    <Label className="text-sm font-black flex items-center gap-2"><RefreshCw size={16} className="text-indigo-600" /> Alignment</Label>
-                    <Select value={slotAlignment} onValueChange={setSlotAlignment}>
-                      <SelectTrigger className="h-12 rounded-xl border-gray-100 font-black text-base px-4 bg-gray-50/50">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="rounded-xl">
-                        <SelectItem value="5">5m</SelectItem>
-                        <SelectItem value="15">15m</SelectItem>
-                        <SelectItem value="30">30m</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <Label className="text-sm font-black flex items-center gap-2"><Calendar size={16} className="text-indigo-600" /> Allowed Days</Label>
-                  <div className="flex flex-wrap gap-2">
-                    {DAYS.map((day) => (
-                      <button 
-                        key={day.value} 
-                        onClick={() => setSelectedDays(prev => prev.includes(day.value) ? prev.filter(d => d !== day.value) : [...prev, day.value])} 
-                        className={cn(
-                          "px-4 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest transition-all border-2",
-                          selectedDays.includes(day.value) ? "bg-indigo-600 border-indigo-600 text-white shadow-md" : "bg-white border-gray-100 text-gray-400"
-                        )}
-                      >
-                        {day.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  <div className="space-y-3">
-                    <Label className="text-sm font-black flex items-center gap-2"><Clock size={16} className="text-indigo-600" /> Max Hours</Label>
-                    <Input type="number" value={maxHoursOverride} onChange={(e) => setMaxHoursOverride(parseInt(e.target.value))} className="h-12 rounded-xl border-gray-100 font-black text-lg px-4 bg-gray-50/50" />
-                  </div>
-                  <div className="space-y-3">
-                    <Label className="text-sm font-black flex items-center gap-2"><ListOrdered size={16} className="text-indigo-600" /> Max Tasks</Label>
-                    <Input type="number" value={maxTasksOverride} onChange={(e) => setMaxTasksOverride(parseInt(e.target.value))} className="h-12 rounded-xl border-gray-100 font-black text-lg px-4 bg-gray-50/50" />
-                  </div>
-                </div>
-                
-                <Button onClick={runOptimisation} className="w-full bg-indigo-600 text-white rounded-2xl py-8 text-xl font-black shadow-xl shadow-indigo-100">
-                  Generate Plan
-                </Button>
+              <CardContent className="p-8">
+                <RequirementsForm />
               </CardContent>
             </Card>
           )}
