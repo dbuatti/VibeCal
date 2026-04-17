@@ -130,20 +130,26 @@ serve(async (req) => {
       const eventBlocks = xml.split('BEGIN:VEVENT');
       
       for (let i = 1; i < eventBlocks.length; i++) {
+        // Handle line folding (lines starting with a space are continuations)
         const block = eventBlocks[i].replace(/\r?\n /g, '');
+        
         const summary = block.match(/^SUMMARY[^:]*:(.*)$/m)?.[1]?.trim() || 'Untitled';
         const dtStart = block.match(/^DTSTART[^:]*:(.*)$/m)?.[1]?.trim();
         const dtEnd = block.match(/^DTEND[^:]*:(.*)$/m)?.[1]?.trim();
-        const uid = block.match(/^UID[^:]*:(.*)$/m)?.[1]?.trim() || `apple-${Math.random()}`;
+        const uid = block.match(/^UID[^:]*:(.*)$/m)?.[1]?.trim();
+        const recurrenceId = block.match(/^RECURRENCE-ID[^:]*:(.*)$/m)?.[1]?.trim();
 
-        if (dtStart && dtEnd) {
+        if (dtStart && dtEnd && uid) {
           const start = parseIcsDate(dtStart);
           const end = parseIcsDate(dtEnd);
           
-          // Use Map to ensure unique event_id per user
-          eventMap.set(uid, {
+          // Create a truly unique ID for recurring instances
+          // If it's a recurring instance, append the start time to the UID
+          const uniqueId = recurrenceId ? `${uid}-${dtStart}` : uid;
+          
+          eventMap.set(uniqueId, {
             user_id: user.id,
-            event_id: uid,
+            event_id: uniqueId,
             title: summary,
             start_time: start.toISOString(),
             end_time: end.toISOString(),
@@ -158,9 +164,19 @@ serve(async (req) => {
     }
 
     const uniqueEvents = Array.from(eventMap.values());
+    console.log(`[sync-apple-calendar] Prepared ${uniqueEvents.length} unique events for database.`);
+
     if (uniqueEvents.length > 0) {
-      const { error: insertError } = await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
-      if (insertError) throw insertError;
+      // Using upsert with onConflict to be safe, but since we deleted the cache, 
+      // this should effectively be a clean insert.
+      const { error: insertError } = await supabaseAdmin
+        .from('calendar_events_cache')
+        .upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
+        
+      if (insertError) {
+        console.error("[sync-apple-calendar] Database Error:", insertError);
+        throw insertError;
+      }
     }
 
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders });
