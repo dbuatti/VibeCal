@@ -44,7 +44,6 @@ const Plan = () => {
   const [placeholderDate, setPlaceholderDate] = useState<string>(format(nextSaturday(new Date()), 'yyyy-MM-dd'));
 
   const fetchData = async () => {
-    console.log("[Plan] Fetching initial data...");
     setLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -76,7 +75,6 @@ const Plan = () => {
       }
 
       if (history) {
-        console.log("[Plan] Found active proposal");
         setProposal(history);
         const appliedIds = history.proposed_changes
           .filter((c: any) => c.applied === true)
@@ -87,7 +85,6 @@ const Plan = () => {
         setCurrentStep('initial');
       }
     } catch (err: any) {
-      console.error("[Plan] Error fetching data:", err);
       showError("Failed to load your plan");
     } finally {
       setLoading(false);
@@ -199,7 +196,6 @@ const Plan = () => {
   };
 
   const handleApplyDay = async (dateChanges: any[]) => {
-    console.log("[Plan] Applying changes for day...");
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const newAppliedIds = [...appliedChanges];
@@ -243,8 +239,6 @@ const Plan = () => {
 
       setAppliedChanges(newAppliedIds);
       setProposal({ ...proposal, proposed_changes: updatedProposedChanges });
-      
-      console.log("[Plan] Day application complete and persisted");
     } catch (err: any) {
       showError(err.message);
       throw err;
@@ -260,130 +254,137 @@ const Plan = () => {
 
   return (
     <Layout hideSidebar={deepFocus}>
-      <div className="flex justify-between items-start mb-10">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-12 gap-6">
         <div>
-          <div className="flex items-center gap-3 mb-2">
-            <Badge className="bg-indigo-100 text-indigo-700 border-none px-3 py-1 rounded-lg font-bold flex gap-2">
+          <div className="flex items-center gap-4 mb-3">
+            <Badge className="bg-indigo-50 text-indigo-600 border-none px-4 py-1.5 rounded-full font-black flex gap-2 text-[10px] uppercase tracking-widest">
               <Brain size={14} /> ADHD Focus Mode
             </Badge>
             {currentStep === 'active_plan' && (
-              <div className="flex items-center gap-2 ml-4">
+              <div className="flex items-center gap-3 px-4 py-1.5 bg-white rounded-full border border-gray-100 shadow-sm">
                 <Switch 
                   id="deep-focus" 
                   checked={deepFocus} 
                   onCheckedChange={setDeepFocus}
-                  className="data-[state=checked]:bg-indigo-600"
+                  className="data-[state=checked]:bg-indigo-600 h-5 w-9"
                 />
-                <Label htmlFor="deep-focus" className="text-xs font-bold text-gray-400 flex items-center gap-1 cursor-pointer">
+                <Label htmlFor="deep-focus" className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer">
                   {deepFocus ? <EyeOff size={14} /> : <Eye size={14} />}
                   Deep Focus
                 </Label>
               </div>
             )}
           </div>
-          <h1 className="text-4xl font-black text-gray-900">Daily Plan</h1>
-          <p className="text-gray-500 mt-2">
+          <h1 className="text-5xl font-black text-gray-900 tracking-tight">Daily Plan</h1>
+          <p className="text-gray-400 mt-2 font-medium text-lg">
             {currentStep === 'active_plan' ? 'Review and confirm your schedule one day at a time.' : 'Align your schedule with your life.'}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-3">
           <Button 
-            variant="ghost" 
+            variant="outline" 
             onClick={() => runAnalysis(false)}
             disabled={isProcessing}
-            className="text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl font-bold"
+            className="bg-white border-gray-100 text-gray-500 hover:text-indigo-600 hover:border-indigo-100 rounded-2xl font-black text-[10px] uppercase tracking-widest h-12 px-6 shadow-sm transition-all"
           >
-            <RefreshCw size={18} className={cn("mr-2", isProcessing && "animate-spin")} /> Resync
+            <RefreshCw size={16} className={cn("mr-2", isProcessing && "animate-spin")} /> Resync
           </Button>
           {currentStep === 'active_plan' && (
             <Button 
-              variant="ghost" 
+              variant="outline" 
               onClick={handleResetPlan}
-              className="text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-xl font-bold"
+              className="bg-white border-gray-100 text-gray-400 hover:text-red-500 hover:border-red-100 rounded-2xl font-black text-[10px] uppercase tracking-widest h-12 px-6 shadow-sm transition-all"
             >
-              <Trash2 size={18} className="mr-2" /> Reset Plan
+              <Trash2 size={16} className="mr-2" /> Reset Plan
             </Button>
           )}
         </div>
       </div>
 
       {isProcessing ? (
-        <Card className="border-none shadow-sm rounded-[3rem] p-20 text-center bg-white">
-          <div className="relative w-32 h-32 mx-auto mb-12">
+        <div className="flex flex-col items-center justify-center py-32 text-center">
+          <div className="relative w-40 h-40 mb-12">
             <div className="absolute inset-0 bg-indigo-100 rounded-full animate-ping opacity-20" />
-            <div className="relative bg-white rounded-full p-6 shadow-xl">
+            <div className="relative bg-white rounded-full p-10 shadow-2xl border border-indigo-50">
               <RefreshCw className="text-indigo-600 animate-spin w-20 h-20" />
             </div>
           </div>
-          <h2 className="text-3xl font-black text-gray-900 mb-4 tracking-tight">{statusText}</h2>
-          <p className="text-gray-400 font-medium">This usually takes a few seconds...</p>
-        </Card>
+          <h2 className="text-4xl font-black text-gray-900 mb-4 tracking-tight">{statusText}</h2>
+          <p className="text-gray-400 font-medium text-lg">This usually takes a few seconds...</p>
+        </div>
       ) : (
         <>
           {currentStep === 'initial' && (
-            <Card className="border-none shadow-2xl shadow-indigo-100/50 rounded-[3rem] overflow-hidden bg-white">
-              <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-20 text-white text-center">
-                <div className="w-24 h-24 bg-white/20 rounded-[2rem] flex items-center justify-center mx-auto mb-10 backdrop-blur-md">
-                  <Calendar size={48} />
+            <Card className="border-none shadow-2xl shadow-indigo-100/50 rounded-[4rem] overflow-hidden bg-white">
+              <div className="bg-gradient-to-br from-indigo-600 via-indigo-700 to-purple-800 p-24 text-white text-center relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-full h-full opacity-10 pointer-events-none">
+                  <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-white rounded-full blur-[120px]" />
+                  <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-400 rounded-full blur-[120px]" />
                 </div>
-                <h2 className="text-4xl font-black mb-6 tracking-tight">Ready to Optimise?</h2>
-                <p className="text-indigo-100 mb-10 text-lg font-medium max-w-md mx-auto">We'll sync your calendars and identify which tasks can be moved to better align with your focus.</p>
                 
-                <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-                  <Button onClick={() => runAnalysis(false)} className="bg-white text-indigo-600 hover:bg-indigo-50 rounded-[2rem] px-12 py-8 text-xl font-black shadow-2xl transition-all hover:scale-[1.02] active:scale-[0.98]">
-                    <RefreshCw className="mr-2" size={20} /> Sync Fresh
-                  </Button>
+                <div className="relative z-10">
+                  <div className="w-28 h-28 bg-white/20 rounded-[2.5rem] flex items-center justify-center mx-auto mb-12 backdrop-blur-xl border border-white/30 shadow-2xl">
+                    <Calendar size={56} />
+                  </div>
+                  <h2 className="text-5xl font-black mb-8 tracking-tight">Ready to Optimise?</h2>
+                  <p className="text-indigo-100 mb-14 text-xl font-medium max-w-lg mx-auto leading-relaxed">We'll sync your calendars and identify which tasks can be moved to better align with your focus.</p>
                   
-                  {events.length > 0 && (
-                    <Button onClick={() => runAnalysis(true)} variant="outline" className="bg-white/10 border-white/20 text-white hover:bg-white/20 rounded-[2rem] px-12 py-8 text-xl font-black transition-all">
-                      <History className="mr-2" size={20} /> Use Cached Data
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-6">
+                    <Button onClick={() => runAnalysis(false)} className="bg-white text-indigo-600 hover:bg-indigo-50 rounded-[2.5rem] px-16 py-10 text-2xl font-black shadow-2xl transition-all hover:scale-[1.02] active:scale-[0.98]">
+                      <RefreshCw className="mr-3" size={24} /> Sync Fresh
                     </Button>
+                    
+                    {events.length > 0 && (
+                      <Button onClick={() => runAnalysis(true)} variant="outline" className="bg-white/10 border-white/20 text-white hover:bg-white/20 rounded-[2.5rem] px-16 py-10 text-2xl font-black transition-all backdrop-blur-sm">
+                        <History className="mr-3" size={24} /> Use Cache
+                      </Button>
+                    )}
+                  </div>
+
+                  {lastSynced && (
+                    <p className="text-indigo-200 mt-12 text-xs font-black uppercase tracking-[0.3em] opacity-60">
+                      Last synced {formatDistanceToNow(new Date(lastSynced))} ago
+                    </p>
                   )}
                 </div>
-
-                {lastSynced && (
-                  <p className="text-indigo-200 mt-8 text-sm font-bold uppercase tracking-widest">
-                    Last synced {formatDistanceToNow(new Date(lastSynced))} ago
-                  </p>
-                )}
               </div>
             </Card>
           )}
 
           {currentStep === 'vetting_tasks' && (
-            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-              <div className="flex items-center justify-between bg-white p-10 rounded-[2.5rem] border border-gray-100 shadow-sm">
+            <div className="space-y-10 animate-in fade-in slide-in-from-bottom-8 duration-1000">
+              <div className="flex items-center justify-between bg-white p-12 rounded-[3rem] border border-gray-100 shadow-xl shadow-gray-100/50">
                 <div>
-                  <h2 className="text-2xl font-black text-gray-900">Vet Your Tasks</h2>
-                  <p className="text-sm text-gray-400 font-medium mt-1">Toggle tasks that are movable.</p>
+                  <h2 className="text-3xl font-black text-gray-900 tracking-tight">Vet Your Tasks</h2>
+                  <p className="text-gray-400 font-medium mt-2">Toggle tasks that are movable to allow the AI to reschedule them.</p>
                 </div>
                 <div className="flex gap-4">
-                  <Button variant="outline" onClick={runAIClassification} className="rounded-2xl px-8 h-14 font-black text-xs uppercase tracking-widest flex gap-3 border-indigo-100 text-indigo-600 hover:bg-indigo-50">
-                    <BrainCircuit size={20} /> Ask AI to Vet
+                  <Button variant="outline" onClick={runAIClassification} className="rounded-[1.5rem] px-10 h-16 font-black text-[10px] uppercase tracking-[0.2em] flex gap-3 border-indigo-100 text-indigo-600 hover:bg-indigo-50 transition-all">
+                    <BrainCircuit size={22} /> Ask AI to Vet
                   </Button>
-                  <Button onClick={() => setCurrentStep('requirements')} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl px-10 h-14 font-black text-xs uppercase tracking-widest flex gap-3 shadow-xl shadow-indigo-100">
-                    Next: Requirements <ChevronRight size={20} />
+                  <Button onClick={() => setCurrentStep('requirements')} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-[1.5rem] px-12 h-16 font-black text-[10px] uppercase tracking-[0.2em] flex gap-3 shadow-2xl shadow-indigo-100 transition-all hover:scale-[1.02]">
+                    Next: Requirements <ChevronRight size={22} />
                   </Button>
                 </div>
               </div>
-              <div className="grid grid-cols-1 gap-4">
+              <div className="grid grid-cols-1 gap-5">
                 {events.map((event, i) => (
                   <div key={i} className={cn(
-                    "p-6 rounded-[2rem] border transition-all duration-300 flex items-center justify-between group",
+                    "p-8 rounded-[2.5rem] border transition-all duration-500 flex items-center justify-between group",
                     event.is_locked 
-                      ? "bg-white border-gray-100 opacity-70" 
+                      ? "bg-white border-gray-100 opacity-60" 
                       : "bg-indigo-50/30 border-indigo-100 shadow-sm"
                   )}>
-                    <div className="flex items-center gap-6">
+                    <div className="flex items-center gap-8">
                       <div className={cn(
-                        "w-14 h-14 rounded-2xl flex items-center justify-center transition-all",
-                        event.is_locked ? "bg-gray-50 text-gray-400" : "bg-white text-indigo-600 shadow-md"
+                        "w-16 h-16 rounded-[1.5rem] flex items-center justify-center transition-all duration-500",
+                        event.is_locked ? "bg-gray-50 text-gray-300" : "bg-white text-indigo-600 shadow-xl shadow-indigo-100/50"
                       )}>
-                        {event.is_locked ? <Lock size={24} /> : <Unlock size={24} />}
+                        {event.is_locked ? <Lock size={28} /> : <Unlock size={28} />}
                       </div>
                       <div>
-                        <h3 className="font-black text-xl text-gray-900">{event.title}</h3>
-                        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mt-1">
+                        <h3 className="font-black text-2xl text-gray-900 tracking-tight">{event.title}</h3>
+                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mt-2">
                           {event.is_locked ? 'Fixed Event' : 'Movable Task'}
                         </p>
                       </div>
@@ -391,7 +392,7 @@ const Plan = () => {
                     <Switch 
                       checked={!event.is_locked} 
                       onCheckedChange={() => toggleLock(event.event_id, event.is_locked)} 
-                      className="data-[state=checked]:bg-indigo-600 scale-125" 
+                      className="data-[state=checked]:bg-indigo-600 scale-150" 
                     />
                   </div>
                 ))}
@@ -400,27 +401,27 @@ const Plan = () => {
           )}
 
           {currentStep === 'requirements' && (
-            <Card className="border-none shadow-sm rounded-[3rem] overflow-hidden bg-white animate-in fade-in slide-in-from-bottom-4 duration-700">
-              <CardHeader className="p-12 border-b border-gray-50">
-                <CardTitle className="text-3xl font-black tracking-tight">Specify Requirements</CardTitle>
+            <Card className="border-none shadow-2xl shadow-gray-100/50 rounded-[4rem] overflow-hidden bg-white animate-in fade-in slide-in-from-bottom-8 duration-1000">
+              <CardHeader className="p-16 border-b border-gray-50">
+                <CardTitle className="text-4xl font-black tracking-tight">Specify Requirements</CardTitle>
               </CardHeader>
-              <CardContent className="p-12 space-y-12">
-                <div className="space-y-8">
-                  <Label className="text-xl font-black flex items-center gap-3">
-                    <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
-                      <Calendar className="text-indigo-600" size={20} />
+              <CardContent className="p-16 space-y-16">
+                <div className="space-y-10">
+                  <Label className="text-2xl font-black flex items-center gap-4">
+                    <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center">
+                      <Calendar className="text-indigo-600" size={24} />
                     </div>
                     Allowed Days
                   </Label>
-                  <div className="flex flex-wrap gap-4">
+                  <div className="flex flex-wrap gap-5">
                     {DAYS.map((day) => (
                       <button 
                         key={day.value} 
                         onClick={() => setSelectedDays(prev => prev.includes(day.value) ? prev.filter(d => d !== day.value) : [...prev, day.value])} 
                         className={cn(
-                          "px-8 py-4 rounded-2xl font-black text-sm uppercase tracking-widest transition-all border-2",
+                          "px-10 py-5 rounded-[1.5rem] font-black text-[10px] uppercase tracking-[0.2em] transition-all border-2",
                           selectedDays.includes(day.value) 
-                            ? "bg-indigo-600 border-indigo-600 text-white shadow-xl shadow-indigo-100" 
+                            ? "bg-indigo-600 border-indigo-600 text-white shadow-2xl shadow-indigo-100" 
                             : "bg-white border-gray-100 text-gray-400 hover:border-indigo-100"
                         )}
                       >
@@ -430,28 +431,28 @@ const Plan = () => {
                   </div>
                 </div>
 
-                <div className="space-y-8 p-10 bg-indigo-50/50 rounded-[2.5rem] border border-indigo-100">
-                  <Label className="text-xl font-black flex items-center gap-3">
-                    <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm">
-                      <Inbox className="text-indigo-600" size={20} />
+                <div className="space-y-10 p-12 bg-indigo-50/30 rounded-[3rem] border border-indigo-100/50">
+                  <Label className="text-2xl font-black flex items-center gap-4">
+                    <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-xl shadow-indigo-100/50">
+                      <Inbox className="text-indigo-600" size={24} />
                     </div>
                     Surplus Handling
                   </Label>
-                  <div className="space-y-6">
-                    <p className="text-sm text-gray-500 font-bold leading-relaxed">If tasks exceed your daily limit, where should they go?</p>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                      <div className="space-y-3">
+                  <div className="space-y-8">
+                    <p className="text-gray-500 font-medium text-lg leading-relaxed">If tasks exceed your daily limit, where should they go?</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
+                      <div className="space-y-4">
                         <Label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Placeholder Day</Label>
                         <Input 
                           type="date" 
                           value={placeholderDate} 
                           onChange={(e) => setPlaceholderDate(e.target.value)}
-                          className="h-14 rounded-2xl border-gray-200 font-black text-lg px-6 focus:ring-indigo-500"
+                          className="h-16 rounded-[1.5rem] border-gray-100 font-black text-xl px-8 focus:ring-indigo-500 bg-white shadow-sm"
                         />
                       </div>
                       <div className="flex items-end">
-                        <div className="bg-white p-5 rounded-2xl border border-indigo-100 shadow-sm">
-                          <p className="text-xs text-indigo-600 font-black leading-relaxed">
+                        <div className="bg-white p-8 rounded-[2rem] border border-indigo-100 shadow-xl shadow-indigo-100/20">
+                          <p className="text-sm text-indigo-600 font-black leading-relaxed uppercase tracking-widest">
                             Surplus tasks will be stacked on this day for future shuffling.
                           </p>
                         </div>
@@ -460,11 +461,11 @@ const Plan = () => {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
-                  <div className="space-y-4">
-                    <Label className="text-xl font-black flex items-center gap-3">
-                      <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
-                        <Clock className="text-indigo-600" size={20} />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-16">
+                  <div className="space-y-6">
+                    <Label className="text-2xl font-black flex items-center gap-4">
+                      <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center">
+                        <Clock className="text-indigo-600" size={24} />
                       </div>
                       Max Work Hours/Day
                     </Label>
@@ -472,13 +473,13 @@ const Plan = () => {
                       type="number" 
                       value={maxHoursOverride} 
                       onChange={(e) => setMaxHoursOverride(parseInt(e.target.value))} 
-                      className="h-16 rounded-[1.5rem] border-gray-200 font-black text-2xl px-8 focus:ring-indigo-500" 
+                      className="h-20 rounded-[2rem] border-gray-100 font-black text-3xl px-10 focus:ring-indigo-500 bg-gray-50/50" 
                     />
                   </div>
-                  <div className="space-y-4">
-                    <Label className="text-xl font-black flex items-center gap-3">
-                      <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
-                        <ListOrdered className="text-indigo-600" size={20} />
+                  <div className="space-y-6">
+                    <Label className="text-2xl font-black flex items-center gap-4">
+                      <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center">
+                        <ListOrdered className="text-indigo-600" size={24} />
                       </div>
                       Max Tasks/Day
                     </Label>
@@ -486,14 +487,14 @@ const Plan = () => {
                       type="number" 
                       value={maxTasksOverride} 
                       onChange={(e) => setMaxTasksOverride(parseInt(e.target.value))} 
-                      className="h-16 rounded-[1.5rem] border-gray-200 font-black text-2xl px-8 focus:ring-indigo-500" 
+                      className="h-20 rounded-[2rem] border-gray-100 font-black text-3xl px-10 focus:ring-indigo-500 bg-gray-50/50" 
                     />
                   </div>
                 </div>
                 
                 <Button 
                   onClick={runOptimisation} 
-                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded-[2rem] py-10 text-2xl font-black shadow-2xl shadow-indigo-100 transition-all hover:scale-[1.01] active:scale-[0.99]"
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded-[2.5rem] py-12 text-3xl font-black shadow-2xl shadow-indigo-100 transition-all hover:scale-[1.01] active:scale-[0.99]"
                 >
                   Generate Proposed Schedule
                 </Button>

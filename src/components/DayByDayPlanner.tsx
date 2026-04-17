@@ -72,7 +72,6 @@ const DayByDayPlanner = ({
     return dayChanges.length === 0 || dayChanges.every(c => appliedChanges.includes(c.event_id));
   }, [dayChanges, appliedChanges]);
 
-  // Auto-default to the first unvetted day
   useEffect(() => {
     if (!hasAutoDefaulted && allDates.length > 0) {
       const firstUnvettedIndex = allDates.findIndex(dateStr => {
@@ -138,21 +137,21 @@ const DayByDayPlanner = ({
 
   if (isFinished) {
     return (
-      <div className="max-w-2xl mx-auto text-center py-12 animate-in zoom-in-95 duration-500">
-        <div className="w-24 h-24 bg-green-100 rounded-[2rem] flex items-center justify-center mx-auto mb-8 shadow-xl shadow-green-50">
-          <Trophy className="text-green-600" size={48} />
+      <div className="max-w-2xl mx-auto text-center py-24 animate-in zoom-in-95 duration-700">
+        <div className="w-32 h-32 bg-green-50 rounded-[3rem] flex items-center justify-center mx-auto mb-10 shadow-2xl shadow-green-100/50 border border-green-100">
+          <Trophy className="text-green-600" size={64} />
         </div>
-        <h2 className="text-4xl font-black text-gray-900 mb-4 tracking-tight">Session Complete!</h2>
-        <p className="text-gray-500 text-lg mb-10 font-medium">
+        <h2 className="text-5xl font-black text-gray-900 mb-6 tracking-tight">Session Complete!</h2>
+        <p className="text-gray-400 text-xl mb-12 font-medium leading-relaxed">
           You've successfully vetted your schedule for the next {allDates.length} days. Your calendar is now perfectly aligned.
         </p>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-2 gap-6">
           <Link to="/">
-            <Button className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl py-8 text-lg font-black shadow-xl shadow-indigo-100">
-              <LayoutDashboard className="mr-2" /> Dashboard
+            <Button className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded-[2rem] py-10 text-xl font-black shadow-2xl shadow-indigo-100 transition-all hover:scale-[1.02]">
+              <LayoutDashboard className="mr-3" /> Dashboard
             </Button>
           </Link>
-          <Button variant="outline" onClick={() => setIsFinished(false)} className="rounded-2xl py-8 text-lg font-black border-gray-200 text-gray-500">
+          <Button variant="outline" onClick={() => setIsFinished(false)} className="rounded-[2rem] py-10 text-xl font-black border-gray-100 text-gray-400 hover:bg-gray-50 transition-all">
             Review Plan
           </Button>
         </div>
@@ -161,57 +160,57 @@ const DayByDayPlanner = ({
   }
 
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-      <div className="space-y-2">
-        <div className="flex justify-between items-end px-2">
-          <span className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-600">Session Progress</span>
-          <span className="text-[10px] font-black text-gray-400">{currentIndex + 1} of {allDates.length} Days</span>
+    <div className="space-y-12 animate-in fade-in slide-in-from-bottom-8 duration-1000">
+      <div className="space-y-3">
+        <div className="flex justify-between items-end px-4">
+          <span className="text-[10px] font-black uppercase tracking-[0.3em] text-indigo-600">Session Progress</span>
+          <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{currentIndex + 1} of {allDates.length} Days</span>
         </div>
-        <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
+        <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden shadow-inner">
           <div 
-            className="h-full bg-indigo-600 transition-all duration-1000 ease-out" 
+            className="h-full bg-indigo-600 transition-all duration-1000 ease-out shadow-[0_0_15px_rgba(79,70,229,0.4)]" 
             style={{ width: `${sessionProgress}%` }} 
           />
         </div>
       </div>
 
       <div className={cn(
-        "flex items-center justify-between p-8 rounded-[2.5rem] border transition-all duration-500 shadow-sm",
-        isDayVetted ? "bg-green-50 border-green-100" : "bg-white border-gray-100"
+        "flex items-center justify-between p-10 rounded-[3.5rem] border transition-all duration-700 shadow-xl",
+        isDayVetted ? "bg-green-50/50 border-green-100 shadow-green-100/20" : "bg-white border-gray-100 shadow-gray-100/50"
       )}>
         <Button 
           variant="ghost" 
           size="icon" 
           onClick={() => setCurrentIndex(prev => Math.max(0, prev - 1))}
           disabled={currentIndex === 0}
-          className="rounded-2xl h-12 w-12 hover:bg-gray-50"
+          className="rounded-3xl h-16 w-16 hover:bg-gray-50 transition-all"
         >
-          <ChevronLeft size={28} className="text-gray-400" />
+          <ChevronLeft size={32} className="text-gray-300" />
         </Button>
         
         <div className="text-center relative">
           {showXP && (
-            <div className="absolute -top-12 left-1/2 -translate-x-1/2 animate-bounce">
-              <Badge className="bg-yellow-400 text-yellow-900 border-none px-4 py-2 rounded-full font-black flex gap-2 shadow-lg">
-                <Star size={16} fill="currentColor" /> +50 XP
+            <div className="absolute -top-16 left-1/2 -translate-x-1/2 animate-bounce">
+              <Badge className="bg-yellow-400 text-yellow-900 border-none px-6 py-2.5 rounded-full font-black flex gap-2 shadow-2xl">
+                <Star size={18} fill="currentColor" /> +50 XP
               </Badge>
             </div>
           )}
-          <h2 className="text-3xl font-black text-gray-900 tracking-tight">
+          <h2 className="text-4xl font-black text-gray-900 tracking-tight mb-2">
             {format(currentDate, 'EEEE, MMMM do')}
           </h2>
-          <div className="flex items-center justify-center gap-2 mt-1">
+          <div className="flex items-center justify-center gap-3">
             {isDayVetted ? (
-              <Badge className="bg-green-500 text-white border-none px-3 py-0.5 rounded-full font-black text-[10px] uppercase tracking-widest">
+              <Badge className="bg-green-500 text-white border-none px-4 py-1 rounded-full font-black text-[10px] uppercase tracking-[0.2em]">
                 Vetted
               </Badge>
             ) : (
-              <>
-                <CalendarIcon size={14} className="text-indigo-400" />
-                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">
+              <div className="flex items-center gap-2">
+                <CalendarIcon size={16} className="text-indigo-400" />
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">
                   Vetting Phase
                 </p>
-              </>
+              </div>
             )}
           </div>
         </div>
@@ -221,62 +220,62 @@ const DayByDayPlanner = ({
           size="icon" 
           onClick={() => setCurrentIndex(prev => Math.min(allDates.length - 1, prev + 1))}
           disabled={currentIndex === allDates.length - 1}
-          className="rounded-2xl h-12 w-12 hover:bg-gray-50"
+          className="rounded-3xl h-16 w-16 hover:bg-gray-50 transition-all"
         >
-          <ChevronRight size={28} className="text-gray-400" />
+          <ChevronRight size={32} className="text-gray-300" />
         </Button>
       </div>
 
       <div className={cn(
-        "grid grid-cols-1 lg:grid-cols-3 gap-8 transition-all duration-500",
+        "grid grid-cols-1 lg:grid-cols-3 gap-12 transition-all duration-700",
         isDayVetted && "opacity-90"
       )}>
-        <div className="space-y-6">
+        <div className="space-y-8">
           <Card className={cn(
-            "border-none shadow-sm rounded-[2rem] overflow-hidden transition-colors duration-500",
-            isDayVetted ? "bg-green-50/50" : "bg-white"
+            "border-none shadow-xl shadow-gray-100/50 rounded-[3rem] overflow-hidden transition-all duration-700",
+            isDayVetted ? "bg-green-50/30" : "bg-white"
           )}>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Day Capacity</CardTitle>
+            <CardHeader className="pb-4 px-10 pt-10">
+              <CardTitle className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em]">Day Capacity</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-3">
-                <div className="flex justify-between text-sm font-bold">
-                  <span className="flex items-center gap-2 text-gray-600"><Clock size={16} className="text-indigo-500" /> Work Hours</span>
+            <CardContent className="space-y-8 px-10 pb-10">
+              <div className="space-y-4">
+                <div className="flex justify-between text-xs font-black uppercase tracking-widest">
+                  <span className="flex items-center gap-2 text-gray-500"><Clock size={16} className="text-indigo-500" /> Work Hours</span>
                   <span className={cn(stats.isOverHours ? "text-red-500" : "text-gray-900")}>
                     {stats.hours.toFixed(1)} / {maxHours}h
                   </span>
                 </div>
-                <div className="h-2.5 w-full bg-gray-50 rounded-full overflow-hidden">
+                <div className="h-2 w-full bg-gray-50 rounded-full overflow-hidden shadow-inner">
                   <div 
-                    className={cn("h-full transition-all duration-1000", stats.isOverHours ? "bg-red-500" : "bg-indigo-500")} 
+                    className={cn("h-full transition-all duration-1000", stats.isOverHours ? "bg-red-400" : "bg-indigo-500")} 
                     style={{ width: `${Math.min((stats.hours / maxHours) * 100, 100)}%` }} 
                   />
                 </div>
               </div>
 
-              <div className="space-y-3">
-                <div className="flex justify-between text-sm font-bold">
-                  <span className="flex items-center gap-2 text-gray-600"><ListOrdered size={16} className="text-indigo-500" /> Task Count</span>
+              <div className="space-y-4">
+                <div className="flex justify-between text-xs font-black uppercase tracking-widest">
+                  <span className="flex items-center gap-2 text-gray-500"><ListOrdered size={16} className="text-indigo-500" /> Task Count</span>
                   <span className={cn(stats.isOverTasks ? "text-red-500" : "text-gray-900")}>
                     {stats.tasks} / {maxTasks}
                   </span>
                 </div>
-                <div className="h-2.5 w-full bg-gray-50 rounded-full overflow-hidden">
+                <div className="h-2 w-full bg-gray-50 rounded-full overflow-hidden shadow-inner">
                   <div 
-                    className={cn("h-full transition-all duration-1000", stats.isOverTasks ? "bg-red-500" : "bg-indigo-500")} 
+                    className={cn("h-full transition-all duration-1000", stats.isOverTasks ? "bg-red-400" : "bg-indigo-500")} 
                     style={{ width: `${Math.min((stats.tasks / maxTasks) * 100, 100)}%` }} 
                   />
                 </div>
               </div>
 
               {stats.surplusCount > 0 && (
-                <div className="p-5 bg-indigo-50 rounded-[1.5rem] border border-indigo-100 flex gap-4">
-                  <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center shrink-0">
-                    <Inbox className="text-indigo-600" size={20} />
+                <div className="p-6 bg-indigo-50/50 rounded-[2rem] border border-indigo-100/50 flex gap-5">
+                  <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shrink-0 shadow-sm">
+                    <Inbox className="text-indigo-600" size={24} />
                   </div>
                   <div>
-                    <p className="text-xs text-indigo-900 font-black uppercase tracking-widest mb-1">Backlog Alert</p>
+                    <p className="text-[10px] font-black text-indigo-900 uppercase tracking-[0.2em] mb-1.5">Backlog Alert</p>
                     <p className="text-xs text-indigo-700 font-bold leading-relaxed">
                       {stats.surplusCount} tasks are parked in your backlog for this day.
                     </p>
@@ -285,27 +284,27 @@ const DayByDayPlanner = ({
               )}
 
               {isDayVetted ? (
-                <div className="p-5 bg-green-500 rounded-[1.5rem] border border-green-600 flex gap-4 shadow-lg shadow-green-100">
-                  <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center shrink-0">
-                    <CheckCircle2 className="text-white" size={20} />
+                <div className="p-6 bg-green-500 rounded-[2rem] border border-green-600 flex gap-5 shadow-2xl shadow-green-100">
+                  <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center shrink-0">
+                    <CheckCircle2 className="text-white" size={24} />
                   </div>
-                  <p className="text-xs text-white font-black uppercase tracking-widest leading-relaxed flex items-center">
+                  <p className="text-[10px] text-white font-black uppercase tracking-[0.2em] leading-relaxed flex items-center">
                     Day Fully Vetted
                   </p>
                 </div>
               ) : stats.isFull ? (
-                <div className="p-5 bg-amber-50 rounded-[1.5rem] border border-amber-100 flex gap-4">
-                  <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center shrink-0">
-                    <AlertCircle className="text-amber-600" size={20} />
+                <div className="p-6 bg-amber-50 rounded-[2rem] border border-amber-100 flex gap-5">
+                  <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shrink-0 shadow-sm">
+                    <AlertCircle className="text-amber-600" size={24} />
                   </div>
                   <p className="text-xs text-amber-800 font-bold leading-relaxed">
                     This day is at maximum capacity. The AI suggests focusing on existing commitments.
                   </p>
                 </div>
               ) : (
-                <div className="p-5 bg-green-50 rounded-[1.5rem] border border-green-100 flex gap-4">
-                  <div className="w-10 h-10 bg-green-100 rounded-xl flex items-center justify-center shrink-0">
-                    <CheckCircle2 className="text-green-600" size={20} />
+                <div className="p-6 bg-green-50 rounded-[2rem] border border-green-100 flex gap-5">
+                  <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shrink-0 shadow-sm">
+                    <CheckCircle2 className="text-green-600" size={24} />
                   </div>
                   <p className="text-xs text-green-800 font-bold leading-relaxed">
                     You have space today! The AI has suggested {dayChanges.filter(c => !c.is_surplus).length} tasks to fill your gaps.
@@ -316,89 +315,91 @@ const DayByDayPlanner = ({
           </Card>
 
           <Card className={cn(
-            "border-none shadow-sm rounded-[2rem] overflow-hidden transition-colors duration-500",
-            isDayVetted ? "bg-green-50/50" : "bg-white"
+            "border-none shadow-xl shadow-gray-100/50 rounded-[3rem] overflow-hidden transition-all duration-700",
+            isDayVetted ? "bg-green-50/30" : "bg-white"
           )}>
-            <CardHeader>
-              <CardTitle className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Proposed for Today</CardTitle>
+            <CardHeader className="px-10 pt-10 pb-4">
+              <CardTitle className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em]">Proposed for Today</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3 max-h-[400px] overflow-y-auto pr-2 scrollbar-thin">
+            <CardContent className="space-y-4 px-10 pb-10 max-h-[450px] overflow-y-auto pr-4 scrollbar-hide">
               {dayChanges.length > 0 ? (
                 dayChanges.map((change, i) => (
                   <div key={i} className={cn(
-                    "p-5 rounded-2xl border flex items-center justify-between group transition-all duration-300",
+                    "p-6 rounded-[2rem] border flex items-center justify-between group transition-all duration-500",
                     appliedChanges.includes(change.event_id) 
                       ? "bg-green-50 border-green-100 opacity-60" 
-                      : "bg-gray-50 border-gray-100 hover:border-indigo-200 hover:bg-white hover:shadow-md"
+                      : "bg-gray-50/50 border-gray-100 hover:border-indigo-200 hover:bg-white hover:shadow-xl hover:shadow-indigo-100/20"
                   )}>
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-5">
                       <div className={cn(
-                        "w-10 h-10 rounded-xl flex items-center justify-center transition-colors",
-                        appliedChanges.includes(change.event_id) ? "bg-green-500 text-white" : "bg-white text-indigo-600 shadow-sm"
+                        "w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-500",
+                        appliedChanges.includes(change.event_id) ? "bg-green-500 text-white" : "bg-white text-indigo-600 shadow-sm border border-gray-50"
                       )}>
-                        {appliedChanges.includes(change.event_id) ? <CheckCircle2 size={20} /> : <Sparkles size={20} />}
+                        {appliedChanges.includes(change.event_id) ? <CheckCircle2 size={24} /> : <Sparkles size={24} />}
                       </div>
                       <div>
-                        <p className="text-sm font-black text-gray-900">{change.title}</p>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <Clock size={12} className="text-gray-400" />
-                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                        <p className="text-base font-black text-gray-900 tracking-tight">{change.title}</p>
+                        <div className="flex items-center gap-2 mt-1.5">
+                          <Clock size={14} className="text-gray-300" />
+                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
                             {format(parseISO(change.new_start), 'HH:mm')}
                           </p>
                         </div>
                       </div>
                     </div>
                     {change.is_surplus && (
-                      <Badge variant="secondary" className="bg-amber-50 text-amber-600 border-amber-100 text-[10px] font-black">
+                      <Badge variant="secondary" className="bg-amber-50 text-amber-600 border-amber-100 text-[8px] font-black px-2 py-0.5">
                         SURPLUS
                       </Badge>
                     )}
                   </div>
                 ))
               ) : (
-                <div className="text-center py-12 bg-gray-50/50 rounded-[1.5rem] border border-dashed border-gray-200">
-                  <Inbox className="mx-auto text-gray-200 mb-3" size={40} />
-                  <p className="text-xs font-black text-gray-400 uppercase tracking-widest">No new tasks</p>
+                <div className="text-center py-16 bg-gray-50/30 rounded-[2.5rem] border border-dashed border-gray-200">
+                  <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm">
+                    <Inbox className="text-gray-200" size={32} />
+                  </div>
+                  <p className="text-[10px] font-black text-gray-300 uppercase tracking-[0.3em]">No new tasks</p>
                 </div>
               )}
             </CardContent>
           </Card>
 
-          <div className="space-y-3">
+          <div className="space-y-4">
             <Button 
               onClick={handleSyncDay} 
               disabled={isSyncing || (dayChanges.length > 0 && isDayVetted)}
               className={cn(
-                "w-full rounded-[2rem] py-10 text-xl font-black shadow-xl transition-all hover:scale-[1.02] active:scale-[0.98]",
+                "w-full rounded-[2.5rem] py-12 text-2xl font-black shadow-2xl transition-all hover:scale-[1.02] active:scale-[0.98]",
                 isDayVetted 
                   ? "bg-green-500 hover:bg-green-600 text-white shadow-green-100" 
                   : "bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-100"
               )}
             >
               {isSyncing ? (
-                <RefreshCw className="animate-spin mr-3" size={24} />
+                <RefreshCw className="animate-spin mr-4" size={28} />
               ) : isDayVetted ? (
-                <><CheckCircle2 className="mr-3" size={24} /> Day Vetted</>
+                <><CheckCircle2 className="mr-4" size={28} /> Day Vetted</>
               ) : (
-                <><Zap className="mr-3" size={24} /> Confirm & Sync Day</>
+                <><Zap className="mr-4" size={28} /> Confirm & Sync Day</>
               )}
             </Button>
             
-            <div className="flex gap-3">
+            <div className="flex gap-4">
               {isDayVetted && currentIndex < allDates.length - 1 && (
                 <Button 
                   variant="outline" 
                   onClick={() => setCurrentIndex(prev => prev + 1)}
-                  className="flex-1 rounded-[1.5rem] py-6 border-gray-200 text-gray-600 font-black uppercase tracking-widest text-xs hover:bg-gray-50"
+                  className="flex-1 rounded-[2rem] py-8 border-gray-100 text-gray-500 font-black uppercase tracking-[0.2em] text-[10px] hover:bg-gray-50 transition-all"
                 >
-                  Next Day <ArrowRight size={18} className="ml-2" />
+                  Next Day <ArrowRight size={20} className="ml-3" />
                 </Button>
               )}
               <Button 
                 variant="ghost" 
                 onClick={handleSyncAll}
                 disabled={isSyncing}
-                className="rounded-[1.5rem] py-6 text-gray-400 hover:text-indigo-600 font-black uppercase tracking-widest text-[10px]"
+                className="rounded-[2rem] py-8 text-gray-300 hover:text-indigo-600 font-black uppercase tracking-[0.2em] text-[10px] transition-all"
               >
                 Sync All Remaining
               </Button>
@@ -408,18 +409,21 @@ const DayByDayPlanner = ({
 
         <div className="lg:col-span-2">
           <div className="h-full flex flex-col">
-            <div className="flex flex-row items-center justify-between p-8 pb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
-                  <CalendarIcon className="text-indigo-600" size={20} />
+            <div className="flex flex-row items-center justify-between px-4 mb-8">
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 bg-white rounded-[1.5rem] flex items-center justify-center shadow-xl shadow-gray-100/50 border border-gray-50">
+                  <CalendarIcon className="text-indigo-600" size={28} />
                 </div>
-                <h3 className="text-xl font-black text-gray-900">Visual Map</h3>
+                <div>
+                  <h3 className="text-2xl font-black text-gray-900 tracking-tight">Visual Map</h3>
+                  <p className="text-xs font-medium text-gray-400">Your day at a glance</p>
+                </div>
               </div>
               <div className="flex gap-3">
-                <Badge variant="outline" className="rounded-xl border-gray-100 text-gray-400 font-black px-4 py-1.5">
+                <Badge variant="outline" className="rounded-xl border-gray-100 text-gray-400 font-black px-5 py-2 text-[10px] uppercase tracking-widest bg-white">
                   {dayLockedEvents.length} FIXED
                 </Badge>
-                <Badge variant="outline" className="rounded-xl border-indigo-100 text-indigo-600 font-black px-4 py-1.5">
+                <Badge variant="outline" className="rounded-xl border-indigo-100 text-indigo-600 font-black px-5 py-2 text-[10px] uppercase tracking-widest bg-indigo-50/30">
                   {dayChanges.length} PROPOSED
                 </Badge>
               </div>
