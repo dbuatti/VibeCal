@@ -7,7 +7,7 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, ArrowRight, Zap, Apple, Globe, ChevronRight, Settings2, ListOrdered } from 'lucide-react';
+import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, ArrowRight, Zap, Apple, Globe, ChevronRight, Settings2, ListOrdered, BrainCircuit } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { format } from 'date-fns';
@@ -62,18 +62,67 @@ const Optimise = () => {
     }
   };
 
-  // Step 2: Vet Tasks (Lock/Unlock)
-  const toggleLock = async (eventId: string, currentStatus: boolean) => {
+  // Step 2: Vet Tasks (Lock/Unlock) + Save Feedback
+  const toggleLock = async (eventId: string, currentStatus: boolean, taskName: string) => {
     try {
-      const { error } = await supabase
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      // Update cache
+      const { error: cacheError } = await supabase
         .from('calendar_events_cache')
         .update({ is_locked: !currentStatus })
         .eq('event_id', eventId);
 
-      if (error) throw error;
+      if (cacheError) throw cacheError;
+
+      // Save feedback for AI learning
+      await supabase
+        .from('task_classification_feedback')
+        .upsert({ 
+          user_id: user.id, 
+          task_name: taskName, 
+          is_movable: currentStatus // If it was locked, we are unlocking it (making it movable)
+        }, { onConflict: 'user_id, task_name' });
+
       setEvents(events.map(e => e.event_id === eventId ? { ...e, is_locked: !currentStatus } : e));
     } catch (err: any) {
       showError("Failed to update lock status");
+    }
+  };
+
+  // AI Re-classification
+  const runAIClassification = async () => {
+    setIsProcessing(true);
+    setStatusText('AI is learning your preferences...');
+    try {
+      const { data: settings } = await supabase.from('user_settings').select('movable_keywords').single();
+      const taskTitles = events.map(e => e.title);
+      
+      const { data, error } = await supabase.functions.invoke('classify-tasks', {
+        body: { tasks: taskTitles, movableKeywords: settings?.movable_keywords || [] }
+      });
+
+      if (error) throw error;
+
+      // Update local state and DB
+      const updatedEvents = [...events];
+      for (let i = 0; i < updatedEvents.length; i++) {
+        const isMovable = data.classifications[i];
+        updatedEvents[i].is_locked = !isMovable;
+        
+        await supabase
+          .from('calendar_events_cache')
+          .update({ is_locked: !isMovable })
+          .eq('event_id', updatedEvents[i].event_id);
+      }
+      
+      setEvents(updatedEvents);
+      showSuccess("AI has updated your task classifications!");
+    } catch (err: any) {
+      showError(err.message);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -216,13 +265,23 @@ const Optimise = () => {
                 <h2 className="text-2xl font-bold text-gray-900">Vet Your Tasks</h2>
                 <p className="text-gray-500 font-medium">Unlock tasks you want the AI to redistribute.</p>
               </div>
-              <Button 
-                onClick={() => setCurrentStep('requirements')}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-8 h-12 font-black flex gap-3 shadow-lg shadow-indigo-100"
-              >
-                Next: Requirements
-                <ChevronRight size={20} />
-              </Button>
+              <div className="flex gap-3">
+                <Button 
+                  variant="outline"
+                  onClick={runAIClassification}
+                  className="rounded-xl px-6 h-12 font-bold flex gap-2 border-indigo-100 text-indigo-600 hover:bg-indigo-50"
+                >
+                  <BrainCircuit size={20} />
+                  Ask AI to Vet
+                </Button>
+                <Button 
+                  onClick={() => setCurrentStep('requirements')}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-8 h-12 font-black flex gap-3 shadow-lg shadow-indigo-100"
+                >
+                  Next: Requirements
+                  <ChevronRight size={20} />
+                </Button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 gap-4">
@@ -264,7 +323,7 @@ const Optimise = () => {
                   </div>
                   <Switch 
                     checked={!event.is_locked} 
-                    onCheckedChange={() => toggleLock(event.event_id, event.is_locked)}
+                    onCheckedChange={() => toggleLock(event.event_id, event.is_locked, event.title)}
                     className="data-[state=checked]:bg-indigo-600"
                   />
                 </div>
