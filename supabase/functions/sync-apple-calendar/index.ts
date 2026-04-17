@@ -40,7 +40,6 @@ serve(async (req) => {
 
     const { data: profile } = await supabaseAdmin.from('profiles').select('apple_id, apple_app_password, timezone').eq('id', user.id).single();
     if (!profile?.apple_id || !profile?.apple_app_password) {
-      console.log("[sync-apple-calendar] Apple credentials missing in profile. Skipping sync.");
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
 
@@ -56,7 +55,6 @@ serve(async (req) => {
     };
 
     // 1. Discovery
-    console.log("[sync-apple-calendar] Discovering principal...");
     const principalRes = await fetch(initialBase, {
       method: 'PROPFIND',
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' },
@@ -67,7 +65,6 @@ serve(async (req) => {
     let principalPath = principalXml.match(/current-user-principal[\s\S]*?href[^>]*>([^<]+)/i)?.[1];
     const discoveryUrl = principalPath ? getFullUrl(principalPath, initialBase) : initialBase;
 
-    console.log("[sync-apple-calendar] Discovering home set...");
     const discoveryRes = await fetch(discoveryUrl, { 
       method: 'PROPFIND', 
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }, 
@@ -78,7 +75,6 @@ serve(async (req) => {
     });
     const discoveryXml = await discoveryRes.text();
     let homeSetPath = discoveryXml.match(/calendar-home-set[\s\S]*?href[^>]*>([^<]+)/i)?.[1];
-    
     if (!homeSetPath) throw new Error("Could not find Calendar Home Set.");
     const homeSetUrl = getFullUrl(homeSetPath, discoveryRes.url);
 
@@ -90,20 +86,18 @@ serve(async (req) => {
       .eq('provider', 'apple');
 
     const enabledCalendars = (enabled || []).filter(c => c.is_enabled);
-    console.log(`[sync-apple-calendar] Found ${enabled?.length || 0} Apple calendars. ${enabledCalendars.length} are enabled.`);
-
     if (enabledCalendars.length === 0) {
-      console.log("[sync-apple-calendar] No enabled Apple calendars found. Please check your settings.");
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
 
-    // Clear existing cache for this provider
-    await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
-
-    // 3. Fetch Events - Increased window to 365 days
-    const now = new Date();
-    const startStr = now.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-    const endStr = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    // 3. Fetch Events - Start from yesterday
+    const syncStartTime = new Date();
+    syncStartTime.setDate(syncStartTime.getDate() - 1);
+    const syncEndTime = new Date();
+    syncEndTime.setDate(syncEndTime.getDate() + 365);
+    
+    const startStr = syncStartTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    const endStr = syncEndTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
     const reportXml = `
       <c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
@@ -116,8 +110,9 @@ serve(async (req) => {
     const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i];
 
     const eventMap = new Map();
+    const syncTimestamp = new Date().toISOString();
+
     for (const cal of enabledCalendars) {
-      console.log(`[sync-apple-calendar] Fetching events for: "${cal.calendar_name}"`);
       const res = await fetch(getFullUrl(cal.calendar_id, homeSetUrl), {
         method: 'REPORT',
         headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/xml', 'Depth': '1' },
@@ -129,7 +124,6 @@ serve(async (req) => {
       
       for (let i = 1; i < eventBlocks.length; i++) {
         const block = eventBlocks[i].replace(/\r?\n[ \t]/g, '');
-        
         const getProp = (prop) => {
           const re = new RegExp(`${prop}[^:]*:(.*)`, 'i');
           return block.match(re)?.[1]?.trim();
@@ -143,28 +137,13 @@ serve(async (req) => {
 
         if (dtStart && uid) {
           const start = parseIcsDate(dtStart, userTimezone);
-          let end;
-
-          if (dtEnd) {
-            end = parseIcsDate(dtEnd, userTimezone);
-          } else if (duration) {
-            const hours = parseInt(duration.match(/(\d+)H/)?.[1] || '0');
-            const mins = parseInt(duration.match(/(\d+)M/)?.[1] || '0');
-            end = new Date(start.getTime() + (hours * 3600 + mins * 60) * 1000);
-          } else {
-            end = new Date(start.getTime() + 60 * 60 * 1000);
-          }
+          let end = dtEnd ? parseIcsDate(dtEnd, userTimezone) : (duration ? new Date(start.getTime() + 60 * 60 * 1000) : new Date(start.getTime() + 60 * 60 * 1000));
           
           const isExplicitlyMovable = movableKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
           const isExplicitlyLocked = lockedKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
+          const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && (fixedKeywords.test(summary) || fixedPatterns.some(p => p.test(summary))));
           
-          const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && (
-                           fixedKeywords.test(summary) || 
-                           fixedPatterns.some(p => p.test(summary))));
-          
-          // Use a combination of UID and Start Time to ensure recurring instances are unique
           const uniqueId = `${uid}-${dtStart.replace(/[^a-zA-Z0-9]/g, '')}`;
-          
           eventMap.set(uniqueId, {
             user_id: user.id,
             event_id: uniqueId,
@@ -176,7 +155,7 @@ serve(async (req) => {
             provider: 'apple',
             source_calendar: cal.calendar_name,
             source_calendar_id: cal.calendar_id,
-            last_synced_at: new Date().toISOString()
+            last_synced_at: syncTimestamp
           });
         }
       }
@@ -187,7 +166,13 @@ serve(async (req) => {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
     }
 
-    console.log(`[sync-apple-calendar] FINISHED - Cached ${uniqueEvents.length} unique events from Apple.`);
+    // Cleanup: Remove events for this provider that weren't in the latest sync
+    await supabaseAdmin.from('calendar_events_cache')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('provider', 'apple')
+      .lt('last_synced_at', syncTimestamp);
+
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders });
   } catch (error) {
     console.error("[sync-apple-calendar] FATAL ERROR:", error.message);
@@ -206,29 +191,12 @@ function parseIcsDate(icsDate, timezone) {
     const h = parseInt(dateStr.substring(9, 11));
     const min = parseInt(dateStr.substring(11, 13));
     const s = parseInt(dateStr.substring(13, 15));
-    
     if (dateStr.endsWith('Z')) return new Date(Date.UTC(y, m, d, h, min, s));
-    
     const utcDate = new Date(Date.UTC(y, m, d, h, min, s));
-    const formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: timezone,
-      year: 'numeric', month: 'numeric', day: 'numeric',
-      hour: 'numeric', minute: 'numeric', second: 'numeric',
-      hour12: false
-    });
-    
+    const formatter = new Intl.DateTimeFormat('en-US', { timeZone: timezone, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false });
     const tzParts = formatter.formatToParts(utcDate);
     const tzMap = Object.fromEntries(tzParts.map(p => [p.type, p.value]));
-    
-    const tzDate = new Date(Date.UTC(
-      parseInt(tzMap.year),
-      parseInt(tzMap.month) - 1,
-      parseInt(tzMap.day),
-      parseInt(tzMap.hour) === 24 ? 0 : parseInt(tzMap.hour),
-      parseInt(tzMap.minute),
-      parseInt(tzMap.second)
-    ));
-    
+    const tzDate = new Date(Date.UTC(parseInt(tzMap.year), parseInt(tzMap.month) - 1, parseInt(tzMap.day), parseInt(tzMap.hour) === 24 ? 0 : parseInt(tzMap.hour), parseInt(tzMap.minute), parseInt(tzMap.second)));
     const diff = tzDate.getTime() - utcDate.getTime();
     return new Date(utcDate.getTime() - diff);
   }

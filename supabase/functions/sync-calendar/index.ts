@@ -46,24 +46,18 @@ serve(async (req) => {
     const lockedKeywords = settings?.locked_keywords || [];
 
     // 1. Fetch Calendar List
-    console.log("[sync-calendar] Fetching Google calendar list...");
     const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
       headers: { Authorization: `Bearer ${googleAccessToken}` }
     })
     
     if (!listRes.ok) {
       const errorData = await listRes.json();
-      console.error("[sync-calendar] Google List Error:", errorData);
       throw new Error(`Google API Error: ${errorData.error?.message || 'Failed to fetch calendar list'}`);
     }
 
     const listData = await listRes.json()
     if (listData.items) {
-      console.log(`[sync-calendar] Discovered ${listData.items.length} Google calendars.`);
-      const filteredItems = listData.items.filter(cal => 
-        !cal.id.includes('@import.calendar.google.com') && 
-        !cal.id.toLowerCase().includes('icloud')
-      );
+      const filteredItems = listData.items.filter(cal => !cal.id.includes('@import.calendar.google.com'));
       
       const discovered = filteredItems.map(cal => ({
         user_id: user.id,
@@ -86,52 +80,35 @@ serve(async (req) => {
       .eq('provider', 'google');
     
     const enabledCalendars = (enabled || []).filter(c => c.is_enabled);
-    console.log(`[sync-calendar] ${enabledCalendars.length} Google calendars are enabled.`);
-
     if (enabledCalendars.length === 0) {
-      console.log("[sync-calendar] No enabled Google calendars found. Please check your settings.");
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
 
-    // Clear existing cache for this provider
-    await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google');
-
-    // 3. Fetch Events - Increased window to 365 days
-    const now = new Date()
-    const end = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000)
+    // 3. Fetch Events - Start from yesterday to keep context
+    const syncStartTime = new Date();
+    syncStartTime.setDate(syncStartTime.getDate() - 1);
+    const syncEndTime = new Date();
+    syncEndTime.setDate(syncEndTime.getDate() + 365);
+    
     const eventMap = new Map();
+    const syncTimestamp = new Date().toISOString();
 
     const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga/i;
     const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i];
 
     for (const cal of enabledCalendars) {
-      let calId = cal.calendar_id;
-      console.log(`[sync-calendar] Fetching events for: "${cal.calendar_name}"`);
-      
-      let res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?timeMin=${now.toISOString()}&timeMax=${end.toISOString()}&singleEvents=true&orderBy=startTime`, { 
+      let res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.calendar_id)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`, { 
         headers: { Authorization: `Bearer ${googleAccessToken}` } 
       });
       
-      if (!res.ok) {
-        const errorData = await res.json();
-        console.error(`[sync-calendar] Google Events Error for "${cal.calendar_name}":`, errorData);
-        continue;
-      }
+      if (!res.ok) continue;
 
       const data = await res.json()
       if (data.items) {
-        console.log(`[sync-calendar] Found ${data.items.length} events in "${cal.calendar_name}"`);
         data.items.forEach(event => {
           const title = event.summary || 'Untitled';
-          let start, end;
-          
-          if (event.start.date) {
-            start = new Date(event.start.date + "T09:00:00"); 
-            end = new Date(event.end.date + "T09:30:00");
-          } else {
-            start = new Date(event.start.dateTime);
-            end = new Date(event.end.dateTime);
-          }
+          let start = event.start.dateTime ? new Date(event.start.dateTime) : new Date(event.start.date + "T09:00:00");
+          let end = event.end.dateTime ? new Date(event.end.dateTime) : new Date(event.end.date + "T09:30:00");
 
           const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
           const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
@@ -152,8 +129,8 @@ serve(async (req) => {
             is_locked: isLocked,
             provider: 'google',
             source_calendar: cal.calendar_name,
-            source_calendar_id: calId,
-            last_synced_at: new Date().toISOString()
+            source_calendar_id: cal.calendar_id,
+            last_synced_at: syncTimestamp
           });
         });
       }
@@ -164,7 +141,13 @@ serve(async (req) => {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
     }
 
-    console.log(`[sync-calendar] FINISHED - Cached ${uniqueEvents.length} unique events from Google.`);
+    // Cleanup: Remove events for this provider that weren't in the latest sync
+    await supabaseAdmin.from('calendar_events_cache')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('provider', 'google')
+      .lt('last_synced_at', syncTimestamp);
+
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders })
   } catch (error) {
     console.error("[sync-calendar] FATAL ERROR:", error.message);
