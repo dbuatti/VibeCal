@@ -10,7 +10,7 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
-import { Save, Clock, Shield, Target, Apple, Mail, Lock, Eye, EyeOff, RefreshCw, CheckCircle2, ListOrdered, Calendar, Globe } from 'lucide-react';
+import { Save, Clock, Shield, Target, Apple, Mail, Lock, Eye, EyeOff, RefreshCw, CheckCircle2, ListOrdered, Calendar, Globe, Square } from 'lucide-react';
 
 const Settings = () => {
   const [loading, setLoading] = useState(true);
@@ -105,6 +105,26 @@ const Settings = () => {
       
       setCalendars(calendars.map(c => c.id === id ? { ...c, is_enabled: enabled } : c));
       showSuccess(`Calendar ${enabled ? 'enabled' : 'disabled'}`);
+    } catch (err: any) {
+      showError(err.message);
+    }
+  };
+
+  const uncheckAllApple = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { error } = await supabase
+        .from('user_calendars')
+        .update({ is_enabled: false })
+        .eq('user_id', user.id)
+        .eq('provider', 'apple');
+
+      if (error) throw error;
+
+      setCalendars(calendars.map(c => c.provider === 'apple' ? { ...c, is_enabled: false } : c));
+      showSuccess('All Apple calendars disabled');
     } catch (err: any) {
       showError(err.message);
     }
@@ -293,9 +313,19 @@ const Settings = () => {
                   </div>
 
                   <div className="space-y-3">
-                    <Label className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
-                      <Apple size={14} /> Apple Calendars
-                    </Label>
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
+                        <Apple size={14} /> Apple Calendars
+                      </Label>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={uncheckAllApple}
+                        className="h-auto py-1 px-2 text-[10px] font-bold text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
+                      >
+                        <Square size={10} className="mr-1" /> Deselect All
+                      </Button>
+                    </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       {calendars.filter(c => c.provider === 'apple').map((cal) => (
                         <div key={cal.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
