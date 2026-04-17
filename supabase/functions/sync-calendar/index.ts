@@ -37,11 +37,12 @@ serve(async (req) => {
 
     const { data: settings } = await supabaseAdmin
       .from('user_settings')
-      .select('movable_keywords')
+      .select('movable_keywords, locked_keywords')
       .eq('user_id', user.id)
       .single();
     
     const movableKeywords = settings?.movable_keywords || [];
+    const lockedKeywords = settings?.locked_keywords || [];
 
     const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
       headers: { Authorization: `Bearer ${googleAccessToken}` }
@@ -85,14 +86,15 @@ serve(async (req) => {
           const end = new Date(event.end.dateTime || event.end.date)
           
           const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
+          const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
           
           // Enhanced locking logic: check keywords, attendees, and recurring status
-          const isLocked = !isExplicitlyMovable && (
+          const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && (
             !!event.recurringEventId || 
             (event.attendees?.length > 1) ||
             fixedKeywords.test(title) ||
             fixedPatterns.some(p => p.test(title))
-          );
+          ));
           
           eventMap.set(event.id, {
             user_id: user.id,
