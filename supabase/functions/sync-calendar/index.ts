@@ -49,14 +49,13 @@ serve(async (req) => {
     }
 
     if (listData.items) {
-      // FILTER: Only keep calendars that are NOT imports (e.g. skip @import.calendar.google.com)
-      // and skip anything that looks like an iCloud ID we might have accidentally labeled
+      // STRICT FILTER: Ignore anything that is an import or contains 'icloud'
       const filteredItems = listData.items.filter(cal => 
         !cal.id.includes('@import.calendar.google.com') && 
-        !cal.id.includes('icloud')
+        !cal.id.toLowerCase().includes('icloud')
       );
 
-      console.log(`[sync-calendar] Found ${filteredItems.length} native Google calendars (skipped ${listData.items.length - filteredItems.length} imports).`);
+      console.log(`[sync-calendar] Found ${filteredItems.length} native Google calendars.`);
       
       const discovered = filteredItems.map(cal => ({
         user_id: user.id,
@@ -67,8 +66,7 @@ serve(async (req) => {
       }))
       
       if (discovered.length > 0) {
-        const { error: upsertError } = await supabaseAdmin.from('user_calendars').upsert(discovered, { onConflict: 'user_id, calendar_id' });
-        if (upsertError) console.error("[sync-calendar] Error upserting calendars:", upsertError);
+        await supabaseAdmin.from('user_calendars').upsert(discovered, { onConflict: 'user_id, calendar_id' });
       }
     }
 
@@ -81,7 +79,6 @@ serve(async (req) => {
       .eq('provider', 'google')
 
     if (!enabled || enabled.length === 0) {
-      console.log("[sync-calendar] No Google calendars are enabled.");
       return new Response(JSON.stringify({ message: 'No Google calendars enabled', count: 0 }), { headers: corsHeaders })
     }
 
@@ -93,36 +90,46 @@ serve(async (req) => {
     const end = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
     const eventMap = new Map();
 
+    // Heuristic for "Fixed" events
+    const fixedKeywords = /appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|ceremony|work session|gig|rehearsal/i;
+    const fixedPatterns = [
+      /\$\d+/, // Price like $50
+      /\d+\s*min/i, // Duration like 45 minutes
+      /between|with/i, // "between X and Y" or "with Z"
+      /[\u{1F300}-\u{1F9FF}]/u // Any emoji often indicates a specific manual entry
+    ];
+
     for (const cal of enabled) {
+      // Double check we aren't fetching an import that snuck into the DB
+      if (cal.calendar_id.includes('@import.calendar.google.com')) continue;
+
       const encodedId = encodeURIComponent(cal.calendar_id);
-      console.log(`[sync-calendar] Fetching events for: ${cal.calendar_name} (ID: ${cal.calendar_id})`);
-      
       const res = await fetch(
         `https://www.googleapis.com/calendar/v3/calendars/${encodedId}/events?timeMin=${now.toISOString()}&timeMax=${end.toISOString()}&singleEvents=true&orderBy=startTime`,
         { headers: { Authorization: `Bearer ${googleAccessToken}` } }
       )
       
       const data = await res.json()
-      
-      if (data.error) {
-        console.error(`[sync-calendar] Google API Error (Events for ${cal.calendar_name}):`, data.error);
-        continue;
-      }
-
       if (data.items) {
-        console.log(`[sync-calendar] Found ${data.items.length} events in ${cal.calendar_name}.`);
         data.items.forEach(event => {
+          const title = event.summary || 'Untitled';
           const start = new Date(event.start.dateTime || event.start.date)
           const end = new Date(event.end.dateTime || event.end.date)
+          
+          // Determine if locked based on multiple signals
+          const isLocked = !!event.recurringEventId || 
+                           (event.attendees?.length > 1) ||
+                           fixedKeywords.test(title) ||
+                           fixedPatterns.some(p => p.test(title));
           
           eventMap.set(event.id, {
             user_id: user.id,
             event_id: event.id,
-            title: event.summary || 'Untitled',
+            title: title,
             start_time: start.toISOString(),
             end_time: end.toISOString(),
             duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000),
-            is_locked: !!event.recurringEventId || (event.attendees?.length > 1),
+            is_locked: isLocked,
             provider: 'google',
             source_calendar: cal.calendar_name,
             last_synced_at: new Date().toISOString()

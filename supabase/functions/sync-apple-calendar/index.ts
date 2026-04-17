@@ -42,77 +42,21 @@ serve(async (req) => {
       return `${urlObj.origin}${path.startsWith('/') ? '' : '/'}${path}`;
     };
 
-    // 1. Discovery - Principal & Home Set
-    console.log("[sync-apple-calendar] Discovering Principal and Home Set...");
+    // 1. Discovery
     const discoveryRes = await fetch(initialBase, { 
       method: 'PROPFIND', 
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }, 
       body: `<?xml version="1.0" encoding="utf-8" ?>
         <d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
-          <d:prop>
-            <d:current-user-principal />
-            <c:calendar-home-set />
-          </d:prop>
+          <d:prop><c:calendar-home-set /></d:prop>
         </d:propfind>` 
     });
     const discoveryXml = await discoveryRes.text();
-    
     let homeSetPath = discoveryXml.match(/calendar-home-set[\s\S]*?href[^>]*>([^<]+)/i)?.[1];
-    
-    if (!homeSetPath) {
-      const principalPath = discoveryXml.match(/current-user-principal[\s\S]*?href[^>]*>([^<]+)/i)?.[1];
-      if (principalPath) {
-        const principalUrl = getFullUrl(principalPath, discoveryRes.url);
-        const homeSetRes = await fetch(principalUrl, { 
-          method: 'PROPFIND', 
-          headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }, 
-          body: `<?xml version="1.0" encoding="utf-8" ?>
-            <d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
-              <d:prop><c:calendar-home-set /></d:prop>
-            </d:propfind>` 
-        });
-        const homeSetXml = await homeSetRes.text();
-        homeSetPath = homeSetXml.match(/calendar-home-set[\s\S]*?href[^>]*>([^<]+)/i)?.[1];
-      }
-    }
-
     if (!homeSetPath) throw new Error("Could not find Calendar Home Set.");
     const homeSetUrl = getFullUrl(homeSetPath, discoveryRes.url);
 
-    // 2. Discover all Apple Calendars
-    console.log("[sync-apple-calendar] Discovering individual calendars...");
-    const calListRes = await fetch(homeSetUrl, {
-      method: 'PROPFIND',
-      headers: { 'Authorization': `Basic ${auth}`, 'Depth': '1' },
-      body: `<?xml version="1.0" encoding="utf-8" ?>
-        <d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
-          <d:prop>
-            <d:displayname />
-            <c:supported-calendar-component-set />
-          </d:prop>
-        </d:propfind>`
-    });
-    const calListXml = await calListRes.text();
-    
-    // Simple regex to find calendar paths and names
-    const calendarMatches = calListXml.matchAll(/<d:response>[\s\S]*?<d:href>([^<]+)<\/d:href>[\s\S]*?<d:displayname>([^<]+)<\/d:displayname>[\s\S]*?<\/d:response>/gi);
-    const discoveredApple = [];
-    for (const match of calendarMatches) {
-      discoveredApple.push({
-        user_id: user.id,
-        calendar_id: match[1],
-        calendar_name: match[2],
-        provider: 'apple',
-        color: '#6366f1'
-      });
-    }
-
-    if (discoveredApple.length > 0) {
-      console.log(`[sync-apple-calendar] Found ${discoveredApple.length} Apple calendars. Updating database...`);
-      await supabaseAdmin.from('user_calendars').upsert(discoveredApple, { onConflict: 'user_id, calendar_id' });
-    }
-
-    // 3. Get Enabled Apple Calendars
+    // 2. Get Enabled Apple Calendars
     const { data: enabled } = await supabaseAdmin
       .from('user_calendars')
       .select('calendar_id, calendar_name')
@@ -120,14 +64,14 @@ serve(async (req) => {
       .eq('is_enabled', true)
       .eq('provider', 'apple');
 
-    // Clear Apple cache for this user
+    // Clear Apple cache
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
 
     if (!enabled || enabled.length === 0) {
-      return new Response(JSON.stringify({ count: 0, message: "No Apple calendars enabled." }), { headers: corsHeaders });
+      return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
 
-    // 4. Fetch Events
+    // 3. Fetch Events
     const now = new Date();
     const startStr = now.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endStr = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
@@ -150,9 +94,11 @@ serve(async (req) => {
       </c:calendar-query>
     `;
 
+    const fixedKeywords = /appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|ceremony|work session|gig|rehearsal/i;
+    const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i, /[\u{1F300}-\u{1F9FF}]/u];
+
     const eventMap = new Map();
     for (const cal of enabled) {
-      console.log(`[sync-apple-calendar] Fetching events for: ${cal.calendar_name}`);
       const res = await fetch(getFullUrl(cal.calendar_id, homeSetUrl), {
         method: 'REPORT',
         headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/xml', 'Depth': '1' },
@@ -168,21 +114,21 @@ serve(async (req) => {
         const dtStart = block.match(/^DTSTART[^:]*:(.*)$/m)?.[1]?.trim();
         const dtEnd = block.match(/^DTEND[^:]*:(.*)$/m)?.[1]?.trim();
         const uid = block.match(/^UID[^:]*:(.*)$/m)?.[1]?.trim();
-        const recurrenceId = block.match(/^RECURRENCE-ID[^:]*:(.*)$/m)?.[1]?.trim();
 
         if (dtStart && dtEnd && uid) {
           const start = parseIcsDate(dtStart);
           const end = parseIcsDate(dtEnd);
-          const uniqueId = recurrenceId ? `${uid}-${dtStart}` : uid;
           
-          eventMap.set(uniqueId, {
+          const isLocked = fixedKeywords.test(summary) || fixedPatterns.some(p => p.test(summary));
+          
+          eventMap.set(uid, {
             user_id: user.id,
-            event_id: uniqueId,
+            event_id: uid,
             title: summary,
             start_time: start.toISOString(),
             end_time: end.toISOString(),
             duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000),
-            is_locked: true,
+            is_locked: isLocked,
             provider: 'apple',
             source_calendar: cal.calendar_name,
             last_synced_at: new Date().toISOString()
