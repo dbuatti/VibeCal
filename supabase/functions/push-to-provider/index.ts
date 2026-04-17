@@ -16,7 +16,8 @@ serve(async (req) => {
     const authHeader = req.headers.get('Authorization')
     const { eventId, provider, startTime, endTime, googleAccessToken, calendarId } = await req.json();
 
-    console.log(`[push-to-provider] Updating ${provider} event: ${eventId}`);
+    console.log(`[push-to-provider] START - Updating ${provider} event: ${eventId}`);
+    console.log(`[push-to-provider] Params - Calendar: ${calendarId}, Start: ${startTime}, End: ${endTime}`);
 
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -29,12 +30,21 @@ serve(async (req) => {
       { global: { headers: { Authorization: authHeader } } }
     )
     const { data: { user } } = await supabaseUser.auth.getUser()
-    if (!user) throw new Error("Unauthorized");
+    if (!user) {
+      console.error("[push-to-provider] Unauthorized access attempt");
+      throw new Error("Unauthorized");
+    }
 
     if (provider === 'google') {
-      if (!googleAccessToken) throw new Error("Missing Google Access Token");
+      if (!googleAccessToken) {
+        console.error("[push-to-provider] Missing Google Access Token in request");
+        throw new Error("Missing Google Access Token");
+      }
       
-      const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId || 'primary')}/events/${eventId}`, {
+      const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId || 'primary')}/events/${eventId}`;
+      console.log(`[push-to-provider] Calling Google API: ${url}`);
+
+      const res = await fetch(url, {
         method: 'PATCH',
         headers: { 
           'Authorization': `Bearer ${googleAccessToken}`,
@@ -46,26 +56,27 @@ serve(async (req) => {
         })
       });
 
-      const data = await res.json();
-      if (data.error) throw new Error(`Google API Error: ${data.error.message}`);
+      console.log(`[push-to-provider] Google API Response Status: ${res.status} ${res.statusText}`);
       
+      const data = await res.json();
+      
+      if (!res.ok) {
+        console.error("[push-to-provider] Google API Error Details:", JSON.stringify(data));
+        throw new Error(`Google API Error (${res.status}): ${data.error?.message || 'Unknown error'}`);
+      }
+      
+      console.log("[push-to-provider] Google update successful");
       return new Response(JSON.stringify({ success: true, data }), { headers: corsHeaders });
     }
 
     if (provider === 'apple') {
-      const { data: profile } = await supabaseAdmin.from('profiles').select('apple_id, apple_app_password').eq('id', user.id).single();
-      if (!profile?.apple_id || !profile?.apple_app_password) throw new Error('Apple credentials missing.');
-
-      // Note: Full CalDAV implementation for Apple requires fetching the existing ICS, 
-      // modifying the DTSTART/DTEND, and PUTing it back. 
-      // For now, we'll return a placeholder as CalDAV is complex for a single function.
-      console.warn("[push-to-provider] Apple CalDAV update not fully implemented in this step.");
+      console.log("[push-to-provider] Apple update requested (CalDAV not fully implemented)");
       return new Response(JSON.stringify({ success: false, message: "Apple update pending full CalDAV implementation" }), { headers: corsHeaders });
     }
 
     throw new Error("Unsupported provider");
   } catch (error) {
-    console.error("[push-to-provider] Error:", error.message);
+    console.error("[push-to-provider] FATAL ERROR:", error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })
