@@ -104,7 +104,6 @@ serve(async (req) => {
     
     for (const resp of calendarResponses) {
       const href = resp.match(/<d:href>([^<]+)<\/d:href>/i)?.[1];
-      // Try multiple ways to find the name as Apple sometimes uses different tags
       const name = resp.match(/<d:displayname>([^<]+)<\/d:displayname>/i)?.[1] || 
                    resp.match(/displayname>([^<]+)</i)?.[1];
                    
@@ -169,7 +168,8 @@ serve(async (req) => {
       </c:calendar-query>
     `;
 
-    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga/i;
+    // Safety net keywords for automatic locking
+    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga|show|tech|dress|night|opening|closing|birthday|party|gala|buffer|probe|experiment|quinceanera|🎭|✨/i;
     const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i];
 
     const eventMap = new Map();
