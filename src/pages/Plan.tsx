@@ -5,14 +5,14 @@ import Layout from '@/components/Layout';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import DayByDayPlanner from '@/components/DayByDayPlanner';
-import { Brain, RefreshCw, Trash2, Eye, EyeOff, Sparkles, Calendar, Clock, ListOrdered, ChevronRight, BrainCircuit, Inbox, Unlock, Lock } from 'lucide-react';
+import { Brain, RefreshCw, Trash2, Eye, EyeOff, Sparkles, Calendar, Clock, ListOrdered, ChevronRight, BrainCircuit, Inbox, Unlock, Lock, History } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { format, nextSaturday } from 'date-fns';
+import { format, nextSaturday, formatDistanceToNow } from 'date-fns';
 import { cn } from '@/lib/utils';
 
 type PlanStep = 'initial' | 'analysis' | 'vetting_tasks' | 'requirements' | 'active_plan';
@@ -33,6 +33,7 @@ const Plan = () => {
   const [appliedChanges, setAppliedChanges] = useState<string[]>([]);
   const [settings, setSettings] = useState<any>(null);
   const [deepFocus, setDeepFocus] = useState(false);
+  const [lastSynced, setLastSynced] = useState<string | null>(null);
 
   // Optimiser State
   const [durationOverride, setDurationOverride] = useState<string>("original");
@@ -59,7 +60,7 @@ const Plan = () => {
         .maybeSingle();
 
       const [eventsRes, settingsRes] = await Promise.all([
-        supabase.from('calendar_events_cache').select('*').eq('user_id', user.id),
+        supabase.from('calendar_events_cache').select('*').eq('user_id', user.id).order('start_time', { ascending: true }),
         supabase.from('user_settings').select('*').eq('user_id', user.id).maybeSingle()
       ]);
 
@@ -69,23 +70,21 @@ const Plan = () => {
         setMaxTasksOverride(settingsRes.data.max_tasks_per_day || 5);
       }
 
+      if (eventsRes.data && eventsRes.data.length > 0) {
+        setEvents(eventsRes.data);
+        setLastSynced(eventsRes.data[0].last_synced_at);
+      }
+
       if (history) {
         console.log("[Plan] Found active proposal");
         setProposal(history);
-        
-        // Load applied changes from the history metadata or JSONB
         const appliedIds = history.proposed_changes
           .filter((c: any) => c.applied === true)
           .map((c: any) => c.event_id);
-        
         setAppliedChanges(appliedIds);
         setCurrentStep('active_plan');
       } else {
         setCurrentStep('initial');
-      }
-
-      if (eventsRes.data) {
-        setEvents(eventsRes.data);
       }
     } catch (err: any) {
       console.error("[Plan] Error fetching data:", err);
@@ -99,19 +98,25 @@ const Plan = () => {
     fetchData();
   }, []);
 
-  const runAnalysis = async () => {
+  const runAnalysis = async (skipSync = false) => {
     setIsProcessing(true);
-    setStatusText('Syncing Calendars...');
+    setStatusText(skipSync ? 'Loading cached data...' : 'Syncing Calendars...');
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.provider_token) {
-        await supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: session.provider_token } });
+      if (!skipSync) {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.provider_token) {
+          await supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: session.provider_token } });
+        }
+        await supabase.functions.invoke('sync-apple-calendar');
       }
-      await supabase.functions.invoke('sync-apple-calendar');
+      
       const { data: fetchedEvents } = await supabase.from('calendar_events_cache').select('*').order('start_time', { ascending: true });
       setEvents(fetchedEvents || []);
+      if (fetchedEvents && fetchedEvents.length > 0) {
+        setLastSynced(fetchedEvents[0].last_synced_at);
+      }
       setCurrentStep('vetting_tasks');
-      showSuccess('Calendar analysed!');
+      showSuccess(skipSync ? 'Loaded from cache!' : 'Calendar synced!');
     } catch (err: any) { showError(err.message); }
     finally { setIsProcessing(false); }
   };
@@ -226,7 +231,6 @@ const Plan = () => {
         newAppliedIds.push(change.event_id);
       }
 
-      // Update the history record to persist applied status
       const updatedProposedChanges = proposal.proposed_changes.map((c: any) => ({
         ...c,
         applied: newAppliedIds.includes(c.event_id)
@@ -314,9 +318,24 @@ const Plan = () => {
                 </div>
                 <h2 className="text-4xl font-black mb-6 tracking-tight">Ready to Optimise?</h2>
                 <p className="text-indigo-100 mb-10 text-lg font-medium max-w-md mx-auto">We'll sync your calendars and identify which tasks can be moved to better align with your focus.</p>
-                <Button onClick={runAnalysis} className="bg-white text-indigo-600 hover:bg-indigo-50 rounded-[2rem] px-16 py-10 text-2xl font-black shadow-2xl transition-all hover:scale-[1.02] active:scale-[0.98]">
-                  Analyse Calendar
-                </Button>
+                
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+                  <Button onClick={() => runAnalysis(false)} className="bg-white text-indigo-600 hover:bg-indigo-50 rounded-[2rem] px-12 py-8 text-xl font-black shadow-2xl transition-all hover:scale-[1.02] active:scale-[0.98]">
+                    <RefreshCw className="mr-2" size={20} /> Sync Fresh
+                  </Button>
+                  
+                  {events.length > 0 && (
+                    <Button onClick={() => runAnalysis(true)} variant="outline" className="bg-white/10 border-white/20 text-white hover:bg-white/20 rounded-[2rem] px-12 py-8 text-xl font-black transition-all">
+                      <History className="mr-2" size={20} /> Use Cached Data
+                    </Button>
+                  )}
+                </div>
+
+                {lastSynced && (
+                  <p className="text-indigo-200 mt-8 text-sm font-bold uppercase tracking-widest">
+                    Last synced {formatDistanceToNow(new Date(lastSynced))} ago
+                  </p>
+                )}
               </div>
             </Card>
           )}
