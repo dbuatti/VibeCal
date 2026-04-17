@@ -3,11 +3,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { format, parseISO, isBefore, isAfter } from 'date-fns';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { 
-  ChevronLeft, 
-  ChevronRight, 
-  Sparkles, 
   RefreshCw, 
   Zap, 
   Trophy, 
@@ -20,6 +16,7 @@ import { cn } from '@/lib/utils';
 import VisualSchedule from './VisualSchedule';
 import PlannerStats from './PlannerStats';
 import PlannerChanges from './PlannerChanges';
+import PlannerHeader from './PlannerHeader';
 import { Link } from 'react-router-dom';
 
 interface DayByDayPlannerProps {
@@ -198,42 +195,18 @@ const DayByDayPlanner = ({
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-      <div className="space-y-2">
-        <div className="flex justify-between items-end px-2">
-          <span className="text-[8px] font-black uppercase tracking-[0.2em] text-indigo-600">Progress</span>
-          <span className="text-[8px] font-black text-gray-400 uppercase tracking-widest">{currentIndex + 1} / {allDates.length}</span>
-        </div>
-        <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
-          <div className="h-full bg-indigo-600 transition-all duration-700" style={{ width: `${((currentIndex + 1) / allDates.length) * 100}%` }} />
-        </div>
-      </div>
-
-      <div className={cn("flex items-center justify-between p-6 rounded-[2rem] border transition-all shadow-lg", isDayVetted ? "bg-green-50/50 border-green-100" : "bg-white border-gray-100")}>
-        <Button variant="ghost" size="icon" onClick={() => setCurrentIndex(prev => Math.max(0, prev - 1))} disabled={currentIndex === 0} className="rounded-xl h-12 w-12"><ChevronLeft size={24} /></Button>
-        <div className="text-center relative flex flex-col items-center">
-          {showXP && <div className="absolute -top-10 left-1/2 -translate-x-1/2 animate-bounce"><Badge className="bg-yellow-400 text-yellow-900 px-4 py-1 rounded-full font-black text-[9px]">+50 XP</Badge></div>}
-          <h2 className="text-xl font-black text-gray-900 tracking-tight">{format(currentDate, 'EEEE, MMM do')}</h2>
-          <div className="flex items-center gap-2 mt-1">
-            <Badge className={cn(
-              "border-none px-3 py-0.5 rounded-full font-black text-[8px] uppercase tracking-widest", 
-              dayChanges.length === 0 ? "bg-gray-100 text-gray-400" : isDayVetted ? "bg-green-500 text-white" : "bg-indigo-100 text-indigo-600"
-            )}>
-              {dayChanges.length === 0 ? "No Changes" : isDayVetted ? "Vetted" : "Vetting"}
-            </Badge>
-            {dayChanges.length > 0 && !isDayVetted && onResuggestDay && (
-              <button 
-                onClick={handleResuggest}
-                disabled={isResuggesting}
-                className="flex items-center gap-1.5 text-[8px] font-black uppercase tracking-widest text-indigo-400 hover:text-indigo-600 transition-colors disabled:opacity-50"
-              >
-                <Wand2 size={10} className={cn(isResuggesting && "animate-spin")} />
-                Resuggest
-              </button>
-            )}
-          </div>
-        </div>
-        <Button variant="ghost" size="icon" onClick={() => setCurrentIndex(prev => Math.min(allDates.length - 1, prev + 1))} disabled={currentIndex === allDates.length - 1} className="rounded-xl h-12 w-12"><ChevronRight size={24} /></Button>
-      </div>
+      <PlannerHeader 
+        currentIndex={currentIndex}
+        totalDays={allDates.length}
+        currentDate={currentDate}
+        isDayVetted={isDayVetted}
+        hasChanges={dayChanges.length > 0}
+        isResuggesting={isResuggesting}
+        showXP={showXP}
+        onPrev={() => setCurrentIndex(prev => Math.max(0, prev - 1))}
+        onNext={() => setCurrentIndex(prev => Math.min(allDates.length - 1, prev + 1))}
+        onResuggest={handleResuggest}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="space-y-6">
