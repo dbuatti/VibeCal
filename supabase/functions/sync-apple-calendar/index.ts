@@ -47,7 +47,6 @@ serve(async (req) => {
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
 
-    const userTimezone = profile.timezone || 'UTC';
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
     const initialBase = "https://caldav.icloud.com";
     
@@ -117,7 +116,6 @@ serve(async (req) => {
     }
 
     if (discoveredCals.length > 0) {
-      console.log(`[${functionName}] Discovered ${discoveredCals.length} calendars.`);
       await supabaseAdmin.from('user_calendars').upsert(discoveredCals, { onConflict: 'user_id, calendar_id' });
     }
 
@@ -129,8 +127,6 @@ serve(async (req) => {
       .eq('provider', 'apple');
 
     const enabledCalendars = (enabled || []).filter(c => c.is_enabled);
-    console.log(`[${functionName}] Found ${enabled?.length || 0} Apple calendars. ${enabledCalendars.length} are enabled.`);
-
     if (enabledCalendars.length === 0) {
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
@@ -143,8 +139,6 @@ serve(async (req) => {
     
     const startStr = syncStartTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endStr = syncEndTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-
-    console.log(`[${functionName}] Sync Range: ${startStr} to ${endStr}`);
 
     const reportXml = `
       <c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
@@ -169,37 +163,24 @@ serve(async (req) => {
     const syncTimestamp = new Date().toISOString();
 
     for (const cal of enabledCalendars) {
-      console.log(`[${functionName}] Fetching events for: "${cal.calendar_name}" (${cal.calendar_id})`);
+      console.log(`[${functionName}] Fetching events for: "${cal.calendar_name}"`);
       const res = await fetch(getFullUrl(cal.calendar_id, homeSetUrl), {
         method: 'REPORT',
         headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/xml', 'Depth': '1' },
         body: reportXml
       });
       
-      if (!res.ok) {
-        const errText = await res.text();
-        console.error(`[${functionName}] Error fetching calendar "${cal.calendar_name}": ${res.status}`, errText);
-        continue;
-      }
+      if (!res.ok) continue;
 
       const xml = await res.text();
-      console.log(`[${functionName}] XML Response received. Length: ${xml.length}`);
-
-      // Namespace-agnostic regex for calendar-data
       const eventDataMatches = xml.matchAll(/<[^>]*calendar-data[^>]*>([\s\S]*?)<\/[^>]*calendar-data>/gi);
       let matchCount = 0;
       
       for (const match of eventDataMatches) {
         matchCount++;
-        let icsData = match[1].trim();
-        
-        // Clean up XML entities
-        icsData = icsData
-          .replace(/</g, '<')
-          .replace(/>/g, '>')
-          .replace(/&/g, '&')
-          .replace(/&quot;/g, '"')
-          .replace(/&apos;/g, "'");
+        let icsData = match[1].trim()
+          .replace(/</g, '<').replace(/>/g, '>').replace(/&/g, '&')
+          .replace(/&quot;/g, '"').replace(/&apos;/g, "'");
 
         try {
           const jcalData = ICAL.parse(icsData);
@@ -207,45 +188,41 @@ serve(async (req) => {
           const vevents = vcalendar.getAllSubcomponents('vevent');
 
           for (const vevent of vevents) {
-            const event = new ICAL.Event(vevent);
-            const summary = event.summary || 'Untitled';
-            const start = event.startDate.toJSDate();
-            const end = event.endDate.toJSDate();
-            const uid = event.uid;
+            // Manual extraction is safer than new ICAL.Event()
+            const summary = vevent.getFirstPropertyValue('summary') || 'Untitled';
+            const dtstart = vevent.getFirstProperty('dtstart');
+            const dtend = vevent.getFirstProperty('dtend');
+            const uid = vevent.getFirstPropertyValue('uid');
 
-            if (start && uid) {
-              const isExplicitlyMovable = movableKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
-              const isExplicitlyLocked = lockedKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
-              const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && (fixedKeywords.test(summary) || fixedPatterns.some(p => p.test(summary))));
-              
-              const uniqueId = `${uid}-${start.getTime()}`;
-              eventMap.set(uniqueId, {
-                user_id: user.id,
-                event_id: uniqueId,
-                title: summary,
-                start_time: start.toISOString(),
-                end_time: end.toISOString(),
-                duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000),
-                is_locked: isLocked,
-                provider: 'apple',
-                source_calendar: cal.calendar_name,
-                source_calendar_id: cal.calendar_id,
-                last_synced_at: syncTimestamp
-              });
-            }
+            if (!dtstart || !uid) continue;
+
+            const start = dtstart.getFirstValue().toJSDate();
+            const end = dtend ? dtend.getFirstValue().toJSDate() : new Date(start.getTime() + 30 * 60000);
+
+            const isExplicitlyMovable = movableKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
+            const isExplicitlyLocked = lockedKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
+            const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && (fixedKeywords.test(summary) || fixedPatterns.some(p => p.test(summary))));
+            
+            const uniqueId = `${uid}-${start.getTime()}`;
+            eventMap.set(uniqueId, {
+              user_id: user.id,
+              event_id: uniqueId,
+              title: summary,
+              start_time: start.toISOString(),
+              end_time: end.toISOString(),
+              duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000),
+              is_locked: isLocked,
+              provider: 'apple',
+              source_calendar: cal.calendar_name,
+              source_calendar_id: cal.calendar_id,
+              last_synced_at: syncTimestamp
+            });
           }
         } catch (parseErr) {
-          console.error(`[${functionName}] ICAL Parse Error:`, parseErr.message);
+          // Skip bad events silently to keep the sync moving
         }
       }
-      
-      if (matchCount === 0) {
-        console.log(`[${functionName}] Found 0 calendar-data blocks. Scanning for other tags...`);
-        const tags = xml.match(/<[^>]+>/g)?.slice(0, 20);
-        console.log(`[${functionName}] Sample tags found:`, tags?.join(', '));
-      } else {
-        console.log(`[${functionName}] Found ${matchCount} calendar-data blocks in "${cal.calendar_name}"`);
-      }
+      console.log(`[${functionName}] Processed ${matchCount} resources in "${cal.calendar_name}"`);
     }
 
     const uniqueEvents = Array.from(eventMap.values());
@@ -253,12 +230,7 @@ serve(async (req) => {
 
     if (uniqueEvents.length > 0) {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
-      
-      await supabaseAdmin.from('calendar_events_cache')
-        .delete()
-        .eq('user_id', user.id)
-        .eq('provider', 'apple')
-        .lt('last_synced_at', syncTimestamp);
+      await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple').lt('last_synced_at', syncTimestamp);
     }
 
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders });
