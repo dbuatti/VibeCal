@@ -18,7 +18,8 @@ import {
   RotateCcw, 
   ArrowUpRight,
   Calendar as CalendarIcon,
-  Wand2
+  Wand2,
+  AlertCircle
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import VisualSchedule from './VisualSchedule';
@@ -45,7 +46,7 @@ const DayByDayPlanner = ({
   onResuggestDay,
   maxHours, 
   maxTasks,
-  workKeywords = ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt']
+  workKeywords = ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt', 'program', 'ceremony']
 }: DayByDayPlannerProps) => {
   const allDates = useMemo(() => {
     const dates = new Set<string>();
@@ -271,7 +272,19 @@ const DayByDayPlanner = ({
                     </div>
                   </div>
                 );
-              }) : <div className="text-center py-8 text-gray-300 font-black uppercase tracking-widest text-[9px]">No changes</div>}
+              }) : (
+                <div className="space-y-4 py-4">
+                  <div className="text-center text-gray-300 font-black uppercase tracking-widest text-[9px]">No changes</div>
+                  {(stats.isOverTasks || stats.isOverHours) && (
+                    <div className="p-4 bg-amber-50 rounded-xl border border-amber-100 flex gap-3">
+                      <AlertCircle className="text-amber-500 shrink-0" size={16} />
+                      <p className="text-[10px] font-bold text-amber-800 leading-tight">
+                        This day is over capacity, but all tasks are **Locked**. Click "Vet Tasks" to unlock some so the AI can move them.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
 
