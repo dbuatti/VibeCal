@@ -103,11 +103,7 @@ serve(async (req) => {
     const normHomePath = homeSetPath.replace(/\/$/, '');
 
     for (const resp of responses) {
-      // Check if it's a calendar collection
       if (resp.includes('<calendar') || resp.includes(':calendar')) {
-        
-        // STRICT FILTER: Only include if it supports VEVENT (actual calendar events)
-        // Exclude if it only supports VTODO (Reminders)
         const supportsEvents = resp.includes('VEVENT');
         const supportsTasksOnly = resp.includes('VTODO') && !resp.includes('VEVENT');
         
@@ -153,6 +149,13 @@ serve(async (req) => {
 
     const enabledMap = new Map(enabledCalendars?.map(c => [c.calendar_id, c.calendar_name]) || []);
     const enabledPaths = Array.from(enabledMap.keys());
+
+    // IMPORTANT: Clear the cache for Apple events before re-syncing
+    await supabaseClient
+      .from('calendar_events_cache')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('provider', 'apple');
 
     if (enabledPaths.length === 0) {
       return new Response(

@@ -61,6 +61,14 @@ serve(async (req) => {
     const enabledMap = new Map(enabled?.map(c => [c.calendar_id, c.calendar_name]) || [])
     const enabledIds = Array.from(enabledMap.keys())
 
+    // IMPORTANT: Clear the cache for Google events before re-syncing
+    // This prevents events from disabled calendars from sticking around.
+    await supabaseClient
+      .from('calendar_events_cache')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('provider', 'google');
+
     if (enabledIds.length === 0) {
       return new Response(JSON.stringify({ message: 'No Google calendars enabled', count: 0 }), { headers: corsHeaders })
     }
