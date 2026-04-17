@@ -1,7 +1,6 @@
 // @ts-nocheck
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0'
-import ICAL from "https://esm.sh/ical.js@1.5.0"
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -162,6 +161,29 @@ serve(async (req) => {
     const eventMap = new Map();
     const syncTimestamp = new Date().toISOString();
 
+    const parseIcsDate = (dateStr) => {
+      if (!dateStr) return null;
+      // Handle formats like 20260418T090000Z or 20260418T090000
+      const clean = dateStr.replace(/[^0-9TZ]/g, '');
+      const year = clean.substring(0, 4);
+      const month = clean.substring(4, 6);
+      const day = clean.substring(6, 8);
+      const hour = clean.substring(9, 11);
+      const min = clean.substring(11, 13);
+      const sec = clean.substring(13, 15);
+      
+      const date = new Date(Date.UTC(
+        parseInt(year), 
+        parseInt(month) - 1, 
+        parseInt(day), 
+        parseInt(hour || 0), 
+        parseInt(min || 0), 
+        parseInt(sec || 0)
+      ));
+      
+      return isNaN(date.getTime()) ? null : date;
+    };
+
     for (const cal of enabledCalendars) {
       console.log(`[${functionName}] Fetching events for: "${cal.calendar_name}"`);
       const res = await fetch(getFullUrl(cal.calendar_id, homeSetUrl), {
@@ -175,6 +197,7 @@ serve(async (req) => {
       const xml = await res.text();
       const eventDataMatches = xml.matchAll(/<[^>]*calendar-data[^>]*>([\s\S]*?)<\/[^>]*calendar-data>/gi);
       let matchCount = 0;
+      let eventCount = 0;
       
       for (const match of eventDataMatches) {
         matchCount++;
@@ -182,47 +205,59 @@ serve(async (req) => {
           .replace(/</g, '<').replace(/>/g, '>').replace(/&/g, '&')
           .replace(/&quot;/g, '"').replace(/&apos;/g, "'");
 
-        try {
-          const jcalData = ICAL.parse(icsData);
-          const vcalendar = new ICAL.Component(jcalData);
-          const vevents = vcalendar.getAllSubcomponents('vevent');
+        // Resilient Regex-based parsing
+        const veventMatches = icsData.matchAll(/BEGIN:VEVENT([\s\S]*?)END:VEVENT/gi);
+        
+        for (const veventMatch of veventMatches) {
+          const content = veventMatch[1];
+          
+          const summaryMatch = content.match(/SUMMARY:(.*)/i);
+          const dtstartMatch = content.match(/DTSTART(?:;VALUE=DATE|;TZID=[^:]+)?:(.*)/i);
+          const dtendMatch = content.match(/DTEND(?:;VALUE=DATE|;TZID=[^:]+)?:(.*)/i);
+          const durationMatch = content.match(/DURATION:PT(\d+)([HMS])/i);
+          const uidMatch = content.match(/UID:(.*)/i);
 
-          for (const vevent of vevents) {
-            // Manual extraction is safer than new ICAL.Event()
-            const summary = vevent.getFirstPropertyValue('summary') || 'Untitled';
-            const dtstart = vevent.getFirstProperty('dtstart');
-            const dtend = vevent.getFirstProperty('dtend');
-            const uid = vevent.getFirstPropertyValue('uid');
+          if (!dtstartMatch || !uidMatch) continue;
 
-            if (!dtstart || !uid) continue;
+          const summary = (summaryMatch?.[1] || 'Untitled').trim();
+          const start = parseIcsDate(dtstartMatch[1].trim());
+          if (!start) continue;
 
-            const start = dtstart.getFirstValue().toJSDate();
-            const end = dtend ? dtend.getFirstValue().toJSDate() : new Date(start.getTime() + 30 * 60000);
-
-            const isExplicitlyMovable = movableKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
-            const isExplicitlyLocked = lockedKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
-            const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && (fixedKeywords.test(summary) || fixedPatterns.some(p => p.test(summary))));
-            
-            const uniqueId = `${uid}-${start.getTime()}`;
-            eventMap.set(uniqueId, {
-              user_id: user.id,
-              event_id: uniqueId,
-              title: summary,
-              start_time: start.toISOString(),
-              end_time: end.toISOString(),
-              duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000),
-              is_locked: isLocked,
-              provider: 'apple',
-              source_calendar: cal.calendar_name,
-              source_calendar_id: cal.calendar_id,
-              last_synced_at: syncTimestamp
-            });
+          let end = parseIcsDate(dtendMatch?.[1]?.trim());
+          if (!end) {
+            if (durationMatch) {
+              const val = parseInt(durationMatch[1]);
+              const unit = durationMatch[2];
+              const ms = unit === 'H' ? val * 3600000 : unit === 'M' ? val * 60000 : val * 1000;
+              end = new Date(start.getTime() + ms);
+            } else {
+              end = new Date(start.getTime() + 30 * 60000); // Default 30m
+            }
           }
-        } catch (parseErr) {
-          // Skip bad events silently to keep the sync moving
+
+          const uid = uidMatch[1].trim();
+          const isExplicitlyMovable = movableKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
+          const isExplicitlyLocked = lockedKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
+          const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && (fixedKeywords.test(summary) || fixedPatterns.some(p => p.test(summary))));
+          
+          const uniqueId = `${uid}-${start.getTime()}`;
+          eventMap.set(uniqueId, {
+            user_id: user.id,
+            event_id: uniqueId,
+            title: summary,
+            start_time: start.toISOString(),
+            end_time: end.toISOString(),
+            duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000),
+            is_locked: isLocked,
+            provider: 'apple',
+            source_calendar: cal.calendar_name,
+            source_calendar_id: cal.calendar_id,
+            last_synced_at: syncTimestamp
+          });
+          eventCount++;
         }
       }
-      console.log(`[${functionName}] Processed ${matchCount} resources in "${cal.calendar_name}"`);
+      console.log(`[${functionName}] Processed ${matchCount} resources, found ${eventCount} events in "${cal.calendar_name}"`);
     }
 
     const uniqueEvents = Array.from(eventMap.values());
