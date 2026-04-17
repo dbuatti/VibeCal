@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils';
 import VisualSchedule from './VisualSchedule';
 import PlannerStats from './PlannerStats';
 import PlannerChanges from './PlannerChanges';
-import PlannerHeader from './PlannerHeader';
+import PlannerHeader from '@/components/PlannerHeader';
 import { Link } from 'react-router-dom';
 
 interface DayByDayPlannerProps {

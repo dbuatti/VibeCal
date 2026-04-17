@@ -7,15 +7,11 @@ import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import DayByDayPlanner from '@/components/DayByDayPlanner';
 import RequirementsForm from '@/components/RequirementsForm';
-import { Brain, RefreshCw, Trash2, Eye, EyeOff, Calendar, Settings2, CheckSquare, Wand2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Switch } from '@/components/ui/switch';
-import { Label } from '@/components/ui/label';
+import PlanPageHeader from '@/components/PlanPageHeader';
+import PlanInitialView from '@/components/PlanInitialView';
+import PlanLoadingView from '@/components/PlanLoadingView';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { format, nextSaturday, parseISO, addMinutes } from 'date-fns';
-import { cn } from '@/lib/utils';
 
 type PlanStep = 'initial' | 'analysis' | 'vetting_tasks' | 'requirements' | 'active_plan';
 
@@ -273,92 +269,31 @@ const Plan = () => {
     />
   );
 
+  if (loading) return <Layout><PlanLoadingView statusText="Loading your plan..." /></Layout>;
+
   return (
     <Layout hideSidebar={deepFocus}>
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
-        <div>
-          <div className="flex items-center gap-3 mb-2">
-            <Badge className="bg-indigo-50 text-indigo-600 border-none px-3 py-1 rounded-full font-black flex gap-2 text-[9px] uppercase tracking-widest">
-              <Brain size={12} /> ADHD Focus
-            </Badge>
-            {currentStep === 'active_plan' && (
-              <div className="flex items-center gap-2 px-3 py-1 bg-white rounded-full border border-gray-100 shadow-sm">
-                <Switch id="deep-focus" checked={deepFocus} onCheckedChange={setDeepFocus} className="h-4 w-8" />
-                <Label htmlFor="deep-focus" className="text-[9px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5 cursor-pointer">
-                  {deepFocus ? <EyeOff size={12} /> : <Eye size={12} />}
-                  Compact
-                </Label>
-              </div>
-            )}
-          </div>
-          <h1 className="text-3xl font-black text-gray-900 tracking-tight">Daily Plan</h1>
-        </div>
-        <div className="flex gap-2">
-          {(currentStep === 'active_plan' || currentStep === 'vetting_tasks') && (
-            <Button 
-              variant="outline" 
-              onClick={() => navigate('/vet')}
-              className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm"
-            >
-              <CheckSquare size={14} className="mr-2" /> Vet Tasks
-            </Button>
-          )}
-          
-          {currentStep === 'active_plan' ? (
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button variant="outline" className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
-                  <Settings2 size={14} className="mr-2" /> Requirements
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-80 rounded-[2rem] shadow-2xl border-none p-6" align="end">
-                <h3 className="text-sm font-black text-gray-900 mb-4 uppercase tracking-widest">Plan Requirements</h3>
-                {renderRequirementsForm()}
-              </PopoverContent>
-            </Popover>
-          ) : currentStep === 'vetting_tasks' && (
-            <Button variant="outline" onClick={() => setCurrentStep('requirements')} className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
-              <Settings2 size={14} className="mr-2" /> Requirements
-            </Button>
-          )}
-          <Button variant="outline" onClick={() => runAnalysis(false)} disabled={isProcessing} className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
-            <RefreshCw size={14} className={cn("mr-2", isProcessing && "animate-spin")} /> Resync
-          </Button>
-          {currentStep === 'active_plan' && (
-            <Button variant="outline" onClick={handleResetPlan} className="bg-white border-gray-100 text-gray-400 hover:text-red-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
-              <Trash2 size={14} className="mr-2" /> Reset
-            </Button>
-          )}
-        </div>
-      </div>
+      <PlanPageHeader 
+        currentStep={currentStep}
+        isProcessing={isProcessing}
+        deepFocus={deepFocus}
+        setDeepFocus={setDeepFocus}
+        onVetTasks={() => navigate('/vet')}
+        onResync={() => runAnalysis(false)}
+        onReset={handleResetPlan}
+        renderRequirementsForm={renderRequirementsForm}
+      />
 
       {isProcessing ? (
-        <div className="flex flex-col items-center justify-center py-20 text-center">
-          <RefreshCw className="text-indigo-600 animate-spin w-12 h-12 mb-4" />
-          <h2 className="text-xl font-black text-gray-900 tracking-tight">{statusText}</h2>
-        </div>
+        <PlanLoadingView statusText={statusText} />
       ) : (
         <>
           {currentStep === 'initial' && (
-            <Card className="border-none shadow-xl rounded-[2rem] overflow-hidden bg-white">
-              <div className="bg-gradient-to-br from-indigo-600 to-purple-800 p-12 text-white text-center">
-                <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center mx-auto mb-6 backdrop-blur-xl border border-white/30">
-                  <Calendar size={32} />
-                </div>
-                <h2 className="text-3xl font-black mb-4 tracking-tight">Ready to Optimise?</h2>
-                <p className="text-indigo-100 mb-8 text-base font-medium max-w-md mx-auto">Align your schedule with your life.</p>
-                <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-                  <Button onClick={() => runAnalysis(false)} className="bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl px-10 py-6 text-lg font-black shadow-xl">
-                    Sync Fresh
-                  </Button>
-                  {events.length > 0 && (
-                    <Button onClick={() => runAnalysis(true)} variant="outline" className="bg-white/10 border-white/20 text-white hover:bg-white/20 rounded-2xl px-10 py-6 text-lg font-black">
-                      Use Cache
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </Card>
+            <PlanInitialView 
+              hasEvents={events.length > 0}
+              onSyncFresh={() => runAnalysis(false)}
+              onUseCache={() => runAnalysis(true)}
+            />
           )}
 
           {currentStep === 'requirements' && (
