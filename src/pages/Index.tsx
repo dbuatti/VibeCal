@@ -12,27 +12,39 @@ import { format } from 'date-fns';
 
 const Dashboard = () => {
   const [events, setEvents] = useState<any[]>([]);
+  const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchEvents = async () => {
+    const fetchData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const { data, error } = await supabase
+      // Fetch events
+      const { data: eventsData } = await supabase
         .from('calendar_events_cache')
         .select('*')
         .order('start_time', { ascending: true })
         .limit(5);
 
-      if (!error && data) {
-        setEvents(data);
-      }
+      if (eventsData) setEvents(eventsData);
+
+      // Fetch profile for vibe score
+      const { data: profileData } = await supabase
+        .from('profiles')
+        .select('vibe_score, vibe_score_trend')
+        .eq('id', user.id)
+        .single();
+
+      if (profileData) setProfile(profileData);
+      
       setLoading(false);
     };
 
-    fetchEvents();
+    fetchData();
   }, []);
+
+  const vibeScore = profile?.vibe_score ?? 0;
 
   return (
     <Layout>
@@ -74,14 +86,16 @@ const Dashboard = () => {
           </CardHeader>
           <CardContent>
             <div className="flex items-baseline gap-2">
-              <div className="text-4xl font-black text-indigo-600">88%</div>
+              <div className="text-4xl font-black text-indigo-600">{vibeScore}%</div>
             </div>
             <div className="mt-4 flex gap-1">
               {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((i) => (
-                <div key={i} className={cn("h-2 flex-1 rounded-full", i <= 8 ? "bg-indigo-500" : "bg-gray-100")} />
+                <div key={i} className={cn("h-2 flex-1 rounded-full", i <= (vibeScore / 10) ? "bg-indigo-500" : "bg-gray-100")} />
               ))}
             </div>
-            <p className="text-xs text-indigo-600 mt-3 font-semibold">Optimisation Recommended</p>
+            <p className="text-xs text-indigo-600 mt-3 font-semibold">
+              {vibeScore < 80 ? 'Optimisation Recommended' : 'Schedule is Aligned'}
+            </p>
           </CardContent>
         </Card>
 
@@ -137,8 +151,8 @@ const Dashboard = () => {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider bg-gray-50 text-gray-400">
-                    <Unlock size={14} />
-                    Movable
+                    {event.is_locked ? <Lock size={14} /> : <Unlock size={14} />}
+                    {event.is_locked ? 'Locked' : 'Movable'}
                   </div>
                 </div>
               ))

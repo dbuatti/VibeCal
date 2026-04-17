@@ -9,12 +9,41 @@ import { supabase } from '@/integrations/supabase/client';
 const Navigation = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const [user, setUser] = useState<any>(null);
+  const [profile, setProfile] = useState<any>(null);
   
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      setUser(user);
-    });
+    const fetchProfile = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('first_name, email, vibe_score, vibe_score_trend')
+        .eq('id', user.id)
+        .single();
+
+      if (!error && data) {
+        setProfile(data);
+      }
+    };
+
+    fetchProfile();
+
+    // Subscribe to profile changes
+    const channel = supabase
+      .channel('profile_changes')
+      .on('postgres_changes', { 
+        event: 'UPDATE', 
+        schema: 'public', 
+        table: 'profiles' 
+      }, (payload) => {
+        setProfile((prev: any) => ({ ...prev, ...payload.new }));
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const navItems = [
@@ -28,6 +57,9 @@ const Navigation = () => {
     await supabase.auth.signOut();
     navigate('/login');
   };
+
+  const vibeScore = profile?.vibe_score ?? 0;
+  const trend = profile?.vibe_score_trend ?? 0;
 
   return (
     <nav className="fixed left-0 top-0 h-screen w-72 bg-white border-r border-gray-100 p-8 flex flex-col gap-10 z-50">
@@ -63,10 +95,12 @@ const Navigation = () => {
         <div className="p-6 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-[2rem] text-white shadow-xl shadow-indigo-100">
           <p className="text-[10px] font-black uppercase tracking-[0.2em] opacity-70 mb-2">Vibe Score</p>
           <div className="flex items-baseline gap-1">
-            <span className="text-4xl font-black">84</span>
+            <span className="text-4xl font-black">{vibeScore}</span>
             <span className="text-sm font-bold opacity-60">/100</span>
           </div>
-          <p className="text-xs mt-3 opacity-90 leading-relaxed font-medium">Your schedule is 12% more aligned than last week.</p>
+          <p className="text-xs mt-3 opacity-90 leading-relaxed font-medium">
+            Your schedule is {Math.abs(trend)}% {trend >= 0 ? 'more' : 'less'} aligned than last week.
+          </p>
         </div>
 
         <div className="space-y-2">
@@ -76,7 +110,7 @@ const Navigation = () => {
             </div>
             <div className="flex-1 overflow-hidden">
               <p className="font-bold text-gray-900 truncate">
-                {user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'User'}
+                {profile?.first_name || profile?.email?.split('@')[0] || 'User'}
               </p>
               <p className="text-xs text-gray-400 font-medium">Pro Plan</p>
             </div>
