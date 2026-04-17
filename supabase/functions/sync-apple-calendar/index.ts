@@ -13,7 +13,7 @@ serve(async (req) => {
   }
 
   try {
-    console.log("[sync-apple-calendar] Starting real CalDAV sync...");
+    console.log("[sync-apple-calendar] Starting robust CalDAV discovery...");
     
     const authHeader = req.headers.get('Authorization')
     const supabaseClient = createClient(
@@ -35,20 +35,59 @@ serve(async (req) => {
     }
 
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
-    
-    // 1. Discovery: Find the principal
-    // We use the well-known endpoint for iCloud
-    const discoveryUrl = "https://caldav.icloud.com/";
-    
-    console.log("[sync-apple-calendar] Discovering principal for:", profile.apple_id);
+    const baseUrl = "https://caldav.icloud.com";
 
-    // In a full implementation, we would do multiple PROPFINDs here.
-    // For this environment, we'll use a more direct approach to fetch the primary calendar.
-    // iCloud usually hosts calendars at: https://caldav.icloud.com/<apple_id>/calendars/
-    
-    const calendarUrl = `https://caldav.icloud.com/${profile.apple_id}/calendars/home/`;
+    // 1. Find the Principal URL
+    console.log("[sync-apple-calendar] Step 1: Finding Principal...");
+    const principalRes = await fetch(baseUrl, {
+      method: 'PROPFIND',
+      headers: {
+        'Authorization': `Basic ${auth}`,
+        'Content-Type': 'application/xml; charset=utf-8',
+        'Depth': '0'
+      },
+      body: `
+        <d:propfind xmlns:d="DAV:">
+          <d:prop>
+            <d:current-user-principal />
+          </d:prop>
+        </d:propfind>
+      `
+    });
 
-    // Fetching events using a REPORT request (XML)
+    if (!principalRes.ok) throw new Error(`Principal Discovery Failed: ${principalRes.status}`);
+    const principalXml = await principalRes.text();
+    const principalPath = principalXml.match(/<current-user-principal>.*?<href>(.*?)<\/href>.*?<\/current-user-principal>/s)?.[1];
+
+    if (!principalPath) throw new Error("Could not find Principal path in Apple response.");
+    console.log("[sync-apple-calendar] Principal found:", principalPath);
+
+    // 2. Find the Calendar Home Set
+    console.log("[sync-apple-calendar] Step 2: Finding Calendar Home Set...");
+    const homeSetRes = await fetch(`${baseUrl}${principalPath}`, {
+      method: 'PROPFIND',
+      headers: {
+        'Authorization': `Basic ${auth}`,
+        'Content-Type': 'application/xml; charset=utf-8',
+        'Depth': '0'
+      },
+      body: `
+        <d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+          <d:prop>
+            <c:calendar-home-set />
+          </d:prop>
+        </d:propfind>
+      `
+    });
+
+    const homeSetXml = await homeSetRes.text();
+    const homeSetPath = homeSetXml.match(/<calendar-home-set>.*?<href>(.*?)<\/href>.*?<\/calendar-home-set>/s)?.[1];
+
+    if (!homeSetPath) throw new Error("Could not find Calendar Home Set.");
+    console.log("[sync-apple-calendar] Home Set found:", homeSetPath);
+
+    // 3. Fetch events from the home set (iCloud allows REPORT on the home set to search all calendars)
+    console.log("[sync-apple-calendar] Step 3: Fetching events...");
     const now = new Date();
     const start = now.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const end = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
@@ -69,7 +108,7 @@ serve(async (req) => {
       </c:calendar-query>
     `;
 
-    const response = await fetch(calendarUrl, {
+    const response = await fetch(`${baseUrl}${homeSetPath}`, {
       method: 'REPORT',
       headers: {
         'Authorization': `Basic ${auth}`,
@@ -79,16 +118,9 @@ serve(async (req) => {
       body: reportXml
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("[sync-apple-calendar] Apple API Error:", response.status, errorText);
-      throw new Error(`Apple Server Error: ${response.status}. Check your App-Specific Password.`);
-    }
+    if (!response.ok) throw new Error(`Event Fetch Failed: ${response.status}`);
 
     const xmlData = await response.text();
-    
-    // Basic regex-based parsing of the XML/ICS response
-    // In a production app, we'd use a proper XML and ICS parser library
     const events = [];
     const eventBlocks = xmlData.split('BEGIN:VEVENT');
     
@@ -111,7 +143,7 @@ serve(async (req) => {
           start_time: startDate.toISOString(),
           end_time: endDate.toISOString(),
           duration_minutes: duration,
-          is_locked: true, // Apple events are treated as fixed by default in this version
+          is_locked: true,
           provider: 'apple',
           last_synced_at: new Date().toISOString()
         });
@@ -138,7 +170,6 @@ serve(async (req) => {
 });
 
 function parseIcsDate(icsDate: string) {
-  // Handles YYYYMMDDTHHMMSSZ or YYYYMMDD
   const clean = icsDate.split(':')[0].replace(/[^0-9TZ]/g, '');
   const y = parseInt(clean.substring(0, 4));
   const m = parseInt(clean.substring(4, 6)) - 1;
