@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { cn } from '@/lib/utils';
-import { Save, Clock, Shield, Target, Apple, Mail, Lock, Eye, EyeOff, RefreshCw, ListOrdered, Calendar, Globe, Square, Plus, X, Sparkles, Ban } from 'lucide-react';
+import { Save, Clock, Shield, Target, Apple, Mail, Lock, Eye, EyeOff, RefreshCw, ListOrdered, Calendar, Globe, Square, Plus, X, Sparkles, Ban, Briefcase } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 
 const Settings = () => {
@@ -20,6 +20,7 @@ const Settings = () => {
   const [calendars, setCalendars] = useState<any[]>([]);
   const [newMovableKeyword, setNewMovableKeyword] = useState('');
   const [newLockedKeyword, setNewLockedKeyword] = useState('');
+  const [newWorkKeyword, setNewWorkKeyword] = useState('');
   
   const [settings, setSettings] = useState<any>({
     day_start_time: '09:00',
@@ -30,7 +31,8 @@ const Settings = () => {
     preview_mode_enabled: true,
     group_similar_tasks: true,
     movable_keywords: ['arrangement', 'email', 'outreach', 'draft', 'exploration'],
-    locked_keywords: ['meeting', 'call', 'appointment', 'rehearsal', 'lesson']
+    locked_keywords: ['meeting', 'call', 'appointment', 'rehearsal', 'lesson'],
+    work_keywords: ['meeting', 'call', 'lesson', 'audition', 'rehearsal']
   });
 
   const [profile, setProfile] = useState<any>({
@@ -65,7 +67,8 @@ const Settings = () => {
           setSettings({
             ...settingsRes.data,
             movable_keywords: settingsRes.data.movable_keywords || [],
-            locked_keywords: settingsRes.data.locked_keywords || []
+            locked_keywords: settingsRes.data.locked_keywords || [],
+            work_keywords: settingsRes.data.work_keywords || []
           });
         }
         if (profileRes.data) setProfile(profileRes.data);
@@ -132,15 +135,22 @@ const Settings = () => {
     }
   };
 
-  const addKeyword = async (type: 'movable' | 'locked') => {
-    const keyword = type === 'movable' ? newMovableKeyword : newLockedKeyword;
+  const addKeyword = async (type: 'movable' | 'locked' | 'work') => {
+    let keyword = '';
+    let field = '';
+    
+    if (type === 'movable') { keyword = newMovableKeyword; field = 'movable_keywords'; }
+    else if (type === 'locked') { keyword = newLockedKeyword; field = 'locked_keywords'; }
+    else { keyword = newWorkKeyword; field = 'work_keywords'; }
+
     if (!keyword.trim()) return;
     
     const trimmed = keyword.trim().toLowerCase();
-    const field = type === 'movable' ? 'movable_keywords' : 'locked_keywords';
     
     if (settings[field].includes(trimmed)) {
-      type === 'movable' ? setNewMovableKeyword('') : setNewLockedKeyword('');
+      if (type === 'movable') setNewMovableKeyword('');
+      else if (type === 'locked') setNewLockedKeyword('');
+      else setNewWorkKeyword('');
       return;
     }
     
@@ -150,7 +160,9 @@ const Settings = () => {
       [field]: newKeywords
     }));
     
-    type === 'movable' ? setNewMovableKeyword('') : setNewLockedKeyword('');
+    if (type === 'movable') setNewMovableKeyword('');
+    else if (type === 'locked') setNewLockedKeyword('');
+    else setNewWorkKeyword('');
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -170,8 +182,8 @@ const Settings = () => {
     }
   };
 
-  const removeKeyword = async (kw: string, type: 'movable' | 'locked') => {
-    const field = type === 'movable' ? 'movable_keywords' : 'locked_keywords';
+  const removeKeyword = async (kw: string, type: 'movable' | 'locked' | 'work') => {
+    const field = type === 'movable' ? 'movable_keywords' : type === 'locked' ? 'locked_keywords' : 'work_keywords';
     const newKeywords = settings[field].filter((k: string) => k !== kw);
     
     setSettings(prev => ({
@@ -314,34 +326,33 @@ const Settings = () => {
             </CardContent>
           </Card>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <Card className="border-none shadow-sm rounded-2xl">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Sparkles className="text-indigo-600" size={20} />
-                  Movable Detection
+              <CardHeader className="pb-4">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Sparkles className="text-indigo-600" size={18} />
+                  Movable
                 </CardTitle>
-                <CardDescription>Keywords that mark a task as "Movable".</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-6">
+              <CardContent className="space-y-4">
                 <div className="flex gap-2">
                   <Input 
-                    placeholder="e.g. 🎹, draft" 
+                    placeholder="e.g. 🎹" 
                     value={newMovableKeyword}
                     onChange={(e) => setNewMovableKeyword(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && addKeyword('movable')}
-                    className="rounded-xl"
+                    className="rounded-xl h-9 text-xs"
                   />
-                  <Button onClick={() => addKeyword('movable')} variant="secondary" className="rounded-xl">
-                    <Plus size={18} />
+                  <Button onClick={() => addKeyword('movable')} variant="secondary" size="sm" className="rounded-xl h-9">
+                    <Plus size={14} />
                   </Button>
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-1.5">
                   {settings.movable_keywords.map((kw: string) => (
-                    <Badge key={kw} variant="secondary" className="px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 border-indigo-100 flex items-center gap-2">
+                    <Badge key={kw} variant="secondary" className="px-2 py-1 rounded-lg bg-indigo-50 text-indigo-700 border-indigo-100 text-[10px] flex items-center gap-1">
                       {kw}
                       <button onClick={() => removeKeyword(kw, 'movable')} className="hover:text-indigo-900">
-                        <X size={14} />
+                        <X size={10} />
                       </button>
                     </Badge>
                   ))}
@@ -350,32 +361,64 @@ const Settings = () => {
             </Card>
 
             <Card className="border-none shadow-sm rounded-2xl">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Ban className="text-red-500" size={20} />
-                  Locked Detection
+              <CardHeader className="pb-4">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Ban className="text-red-500" size={18} />
+                  Locked
                 </CardTitle>
-                <CardDescription>Keywords that mark a task as "Fixed".</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-6">
+              <CardContent className="space-y-4">
                 <div className="flex gap-2">
                   <Input 
-                    placeholder="e.g. meeting, call" 
+                    placeholder="e.g. meeting" 
                     value={newLockedKeyword}
                     onChange={(e) => setNewLockedKeyword(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && addKeyword('locked')}
-                    className="rounded-xl"
+                    className="rounded-xl h-9 text-xs"
                   />
-                  <Button onClick={() => addKeyword('locked')} variant="secondary" className="rounded-xl">
-                    <Plus size={18} />
+                  <Button onClick={() => addKeyword('locked')} variant="secondary" size="sm" className="rounded-xl h-9">
+                    <Plus size={14} />
                   </Button>
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-1.5">
                   {settings.locked_keywords.map((kw: string) => (
-                    <Badge key={kw} variant="secondary" className="px-3 py-1.5 rounded-lg bg-red-50 text-red-700 border-red-100 flex items-center gap-2">
+                    <Badge key={kw} variant="secondary" className="px-2 py-1 rounded-lg bg-red-50 text-red-700 border-red-100 text-[10px] flex items-center gap-1">
                       {kw}
                       <button onClick={() => removeKeyword(kw, 'locked')} className="hover:text-red-900">
-                        <X size={14} />
+                        <X size={10} />
+                      </button>
+                    </Badge>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-none shadow-sm rounded-2xl">
+              <CardHeader className="pb-4">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Briefcase className="text-amber-500" size={18} />
+                  Work Detection
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex gap-2">
+                  <Input 
+                    placeholder="e.g. audition" 
+                    value={newWorkKeyword}
+                    onChange={(e) => setNewWorkKeyword(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && addKeyword('work')}
+                    className="rounded-xl h-9 text-xs"
+                  />
+                  <Button onClick={() => addKeyword('work')} variant="secondary" size="sm" className="rounded-xl h-9">
+                    <Plus size={14} />
+                  </Button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {settings.work_keywords?.map((kw: string) => (
+                    <Badge key={kw} variant="secondary" className="px-2 py-1 rounded-lg bg-amber-50 text-amber-700 border-amber-100 text-[10px] flex items-center gap-1">
+                      {kw}
+                      <button onClick={() => removeKeyword(kw, 'work')} className="hover:text-amber-900">
+                        <X size={10} />
                       </button>
                     </Badge>
                   ))}

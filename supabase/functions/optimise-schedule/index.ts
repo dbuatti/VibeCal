@@ -14,7 +14,7 @@ serve(async (req) => {
   }
 
   try {
-    console.log("[optimise-schedule] Starting theme-aware redistribution with task grouping...");
+    console.log("[optimise-schedule] Starting theme-aware redistribution with workload awareness...");
     
     const authHeader = req.headers.get('Authorization')
     const { durationOverride, maxTasksOverride, slotAlignment = 15, selectedDays = [1, 2, 3, 4, 5] } = await req.json();
@@ -39,11 +39,13 @@ serve(async (req) => {
       day_end_time: '17:00', 
       max_hours_per_day: 6, 
       max_tasks_per_day: 5,
-      group_similar_tasks: true 
+      group_similar_tasks: true,
+      work_keywords: ['meeting', 'call', 'lesson', 'audition', 'rehearsal']
     };
     const userTimezone = profileRes.data?.timezone || 'UTC';
     const allEvents = eventsRes.data || [];
     const dayThemes = themesRes.data || [];
+    const workKeywords = settings.work_keywords || [];
 
     const fixedEvents = allEvents.filter(e => e.is_locked);
     const movableEvents = allEvents.filter(e => !e.is_locked);
@@ -52,62 +54,28 @@ serve(async (req) => {
       return new Response(JSON.stringify({ message: 'No movable events found.', changes: [] }), { headers: corsHeaders });
     }
 
-    // 1. Categorize and Cluster tasks using AI
+    // AI Categorization
     let categories = movableEvents.map(() => "General");
-    
     try {
       const geminiKey = Deno.env.get('GEMINI_API_KEY');
       if (geminiKey) {
-        console.log("[optimise-schedule] Attempting AI clustering...");
         const genAI = new GoogleGenerativeAI(geminiKey);
         const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
-
         const themeList = dayThemes.map(t => t.theme).filter(Boolean);
-        
-        const prompt = `
-          You are a scheduling assistant. Your goal is to group "like" tasks together to minimize context switching.
-          
-          Available Themes: [${themeList.join(', ')}]
-          
-          Common Clusters to look for:
-          - "Admin/Communication": Emails, calls, planning, invoices.
-          - "Deep Work/Coding": Programming, "vibe coding", debugging, architecture.
-          - "Creative/Practice": Piano practice, music, writing, sketching.
-          - "Chores/Personal": Cleaning, groceries, errands.
-          
-          Tasks to categorize:
-          ${movableEvents.map(e => `- ${e.title}`).join('\n')}
-          
-          Instructions:
-          1. Assign each task a category. 
-          2. Prioritize matching the "Available Themes" if they fit.
-          3. If a task doesn't fit a theme but fits a "Common Cluster", use that cluster name.
-          4. Otherwise, use "General".
-          
-          Return ONLY a JSON array of strings representing the category for each task in order.
-          Example: ["Admin", "Deep Work", "Deep Work", "Piano Practice"]
-        `;
-
+        const prompt = `Categorize these tasks into themes: [${themeList.join(', ')}]. Tasks: ${movableEvents.map(e => e.title).join(', ')}. Return JSON array of strings.`;
         const aiResult = await model.generateContent(prompt);
-        const aiResponse = await aiResult.response;
-        const text = aiResponse.text();
+        const text = (await aiResult.response).text();
         const jsonMatch = text.match(/\[.*\]/s);
-        if (jsonMatch) {
-          categories = JSON.parse(jsonMatch[0]);
-          console.log("[optimise-schedule] AI clustering successful.");
-        }
+        if (jsonMatch) categories = JSON.parse(jsonMatch[0]);
       }
-    } catch (aiError) {
-      console.error("[optimise-schedule] AI clustering failed. Falling back to basic grouping.", aiError.message);
-    }
+    } catch (e) { console.error("AI Error", e); }
 
-    // Attach categories to events for sorting
     const categorizedEvents = movableEvents.map((event, index) => ({
       ...event,
-      temp_category: categories[index] || "General"
+      temp_category: categories[index] || "General",
+      is_work: workKeywords.some(kw => event.title.toLowerCase().includes(kw.toLowerCase()))
     }));
 
-    // 2. Sort events by category to ensure they are processed (and thus placed) together
     if (settings.group_similar_tasks !== false) {
       categorizedEvents.sort((a, b) => a.temp_category.localeCompare(b.temp_category));
     }
@@ -115,11 +83,11 @@ serve(async (req) => {
     const proposedChanges = [];
     const dailyStats = new Map();
     const maxTasks = maxTasksOverride || settings.max_tasks_per_day || 5;
+    const maxWorkHours = settings.max_hours_per_day || 24;
 
     const getOffset = (date) => {
       const tzDate = new Date(date.toLocaleString('en-US', { timeZone: userTimezone }));
-      const diff = tzDate.getTime() - date.getTime();
-      return Math.round(diff / 3600000);
+      return Math.round((tzDate.getTime() - date.getTime()) / 3600000);
     };
 
     const alignTime = (date, alignmentMinutes) => {
@@ -127,16 +95,19 @@ serve(async (req) => {
       return new Date(Math.ceil(date.getTime() / ms) * ms);
     };
 
-    // 3. Redistribution Loop
+    // Pre-calculate fixed work hours per day
+    fixedEvents.forEach(f => {
+      const dayKey = new Date(f.start_time).toISOString().split('T')[0];
+      const isWork = workKeywords.some(kw => f.title.toLowerCase().includes(kw.toLowerCase()));
+      if (isWork) {
+        if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
+        dailyStats.get(dayKey).hours += (f.duration_minutes / 60);
+      }
+    });
+
     for (const event of categorizedEvents) {
-      const taskTheme = event.temp_category;
       const effectiveDuration = durationOverride || event.duration_minutes;
       const durationMs = effectiveDuration * 60000;
-      
-      const preferredDays = dayThemes
-        .filter(t => t.theme.toLowerCase() === taskTheme.toLowerCase())
-        .map(t => t.day_of_week);
-
       let foundSlot = false;
       let dayOffset = 1;
 
@@ -148,25 +119,13 @@ serve(async (req) => {
         const dayOfWeek = currentPointer.getDay();
         const dayKey = currentPointer.toISOString().split('T')[0];
         
-        if (!selectedDays.includes(dayOfWeek)) {
-          dayOffset++;
-          continue;
-        }
-
-        // If we have a theme match, try to stick to those days first (within the first week)
-        if (preferredDays.length > 0 && !preferredDays.includes(dayOfWeek) && dayOffset < 8) {
-          dayOffset++;
-          continue;
-        }
+        if (!selectedDays.includes(dayOfWeek)) { dayOffset++; continue; }
 
         const offset = getOffset(currentPointer);
         const [startH, startM] = settings.day_start_time.split(':').map(Number);
         const [endH, endM] = settings.day_end_time.split(':').map(Number);
 
-        if (!dailyStats.has(dayKey)) {
-          dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
-        }
-        
+        if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
         const stats = dailyStats.get(dayKey);
         
         if (!stats.lastPointer) {
@@ -181,9 +140,11 @@ serve(async (req) => {
 
         while (searchPointer < dayEnd && !foundSlot) {
           const potentialEnd = new Date(searchPointer.getTime() + durationMs);
-          
           const pastWorkday = potentialEnd > dayEnd;
-          const pastHoursLimit = (stats.hours + (effectiveDuration / 60)) > (settings.max_hours_per_day || 24);
+          
+          // Only enforce hours limit if the task is considered "work"
+          const taskWorkHours = event.is_work ? (effectiveDuration / 60) : 0;
+          const pastHoursLimit = (stats.hours + taskWorkHours) > maxWorkHours;
           const pastTasksLimit = stats.tasks >= maxTasks;
 
           if (pastWorkday || pastHoursLimit || pastTasksLimit) break;
@@ -195,15 +156,12 @@ serve(async (req) => {
           });
 
           if (collision) {
-            searchPointer = new Date(new Date(collision.end_time).getTime() + 1 * 60000);
-            searchPointer = alignTime(searchPointer, slotAlignment);
+            searchPointer = alignTime(new Date(new Date(collision.end_time).getTime() + 1 * 60000), slotAlignment);
           } else {
             foundSlot = true;
             stats.tasks += 1;
-            stats.hours += (effectiveDuration / 60);
-            // Place next task 5 mins after this one to keep them grouped
-            stats.lastPointer = new Date(potentialEnd.getTime() + 5 * 60000);
-            stats.lastPointer = alignTime(stats.lastPointer, slotAlignment);
+            stats.hours += taskWorkHours;
+            stats.lastPointer = alignTime(new Date(potentialEnd.getTime() + 5 * 60000), slotAlignment);
 
             proposedChanges.push({
               event_id: event.event_id,
@@ -213,24 +171,16 @@ serve(async (req) => {
               new_start: searchPointer.toISOString(),
               new_end: potentialEnd.toISOString(),
               duration: effectiveDuration,
-              theme_matched: taskTheme
+              is_work: event.is_work
             });
           }
         }
-
         if (!foundSlot) dayOffset++;
       }
     }
 
-    return new Response(
-      JSON.stringify({ 
-        message: proposedChanges.length > 0 ? 'Optimisation complete' : 'Schedule is already optimal', 
-        changes: proposedChanges 
-      }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    )
+    return new Response(JSON.stringify({ changes: proposedChanges }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
-    console.error("[optimise-schedule] Fatal Error:", error);
-    return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders })
+    return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })
