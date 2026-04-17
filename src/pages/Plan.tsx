@@ -470,9 +470,23 @@ const Plan = () => {
                       </div>
                       <div>
                         <h3 className="font-black text-2xl text-gray-900 tracking-tight">{event.title}</h3>
-                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mt-2">
-                          {event.is_locked ? 'Fixed Event' : 'Movable Task'}
-                        </p>
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-2">
+                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">
+                            {event.is_locked ? 'Fixed Event' : 'Movable Task'}
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <Calendar size={12} className="text-gray-300" />
+                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                              {format(parseISO(event.start_time), 'EEE, MMM d')}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Clock size={12} className="text-gray-300" />
+                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                              {format(parseISO(event.start_time), 'HH:mm')}
+                            </span>
+                          </div>
+                        </div>
                       </div>
                     </div>
                     <Switch 
