@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, Bug, ArrowRight, Zap, Apple, Info } from 'lucide-react';
+import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, Bug, ArrowRight, Zap, Apple, Info, Globe } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { format } from 'date-fns';
@@ -19,104 +19,63 @@ const Optimise = () => {
   const [showDebug, setShowDebug] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
 
-  const runGoogleSync = async () => {
+  const runFullAlignment = async () => {
     setIsOptimising(true);
     setProgress(0);
     setSyncReport(null);
+    setOptimisationResult(null);
     
     try {
-      setStep('Authenticating with Google...');
+      // 1. Google Sync
+      setStep('Syncing Google Calendar...');
       setProgress(10);
-
       const { data: { session } } = await supabase.auth.getSession();
       const providerToken = session?.provider_token;
 
-      if (!providerToken) {
-        throw new Error("Google access token not found. Please sign out and sign back in.");
+      if (providerToken) {
+        const { data: gData, error: gError } = await supabase.functions.invoke('sync-calendar', {
+          body: { googleAccessToken: providerToken }
+        });
+        if (gError) console.warn("Google sync failed:", gError);
+      } else {
+        console.warn("No Google token found, skipping Google sync.");
       }
 
-      setStep('Syncing Google Calendar...');
-      setProgress(30);
-      
-      const { data, error } = await supabase.functions.invoke('sync-calendar', {
-        body: { googleAccessToken: providerToken }
+      // 2. Apple Sync
+      setProgress(40);
+      setStep('Syncing Apple Calendar...');
+      const { data: aData, error: aError } = await supabase.functions.invoke('sync-apple-calendar');
+      if (aError) console.warn("Apple sync failed:", aError);
+
+      // 3. Fetch Combined Cache for Report
+      setProgress(60);
+      setStep('Analyzing combined schedule...');
+      const { data: events, error: fetchError } = await supabase
+        .from('calendar_events_cache')
+        .select('*')
+        .order('start_time', { ascending: true });
+
+      if (fetchError) throw fetchError;
+
+      setSyncReport({
+        total: events?.length || 0,
+        googleCount: events?.filter(e => e.provider === 'google').length || 0,
+        appleCount: events?.filter(e => e.provider === 'apple').length || 0,
+        samples: events || [],
+        lastSync: new Date().toISOString()
       });
+
+      // 4. Run Optimisation
+      setProgress(80);
+      setStep('Calculating optimal alignment...');
+      const { data: optData, error: optError } = await supabase.functions.invoke('optimise-schedule');
       
-      if (error) throw error;
-      if (data?.error) throw new Error(data.error);
+      if (optError) throw optError;
+      if (optData?.error) throw new Error(optData.error);
 
-      await finalizeSync(data.count ?? 0, 'google', data.events);
-    } catch (err: any) {
-      showError(err.message);
-    } finally {
-      setIsOptimising(false);
-    }
-  };
-
-  const runAppleSync = async () => {
-    setIsOptimising(true);
-    setProgress(0);
-    setSyncReport(null);
-    
-    try {
-      setStep('Connecting to iCloud (CalDAV)...');
-      setProgress(20);
-
-      const { data, error } = await supabase.functions.invoke('sync-apple-calendar');
-      
-      if (error) throw error;
-      if (data?.error) throw new Error(data.error);
-
-      await finalizeSync(data.count ?? 0, 'apple', data.events);
-    } catch (err: any) {
-      showError(err.message);
-    } finally {
-      setIsOptimising(false);
-    }
-  };
-
-  const finalizeSync = async (count: number, provider: string, rawEvents?: any[]) => {
-    setStep('Verifying database records...');
-    setProgress(80);
-
-    const { data: events, error: fetchError } = await supabase
-      .from('calendar_events_cache')
-      .select('*')
-      .eq('provider', provider)
-      .order('start_time', { ascending: true });
-
-    if (fetchError) throw fetchError;
-
-    setSyncReport({
-      total: events?.length || 0,
-      provider,
-      range: {
-        start: events?.[0]?.start_time,
-        end: events?.[events.length - 1]?.start_time
-      },
-      samples: events || [],
-      rawResponse: rawEvents,
-      lastSync: new Date().toISOString()
-    });
-    
-    setProgress(100);
-    showSuccess(`Successfully synced ${count} ${provider} events!`);
-  };
-
-  const runOptimisation = async () => {
-    setIsOptimising(true);
-    setProgress(0);
-    setStep('Calculating optimal slots...');
-    
-    try {
-      const { data, error } = await supabase.functions.invoke('optimise-schedule');
-      
-      if (error) throw error;
-      if (data?.error) throw new Error(data.error);
-
-      setOptimisationResult(data);
+      setOptimisationResult(optData);
       setProgress(100);
-      showSuccess(data.message);
+      showSuccess("Alignment calculation complete!");
     } catch (err: any) {
       showError(err.message);
     } finally {
@@ -146,7 +105,7 @@ const Optimise = () => {
         if (error) throw error;
       }
 
-      showSuccess("Changes applied to your local schedule!");
+      showSuccess("Schedule updated successfully!");
       setOptimisationResult(null);
       setSyncReport(null);
     } catch (err: any) {
@@ -174,92 +133,62 @@ const Optimise = () => {
           </div>
         </div>
 
-        {!isOptimising && !syncReport && !optimisationResult && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <Card className="border-none shadow-xl shadow-indigo-100/50 rounded-3xl overflow-hidden">
-              <div className="bg-indigo-600 p-8 text-white">
-                <h2 className="text-xl font-bold mb-2">Google Calendar</h2>
-                <p className="opacity-90 text-sm">Sync using your Google account.</p>
-              </div>
-              <CardContent className="p-8">
+        {!isOptimising && !optimisationResult && (
+          <div className="space-y-8">
+            <Card className="border-none shadow-2xl shadow-indigo-100/50 rounded-[2.5rem] overflow-hidden bg-white">
+              <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-12 text-white text-center">
+                <div className="w-20 h-20 bg-white/20 rounded-3xl flex items-center justify-center mx-auto mb-8 backdrop-blur-md">
+                  <Zap size={40} />
+                </div>
+                <h2 className="text-3xl font-black mb-4">Full Schedule Alignment</h2>
+                <p className="text-indigo-100 text-lg max-w-md mx-auto mb-10">
+                  Sync both Google and Apple calendars, then automatically redistribute movable tasks to your optimal focus windows.
+                </p>
                 <Button 
-                  onClick={runGoogleSync}
-                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl py-8 text-lg font-bold shadow-lg shadow-indigo-200 transition-all hover:scale-[1.01]"
+                  onClick={runFullAlignment}
+                  className="bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl px-12 py-8 text-xl font-black shadow-xl transition-all hover:scale-[1.02] active:scale-[0.98]"
                 >
-                  Sync Google
+                  Start Alignment
                 </Button>
+              </div>
+              <CardContent className="p-8 bg-gray-50/50 border-t border-gray-100">
+                <div className="flex justify-center gap-12">
+                  <div className="flex items-center gap-3 text-gray-500 font-bold">
+                    <Globe size={20} className="text-blue-500" /> Google Sync
+                  </div>
+                  <div className="flex items-center gap-3 text-gray-500 font-bold">
+                    <Apple size={20} className="text-gray-900" /> Apple Sync
+                  </div>
+                  <div className="flex items-center gap-3 text-gray-500 font-bold">
+                    <Sparkles size={20} className="text-indigo-500" /> AI Optimise
+                  </div>
+                </div>
               </CardContent>
             </Card>
 
-            <Card className="border-none shadow-xl shadow-gray-100/50 rounded-3xl overflow-hidden">
-              <div className="bg-gray-900 p-8 text-white">
-                <h2 className="text-xl font-bold mb-2 flex items-center gap-2">
-                  <Apple size={20} /> Apple Calendar
-                </h2>
-                <p className="opacity-90 text-sm">Sync using CalDAV credentials.</p>
-              </div>
-              <CardContent className="p-8">
-                <Button 
-                  onClick={runAppleSync}
-                  className="w-full bg-gray-900 hover:bg-black text-white rounded-2xl py-8 text-lg font-bold shadow-lg shadow-gray-200 transition-all hover:scale-[1.01]"
-                >
-                  Sync Apple
-                </Button>
-              </CardContent>
-            </Card>
-          </div>
-        )}
-
-        {isOptimising && (
-          <Card className="border-none shadow-sm rounded-3xl p-12 text-center">
-            <RefreshCw className="text-indigo-600 animate-spin mx-auto mb-6" size={48} />
-            <h2 className="text-2xl font-bold text-gray-900 mb-4">{step}</h2>
-            <Progress value={progress} className="h-3 bg-gray-100 mb-4" />
-            <p className="text-gray-500 font-medium">{progress}% Complete</p>
-          </Card>
-        )}
-
-        {syncReport && !optimisationResult && (
-          <div className="space-y-6">
-            <div className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-bold text-gray-900 capitalize">{syncReport.provider} Calendar Synced</h2>
-                <p className="text-gray-500 text-sm mt-1">{syncReport.total} events found in the next 14 days.</p>
-              </div>
-              <div className="flex gap-3">
-                <Button variant="outline" onClick={() => setSyncReport(null)} className="rounded-xl">
-                  Back
-                </Button>
-                <Button onClick={runOptimisation} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-8 py-6 h-auto font-bold flex gap-2">
-                  <Zap size={18} />
-                  Run Optimisation
-                </Button>
-              </div>
-            </div>
-
-            {showDebug && (
+            {syncReport && showDebug && (
               <div className="space-y-4">
                 <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
                   <Info size={20} className="text-indigo-600" />
-                  Discovered Events Debug
+                  Discovered Events Debug ({syncReport.total})
                 </h3>
                 <div className="grid grid-cols-1 gap-3">
                   {syncReport.samples.map((event: any, i: number) => (
                     <div key={i} className="bg-slate-900 p-4 rounded-2xl font-mono text-xs text-emerald-400 border border-slate-800">
                       <div className="flex justify-between mb-2 border-b border-slate-800 pb-2">
                         <span className="text-slate-400">#{i + 1} {event.title}</span>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-3">
                           <span className={event.is_locked ? "text-red-400" : "text-emerald-400"}>
                             {event.is_locked ? '[LOCKED]' : '[MOVABLE]'}
                           </span>
-                          <span className="text-indigo-400">[{event.provider || 'google'}]</span>
+                          <span className="text-indigo-400 uppercase">[{event.provider}]</span>
                         </div>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
                         <div>Start: {format(new Date(event.start_time), 'MMM d, HH:mm')}</div>
                         <div>End: {format(new Date(event.end_time), 'MMM d, HH:mm')}</div>
                         <div>Duration: {event.duration_minutes}m</div>
-                        <div>Calendar: {event.source_calendar || 'primary'}</div>
+                        <div>Calendar: {event.source_calendar}</div>
                       </div>
                     </div>
                   ))}
@@ -269,11 +198,27 @@ const Optimise = () => {
           </div>
         )}
 
+        {isOptimising && (
+          <Card className="border-none shadow-sm rounded-[2.5rem] p-16 text-center bg-white">
+            <div className="relative w-24 h-24 mx-auto mb-10">
+              <RefreshCw className="text-indigo-600 animate-spin w-full h-full" />
+              <div className="absolute inset-0 flex items-center justify-center">
+                <Sparkles className="text-indigo-600" size={32} />
+              </div>
+            </div>
+            <h2 className="text-3xl font-black text-gray-900 mb-4">{step}</h2>
+            <div className="max-w-md mx-auto">
+              <Progress value={progress} className="h-4 bg-gray-100 mb-4 rounded-full" />
+              <p className="text-gray-500 font-bold text-lg">{progress}% Complete</p>
+            </div>
+          </Card>
+        )}
+
         {optimisationResult && (
           <div className="space-y-8">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-bold text-gray-900">Proposed Schedule Changes</h2>
-              <Button variant="outline" onClick={() => { setSyncReport(null); setOptimisationResult(null); }} className="rounded-xl">
+              <Button variant="outline" onClick={() => { setSyncReport(null); setOptimisationResult(null); }} className="rounded-xl border-gray-200">
                 <RefreshCw size={16} className="mr-2" /> Reset & Re-sync
               </Button>
             </div>
@@ -319,32 +264,32 @@ const Optimise = () => {
                   </Card>
                 ))}
                 
-                <div className="bg-indigo-600 p-8 rounded-[2.5rem] text-white shadow-xl shadow-indigo-100 mt-10">
-                  <div className="flex items-center justify-between mb-6">
+                <div className="bg-indigo-600 p-10 rounded-[3rem] text-white shadow-2xl shadow-indigo-200 mt-10">
+                  <div className="flex items-center justify-between mb-8">
                     <div>
-                      <h3 className="text-2xl font-bold">Ready to apply?</h3>
-                      <p className="opacity-80 text-sm mt-1">This will update {optimisationResult.changes.length} events in your local schedule.</p>
+                      <h3 className="text-3xl font-black">Ready to align?</h3>
+                      <p className="opacity-80 text-lg mt-2">This will update {optimisationResult.changes.length} events in your local schedule.</p>
                     </div>
-                    <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm">
-                      <Zap size={28} />
+                    <div className="w-16 h-16 bg-white/20 rounded-3xl flex items-center justify-center backdrop-blur-md">
+                      <Zap size={32} />
                     </div>
                   </div>
                   <Button 
                     onClick={applyChanges}
                     disabled={isApplying}
-                    className="w-full bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl py-7 text-lg font-black shadow-lg disabled:opacity-50"
+                    className="w-full bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl py-8 text-xl font-black shadow-xl disabled:opacity-50 transition-all hover:scale-[1.01]"
                   >
-                    {isApplying ? 'Applying...' : 'Apply Changes to Schedule'}
+                    {isApplying ? 'Applying Changes...' : 'Apply Changes to Schedule'}
                   </Button>
                 </div>
               </div>
             ) : (
-              <Card className="border-none shadow-sm bg-white rounded-3xl p-12 text-center">
-                <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-6">
-                  <CheckCircle2 className="text-gray-300" size={40} />
+              <Card className="border-none shadow-sm bg-white rounded-[2.5rem] p-16 text-center">
+                <div className="w-24 h-24 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-8">
+                  <CheckCircle2 className="text-gray-300" size={48} />
                 </div>
-                <h3 className="text-xl font-bold text-gray-900 mb-2">No Movable Events</h3>
-                <p className="text-gray-500 max-w-xs mx-auto">All your events are currently locked or recurring. Create a single, non-recurring event to test the optimiser.</p>
+                <h3 className="text-2xl font-black text-gray-900 mb-4">Schedule is Optimal</h3>
+                <p className="text-gray-500 max-w-sm mx-auto text-lg">All your movable events are already perfectly aligned with your work window and themes.</p>
               </Card>
             )}
           </div>
