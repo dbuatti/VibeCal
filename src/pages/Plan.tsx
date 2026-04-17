@@ -45,6 +45,13 @@ const Plan = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
+      // Check for token in session and cache it if found
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.provider_token) {
+        console.log("[Plan] Found fresh Google token in session, caching...");
+        await supabase.from('profiles').update({ google_access_token: session.provider_token }).eq('id', user.id);
+      }
+
       const { data: history } = await supabase
         .from('optimisation_history')
         .select('*')
@@ -101,18 +108,27 @@ const Plan = () => {
     try {
       if (!skipSync) {
         const { data: { session } } = await supabase.auth.getSession();
-        console.log("[Plan] Syncing... Provider:", session?.user?.app_metadata?.provider);
+        const { data: { user } } = await supabase.auth.getUser();
         
-        if (session?.provider_token) {
-          console.log("[Plan] Invoking sync-calendar with token...");
-          await supabase.functions.invoke('sync-calendar', { 
-            body: { googleAccessToken: session.provider_token } 
-          });
-        } else if (session?.user?.app_metadata?.provider === 'google') {
-          console.warn("[Plan] Google token missing from session.");
-          setTokenMissing(true);
-          setIsProcessing(false);
-          return;
+        // Try to use session token first, then fallback to database token in the Edge Function
+        let token = session?.provider_token;
+        
+        if (!token && user?.app_metadata?.provider === 'google') {
+          console.log("[Plan] Session token missing, Edge Function will attempt to use database cache.");
+        }
+
+        console.log("[Plan] Invoking sync-calendar...");
+        const { data: syncData, error: syncError } = await supabase.functions.invoke('sync-calendar', { 
+          body: { googleAccessToken: token } 
+        });
+
+        if (syncError || syncData?.error) {
+          if (syncData?.error?.includes("Missing Google Access Token") || syncData?.error?.includes("401")) {
+            setTokenMissing(true);
+            setIsProcessing(false);
+            return;
+          }
+          throw new Error(syncError?.message || syncData?.error);
         }
 
         console.log("[Plan] Invoking sync-apple-calendar...");
@@ -227,9 +243,17 @@ const Plan = () => {
   const handleApplyDay = async (dateChanges: any[]) => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
+      const { data: { user } } = await supabase.auth.getUser();
       const newAppliedIds = [...appliedChanges];
       const updatedEvents = [...events];
       
+      // Get token from session or database
+      let token = session?.provider_token;
+      if (!token && user) {
+        const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
+        token = profile?.google_access_token;
+      }
+
       for (const change of dateChanges) {
         const eventIdx = updatedEvents.findIndex(e => e.event_id === change.event_id);
         if (eventIdx === -1) continue;
@@ -242,7 +266,7 @@ const Plan = () => {
             calendarId: eventInCache.source_calendar_id, 
             startTime: change.new_start, 
             endTime: change.new_end, 
-            googleAccessToken: session?.provider_token 
+            googleAccessToken: token 
           }
         });
 
@@ -270,9 +294,17 @@ const Plan = () => {
   const handleUndoApplyDay = async (dateChanges: any[]) => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
+      const { data: { user } } = await supabase.auth.getUser();
       const changeIds = dateChanges.map(c => c.event_id);
       const newAppliedIds = appliedChanges.filter(id => !changeIds.includes(id));
       const updatedEvents = [...events];
+
+      // Get token from session or database
+      let token = session?.provider_token;
+      if (!token && user) {
+        const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
+        token = profile?.google_access_token;
+      }
 
       for (const change of dateChanges) {
         const eventIdx = updatedEvents.findIndex(e => e.event_id === change.event_id);
@@ -287,7 +319,7 @@ const Plan = () => {
             calendarId: eventInCache.source_calendar_id, 
             startTime: change.old_start, 
             endTime: oldEnd, 
-            googleAccessToken: session?.provider_token 
+            googleAccessToken: token 
           }
         });
 
@@ -348,13 +380,13 @@ const Plan = () => {
               <AlertCircle className="text-amber-500" size={32} />
             </div>
             <div className="space-y-2">
-              <h2 className="text-2xl font-black text-gray-900 tracking-tight">Google Token Expired</h2>
+              <h2 className="text-2xl font-black text-gray-900 tracking-tight">Google Connection Required</h2>
               <p className="text-gray-500 font-medium max-w-md mx-auto">
-                To sync your Google Calendar, we need a fresh access token. Please sign out and sign back in with Google.
+                To sync your Google Calendar, we need to refresh your access token.
               </p>
             </div>
             <Button onClick={handleReauth} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-8 py-6 font-black">
-              <LogIn className="mr-2" size={18} /> Re-authenticate
+              <LogIn className="mr-2" size={18} /> Refresh Google Connection
             </Button>
           </div>
         </Card>

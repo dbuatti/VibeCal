@@ -17,13 +17,24 @@ serve(async (req) => {
   try {
     console.log(`[${functionName}] START - Google Sync Process`);
     const authHeader = req.headers.get('Authorization')
-    const { googleAccessToken } = await req.json();
-    if (!googleAccessToken) return new Response(JSON.stringify({ error: "Missing Google Access Token" }), { status: 400, headers: corsHeaders });
+    let { googleAccessToken } = await req.json();
 
     const supabaseAdmin = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '')
     const supabaseUser = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_ANON_KEY') ?? '', { global: { headers: { Authorization: authHeader } } })
     const { data: { user } } = await supabaseUser.auth.getUser()
     if (!user) throw new Error("Unauthorized");
+
+    // FALLBACK: If token is missing from request, check the database cache
+    if (!googleAccessToken) {
+      console.log(`[${functionName}] Token missing from request, checking database cache...`);
+      const { data: profile } = await supabaseAdmin.from('profiles').select('google_access_token').eq('id', user.id).single();
+      googleAccessToken = profile?.google_access_token;
+    }
+
+    if (!googleAccessToken) {
+      console.error(`[${functionName}] No Google Access Token found in request or database.`);
+      return new Response(JSON.stringify({ error: "Missing Google Access Token" }), { status: 400, headers: corsHeaders });
+    }
 
     const { data: existingEvents } = await supabaseAdmin
       .from('calendar_events_cache')
@@ -38,7 +49,13 @@ serve(async (req) => {
     const workKeywords = settings?.work_keywords || ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session', 'work session'];
 
     const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { headers: { Authorization: `Bearer ${googleAccessToken}` } })
-    if (!listRes.ok) throw new Error(`Google API Error: ${listRes.statusText}`);
+    
+    if (!listRes.ok) {
+      const errorData = await listRes.json();
+      console.error(`[${functionName}] Google API Error:`, JSON.stringify(errorData));
+      return new Response(JSON.stringify({ error: `Google API Error: ${errorData.error?.message || listRes.statusText}` }), { status: listRes.status, headers: corsHeaders });
+    }
+
     const listData = await listRes.json()
     if (listData.items) {
       const discovered = listData.items.filter(cal => !cal.id.includes('@import.calendar.google.com')).map(cal => ({
