@@ -6,24 +6,18 @@ import Layout from '@/components/Layout';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import DayByDayPlanner from '@/components/DayByDayPlanner';
-import { Brain, RefreshCw, Trash2, Eye, EyeOff, Sparkles, Calendar, Clock, ListOrdered, ChevronRight, BrainCircuit, Inbox, Unlock, Lock, History, Settings2, Wand2, CheckSquare } from 'lucide-react';
+import RequirementsForm from '@/components/RequirementsForm';
+import { Brain, RefreshCw, Trash2, Eye, EyeOff, Calendar, Settings2, CheckSquare, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { format, nextSaturday, formatDistanceToNow, parseISO, addMinutes } from 'date-fns';
+import { format, nextSaturday, parseISO, addMinutes } from 'date-fns';
 import { cn } from '@/lib/utils';
 
 type PlanStep = 'initial' | 'analysis' | 'vetting_tasks' | 'requirements' | 'active_plan';
-
-const DAYS = [
-  { label: 'Sun', value: 0 }, { label: 'Mon', value: 1 }, { label: 'Tue', value: 2 },
-  { label: 'Wed', value: 3 }, { label: 'Thu', value: 4 }, { label: 'Fri', value: 5 }, { label: 'Sat', value: 6 },
-];
 
 const Plan = () => {
   const navigate = useNavigate();
@@ -37,7 +31,6 @@ const Plan = () => {
   const [appliedChanges, setAppliedChanges] = useState<string[]>([]);
   const [settings, setSettings] = useState<any>(null);
   const [deepFocus, setDeepFocus] = useState(false);
-  const [lastSynced, setLastSynced] = useState<string | null>(null);
 
   const [durationOverride, setDurationOverride] = useState<string>("original");
   const [maxTasksOverride, setMaxTasksOverride] = useState<number>(5);
@@ -72,10 +65,7 @@ const Plan = () => {
         setMaxTasksOverride(settingsRes.data.max_tasks_per_day || 5);
       }
 
-      if (eventsRes.data && eventsRes.data.length > 0) {
-        setEvents(eventsRes.data);
-        setLastSynced(eventsRes.data[0].last_synced_at);
-      }
+      if (eventsRes.data) setEvents(eventsRes.data);
 
       if (history) {
         setProposal(history);
@@ -114,9 +104,6 @@ const Plan = () => {
       
       const { data: fetchedEvents } = await supabase.from('calendar_events_cache').select('*').order('start_time', { ascending: true });
       setEvents(fetchedEvents || []);
-      if (fetchedEvents && fetchedEvents.length > 0) {
-        setLastSynced(fetchedEvents[0].last_synced_at);
-      }
       
       if (currentStep !== 'active_plan') {
         navigate('/vet');
@@ -268,87 +255,22 @@ const Plan = () => {
     } catch (err: any) { showError("Failed to undo: " + err.message); }
   };
 
-  const RequirementsForm = () => (
-    <div className="space-y-6 p-2">
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Duration</Label>
-          <Select value={durationOverride} onValueChange={setDurationOverride}>
-            <SelectTrigger className="h-10 rounded-xl border-gray-100 font-bold text-xs px-3 bg-gray-50/50">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="rounded-xl">
-              <SelectItem value="original">Original</SelectItem>
-              <SelectItem value="15">15m</SelectItem>
-              <SelectItem value="30">30m</SelectItem>
-              <SelectItem value="45">45m</SelectItem>
-              <SelectItem value="60">60m</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-2">
-          <Label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Alignment</Label>
-          <Select value={slotAlignment} onValueChange={setSlotAlignment}>
-            <SelectTrigger className="h-10 rounded-xl border-gray-100 font-bold text-xs px-3 bg-gray-50/50">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="rounded-xl">
-              <SelectItem value="5">5m</SelectItem>
-              <SelectItem value="15">15m</SelectItem>
-              <SelectItem value="30">30m</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <Label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Allowed Days</Label>
-        <div className="flex flex-wrap gap-1.5">
-          {DAYS.map((day) => (
-            <button 
-              key={day.value} 
-              onClick={() => setSelectedDays(prev => prev.includes(day.value) ? prev.filter(d => d !== day.value) : [...prev, day.value])} 
-              className={cn(
-                "px-2.5 py-1.5 rounded-lg font-black text-[8px] uppercase tracking-widest transition-all border",
-                selectedDays.includes(day.value) ? "bg-indigo-600 border-indigo-600 text-white shadow-sm" : "bg-white border-gray-100 text-gray-400"
-              )}
-            >
-              {day.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Max Hours</Label>
-          <Input type="number" value={maxHoursOverride} onChange={(e) => setMaxHoursOverride(parseInt(e.target.value))} className="h-10 rounded-xl border-gray-100 font-bold text-sm px-3 bg-gray-50/50" />
-        </div>
-        <div className="space-y-2">
-          <Label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Max Tasks</Label>
-          <Input type="number" value={maxTasksOverride} onChange={(e) => setMaxTasksOverride(parseInt(e.target.value))} className="h-10 rounded-xl border-gray-100 font-bold text-sm px-3 bg-gray-50/50" />
-        </div>
-      </div>
-
-      <div className="space-y-2 p-4 bg-amber-50/50 rounded-2xl border border-amber-100">
-        <Label className="text-[10px] font-black uppercase tracking-widest text-amber-600 flex items-center gap-2">
-          <Inbox size={12} /> Surplus Handling
-        </Label>
-        <div className="space-y-2">
-          <p className="text-[9px] text-amber-700 font-bold leading-tight">Overflow tasks will be moved to:</p>
-          <Input 
-            type="date" 
-            value={placeholderDate} 
-            onChange={(e) => setPlaceholderDate(e.target.value)}
-            className="h-9 rounded-xl border-amber-100 font-bold text-xs px-3 bg-white focus:ring-amber-500"
-          />
-        </div>
-      </div>
-      
-      <Button onClick={() => runOptimisation(false)} className="w-full bg-indigo-600 text-white rounded-xl py-6 text-xs font-black uppercase tracking-widest shadow-lg shadow-indigo-100">
-        <Wand2 size={14} className="mr-2" /> Re-Generate Plan
-      </Button>
-    </div>
+  const renderRequirementsForm = () => (
+    <RequirementsForm 
+      durationOverride={durationOverride}
+      setDurationOverride={setDurationOverride}
+      slotAlignment={slotAlignment}
+      setSlotAlignment={setSlotAlignment}
+      selectedDays={selectedDays}
+      setSelectedDays={setSelectedDays}
+      maxHoursOverride={maxHoursOverride}
+      setMaxHoursOverride={setMaxHoursOverride}
+      maxTasksOverride={maxTasksOverride}
+      setMaxTasksOverride={setMaxTasksOverride}
+      placeholderDate={placeholderDate}
+      setPlaceholderDate={setPlaceholderDate}
+      onOptimise={() => runOptimisation(false)}
+    />
   );
 
   return (
@@ -391,7 +313,7 @@ const Plan = () => {
               </PopoverTrigger>
               <PopoverContent className="w-80 rounded-[2rem] shadow-2xl border-none p-6" align="end">
                 <h3 className="text-sm font-black text-gray-900 mb-4 uppercase tracking-widest">Plan Requirements</h3>
-                <RequirementsForm />
+                {renderRequirementsForm()}
               </PopoverContent>
             </Popover>
           ) : currentStep === 'vetting_tasks' && (
@@ -445,7 +367,7 @@ const Plan = () => {
                 <CardTitle className="text-2xl font-black tracking-tight">Requirements</CardTitle>
               </CardHeader>
               <CardContent className="p-8">
-                <RequirementsForm />
+                {renderRequirementsForm()}
               </CardContent>
             </Card>
           )}
