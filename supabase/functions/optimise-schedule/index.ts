@@ -14,7 +14,7 @@ serve(async (req) => {
   }
 
   try {
-    console.log("[optimise-schedule] Starting theme-aware redistribution...");
+    console.log("[optimise-schedule] Starting theme-aware redistribution with task grouping...");
     
     const authHeader = req.headers.get('Authorization')
     const { durationOverride, maxTasksOverride, slotAlignment = 15, selectedDays = [1, 2, 3, 4, 5] } = await req.json();
@@ -34,7 +34,13 @@ serve(async (req) => {
       supabaseClient.from('day_themes').select('*').eq('user_id', user.id)
     ]);
 
-    const settings = settingsRes.data || { day_start_time: '09:00', day_end_time: '17:00', max_hours_per_day: 6, max_tasks_per_day: 5 };
+    const settings = settingsRes.data || { 
+      day_start_time: '09:00', 
+      day_end_time: '17:00', 
+      max_hours_per_day: 6, 
+      max_tasks_per_day: 5,
+      group_similar_tasks: true 
+    };
     const userTimezone = profileRes.data?.timezone || 'UTC';
     const allEvents = eventsRes.data || [];
     const dayThemes = themesRes.data || [];
@@ -46,41 +52,64 @@ serve(async (req) => {
       return new Response(JSON.stringify({ message: 'No movable events found.', changes: [] }), { headers: corsHeaders });
     }
 
-    // 1. Categorize tasks using AI to match themes (with Robust Fallback)
+    // 1. Categorize and Cluster tasks using AI
     let categories = movableEvents.map(() => "General");
     
     try {
       const geminiKey = Deno.env.get('GEMINI_API_KEY');
-      if (geminiKey && dayThemes.length > 0) {
-        console.log("[optimise-schedule] Attempting AI categorization...");
+      if (geminiKey) {
+        console.log("[optimise-schedule] Attempting AI clustering...");
         const genAI = new GoogleGenerativeAI(geminiKey);
         const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
         const themeList = dayThemes.map(t => t.theme).filter(Boolean);
-        if (themeList.length > 0) {
-          const prompt = `
-            You are a scheduling assistant. Categorize the following tasks into one of these themes: [${themeList.join(', ')}].
-            If a task doesn't fit any theme, categorize it as "General".
-            
-            Tasks:
-            ${movableEvents.map(e => `- ${e.title}`).join('\n')}
-            
-            Return ONLY a JSON array of strings representing the theme for each task in order.
-            Example: ["Music", "Admin", "General"]
-          `;
+        
+        const prompt = `
+          You are a scheduling assistant. Your goal is to group "like" tasks together to minimize context switching.
+          
+          Available Themes: [${themeList.join(', ')}]
+          
+          Common Clusters to look for:
+          - "Admin/Communication": Emails, calls, planning, invoices.
+          - "Deep Work/Coding": Programming, "vibe coding", debugging, architecture.
+          - "Creative/Practice": Piano practice, music, writing, sketching.
+          - "Chores/Personal": Cleaning, groceries, errands.
+          
+          Tasks to categorize:
+          ${movableEvents.map(e => `- ${e.title}`).join('\n')}
+          
+          Instructions:
+          1. Assign each task a category. 
+          2. Prioritize matching the "Available Themes" if they fit.
+          3. If a task doesn't fit a theme but fits a "Common Cluster", use that cluster name.
+          4. Otherwise, use "General".
+          
+          Return ONLY a JSON array of strings representing the category for each task in order.
+          Example: ["Admin", "Deep Work", "Deep Work", "Piano Practice"]
+        `;
 
-          const aiResult = await model.generateContent(prompt);
-          const aiResponse = await aiResult.response;
-          const text = aiResponse.text();
-          const jsonMatch = text.match(/\[.*\]/s);
-          if (jsonMatch) {
-            categories = JSON.parse(jsonMatch[0]);
-            console.log("[optimise-schedule] AI categorization successful.");
-          }
+        const aiResult = await model.generateContent(prompt);
+        const aiResponse = await aiResult.response;
+        const text = aiResponse.text();
+        const jsonMatch = text.match(/\[.*\]/s);
+        if (jsonMatch) {
+          categories = JSON.parse(jsonMatch[0]);
+          console.log("[optimise-schedule] AI clustering successful.");
         }
       }
     } catch (aiError) {
-      console.error("[optimise-schedule] AI categorization failed (likely 503 or quota). Falling back to General.", aiError.message);
+      console.error("[optimise-schedule] AI clustering failed. Falling back to basic grouping.", aiError.message);
+    }
+
+    // Attach categories to events for sorting
+    const categorizedEvents = movableEvents.map((event, index) => ({
+      ...event,
+      temp_category: categories[index] || "General"
+    }));
+
+    // 2. Sort events by category to ensure they are processed (and thus placed) together
+    if (settings.group_similar_tasks !== false) {
+      categorizedEvents.sort((a, b) => a.temp_category.localeCompare(b.temp_category));
     }
 
     const proposedChanges = [];
@@ -98,10 +127,9 @@ serve(async (req) => {
       return new Date(Math.ceil(date.getTime() / ms) * ms);
     };
 
-    // 2. Redistribution Loop
-    for (let i = 0; i < movableEvents.length; i++) {
-      const event = movableEvents[i];
-      const taskTheme = categories[i] || "General";
+    // 3. Redistribution Loop
+    for (const event of categorizedEvents) {
+      const taskTheme = event.temp_category;
       const effectiveDuration = durationOverride || event.duration_minutes;
       const durationMs = effectiveDuration * 60000;
       
@@ -112,7 +140,6 @@ serve(async (req) => {
       let foundSlot = false;
       let dayOffset = 1;
 
-      // Extend search window to 30 days
       while (!foundSlot && dayOffset < 30) {
         let currentPointer = new Date();
         currentPointer.setDate(currentPointer.getDate() + dayOffset);
@@ -126,6 +153,7 @@ serve(async (req) => {
           continue;
         }
 
+        // If we have a theme match, try to stick to those days first (within the first week)
         if (preferredDays.length > 0 && !preferredDays.includes(dayOfWeek) && dayOffset < 8) {
           dayOffset++;
           continue;
@@ -173,6 +201,7 @@ serve(async (req) => {
             foundSlot = true;
             stats.tasks += 1;
             stats.hours += (effectiveDuration / 60);
+            // Place next task 5 mins after this one to keep them grouped
             stats.lastPointer = new Date(potentialEnd.getTime() + 5 * 60000);
             stats.lastPointer = alignTime(stats.lastPointer, slotAlignment);
 
