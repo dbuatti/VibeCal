@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 
 const Navigation = () => {
+  const [userEmail, setUserEmail] = useState<string | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
   const [profile, setProfile] = useState<any>(null);
@@ -16,9 +17,11 @@ const Navigation = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
+      setUserEmail(user.email || null);
+
       const { data, error } = await supabase
         .from('profiles')
-        .select('first_name, email, vibe_score, vibe_score_trend')
+        .select('first_name, vibe_score, vibe_score_trend')
         .eq('id', user.id)
         .single();
 
@@ -110,7 +113,7 @@ const Navigation = () => {
             </div>
             <div className="flex-1 overflow-hidden">
               <p className="font-bold text-gray-900 truncate">
-                {profile?.first_name || profile?.email?.split('@')[0] || 'User'}
+                {profile?.first_name || userEmail?.split('@')[0] || 'User'}
               </p>
               <p className="text-xs text-gray-400 font-medium">Pro Plan</p>
             </div>
