@@ -2,6 +2,8 @@
 
 import React, { useEffect, useState } from 'react';
 import Layout from '@/components/Layout';
+import WorkWindowSettings from '../components/settings/WorkWindowSettings';
+import KeywordManager from '../components/settings/KeywordManager';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,16 +13,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { cn } from '@/lib/utils';
-import { Save, Clock, Shield, Target, Apple, Mail, Lock, Eye, EyeOff, RefreshCw, ListOrdered, Calendar, Globe, Square, Plus, X, Sparkles, Ban, Briefcase } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
+import { Save, Shield, Target, Calendar, RefreshCw, Sparkles, Ban, Briefcase } from 'lucide-react';
 
 const Settings = () => {
   const [loading, setLoading] = useState(true);
   const [isTesting, setIsTesting] = useState(false);
   const [calendars, setCalendars] = useState<any[]>([]);
-  const [newMovableKeyword, setNewMovableKeyword] = useState('');
-  const [newLockedKeyword, setNewLockedKeyword] = useState('');
-  const [newWorkKeyword, setNewWorkKeyword] = useState('');
   
   const [settings, setSettings] = useState<any>({
     day_start_time: '09:00',
@@ -30,9 +28,9 @@ const Settings = () => {
     optimisation_aggressiveness: 'balanced',
     preview_mode_enabled: true,
     group_similar_tasks: true,
-    movable_keywords: ['arrangement', 'email', 'outreach', 'draft', 'exploration', 'clean', 'chore', 'practice'],
-    locked_keywords: ['meeting', 'call', 'appointment', 'rehearsal', 'lesson'],
-    work_keywords: ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session', 'assessment']
+    movable_keywords: [],
+    locked_keywords: [],
+    work_keywords: []
   });
 
   const [profile, setProfile] = useState<any>({
@@ -68,7 +66,7 @@ const Settings = () => {
             ...settingsRes.data,
             movable_keywords: settingsRes.data.movable_keywords || [],
             locked_keywords: settingsRes.data.locked_keywords || [],
-            work_keywords: settingsRes.data.work_keywords || ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session', 'assessment']
+            work_keywords: settingsRes.data.work_keywords || []
           });
         }
         if (profileRes.data) setProfile(profileRes.data);
@@ -135,89 +133,45 @@ const Settings = () => {
     }
   };
 
-  const addKeyword = async (type: 'movable' | 'locked' | 'work') => {
-    let keyword = '';
-    let field = '';
+  const handleAddKeyword = async (keyword: string, type: 'movable' | 'locked' | 'work') => {
+    const field = type === 'movable' ? 'movable_keywords' : type === 'locked' ? 'locked_keywords' : 'work_keywords';
+    const trimmed = keyword.toLowerCase();
     
-    if (type === 'movable') { keyword = newMovableKeyword; field = 'movable_keywords'; }
-    else if (type === 'locked') { keyword = newLockedKeyword; field = 'locked_keywords'; }
-    else { keyword = newWorkKeyword; field = 'work_keywords'; }
-
-    if (!keyword.trim()) return;
-    
-    const trimmed = keyword.trim().toLowerCase();
-    
-    if (settings[field].includes(trimmed)) {
-      if (type === 'movable') setNewMovableKeyword('');
-      else if (type === 'locked') setNewLockedKeyword('');
-      else setNewWorkKeyword('');
-      return;
-    }
+    if (settings[field].includes(trimmed)) return;
     
     const newKeywords = [...settings[field], trimmed];
-    setSettings(prev => ({
-      ...prev,
-      [field]: newKeywords
-    }));
-    
-    if (type === 'movable') setNewMovableKeyword('');
-    else if (type === 'locked') setNewLockedKeyword('');
-    else setNewWorkKeyword('');
+    setSettings(prev => ({ ...prev, [field]: newKeywords }));
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-      
-      const { error } = await supabase
-        .from('user_settings')
-        .upsert({ 
-          user_id: user.id, 
-          [field]: newKeywords 
-        }, { onConflict: 'user_id' });
-      
-      if (error) throw error;
-      showSuccess(`Added "${trimmed}" to ${type} list`);
-    } catch (err: any) {
+      await supabase.from('user_settings').upsert({ user_id: user.id, [field]: newKeywords }, { onConflict: 'user_id' });
+      showSuccess(`Added "${trimmed}"`);
+    } catch (err) {
       showError("Failed to save keyword");
     }
   };
 
-  const removeKeyword = async (kw: string, type: 'movable' | 'locked' | 'work') => {
+  const handleRemoveKeyword = async (kw: string, type: 'movable' | 'locked' | 'work') => {
     const field = type === 'movable' ? 'movable_keywords' : type === 'locked' ? 'locked_keywords' : 'work_keywords';
     const newKeywords = settings[field].filter((k: string) => k !== kw);
     
-    setSettings(prev => ({
-      ...prev,
-      [field]: newKeywords
-    }));
+    setSettings(prev => ({ ...prev, [field]: newKeywords }));
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-      
-      const { error } = await supabase
-        .from('user_settings')
-        .upsert({ 
-          user_id: user.id, 
-          [field]: newKeywords 
-        }, { onConflict: 'user_id' });
-      
-      if (error) throw error;
+      await supabase.from('user_settings').upsert({ user_id: user.id, [field]: newKeywords }, { onConflict: 'user_id' });
       showSuccess(`Removed "${kw}"`);
-    } catch (err: any) {
+    } catch (err) {
       showError("Failed to remove keyword");
     }
   };
 
   const toggleCalendar = async (id: string, enabled: boolean) => {
     try {
-      const { error } = await supabase
-        .from('user_calendars')
-        .update({ is_enabled: enabled })
-        .eq('id', id);
-      
+      const { error } = await supabase.from('user_calendars').update({ is_enabled: enabled }).eq('id', id);
       if (error) throw error;
-      
       setCalendars(calendars.map(c => c.id === id ? { ...c, is_enabled: enabled } : c));
       showSuccess(`Calendar ${enabled ? 'enabled' : 'disabled'}`);
     } catch (err: any) {
@@ -231,23 +185,15 @@ const Settings = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.provider_token) {
+        await supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: session.provider_token } });
+      }
       if (profile.apple_id && profile.apple_app_password) {
         await supabase.functions.invoke('sync-apple-calendar');
       }
-
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.provider_token) {
-        await supabase.functions.invoke('sync-calendar', {
-          body: { googleAccessToken: session.provider_token }
-        });
-      }
       
-      const { data: newCals } = await supabase
-        .from('user_calendars')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('provider', { ascending: true });
-      
+      const { data: newCals } = await supabase.from('user_calendars').select('*').eq('user_id', user.id).order('provider', { ascending: true });
       if (newCals) setCalendars(newCals);
       showSuccess('Calendar list refreshed!');
     } catch (err: any) {
@@ -273,158 +219,36 @@ const Settings = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-8">
-          <Card className="border-none shadow-sm rounded-2xl">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Clock className="text-indigo-600" size={20} />
-                Work Window
-              </CardTitle>
-              <CardDescription>Define when the optimiser is allowed to schedule tasks.</CardDescription>
-            </CardHeader>
-            <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-2">
-                <Label>Day Start</Label>
-                <input 
-                  type="time" 
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  value={settings.day_start_time} 
-                  onChange={(e) => setSettings({...settings, day_start_time: e.target.value})}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Day End</Label>
-                <input 
-                  type="time" 
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  value={settings.day_end_time} 
-                  onChange={(e) => setSettings({...settings, day_end_time: e.target.value})}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="flex items-center gap-2">
-                  <Clock size={14} className="text-gray-400" />
-                  Max Workload (Hours/Day)
-                </Label>
-                <Input 
-                  type="number" 
-                  value={settings.max_hours_per_day} 
-                  onChange={(e) => setSettings({...settings, max_hours_per_day: parseInt(e.target.value)})}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="flex items-center gap-2">
-                  <ListOrdered size={14} className="text-gray-400" />
-                  Max Tasks Per Day
-                </Label>
-                <Input 
-                  type="number" 
-                  placeholder="e.g. 5"
-                  value={settings.max_tasks_per_day || ''} 
-                  onChange={(e) => setSettings({...settings, max_tasks_per_day: parseInt(e.target.value)})}
-                />
-              </div>
-            </CardContent>
-          </Card>
+          <WorkWindowSettings settings={settings} setSettings={setSettings} />
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <Card className="border-none shadow-sm rounded-2xl">
-              <CardHeader className="pb-4">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Sparkles className="text-indigo-600" size={18} />
-                  Movable
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex gap-2">
-                  <Input 
-                    placeholder="e.g. 🎹" 
-                    value={newMovableKeyword}
-                    onChange={(e) => setNewMovableKeyword(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && addKeyword('movable')}
-                    className="rounded-xl h-9 text-xs"
-                  />
-                  <Button onClick={() => addKeyword('movable')} variant="secondary" size="sm" className="rounded-xl h-9">
-                    <Plus size={14} />
-                  </Button>
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {settings.movable_keywords.map((kw: string) => (
-                    <Badge key={kw} variant="secondary" className="px-2 py-1 rounded-lg bg-indigo-50 text-indigo-700 border-indigo-100 text-[10px] flex items-center gap-1">
-                      {kw}
-                      <button onClick={() => removeKeyword(kw, 'movable')} className="hover:text-indigo-900">
-                        <X size={10} />
-                      </button>
-                    </Badge>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-none shadow-sm rounded-2xl">
-              <CardHeader className="pb-4">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Ban className="text-red-500" size={18} />
-                  Locked
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex gap-2">
-                  <Input 
-                    placeholder="e.g. meeting" 
-                    value={newLockedKeyword}
-                    onChange={(e) => setNewLockedKeyword(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && addKeyword('locked')}
-                    className="rounded-xl h-9 text-xs"
-                  />
-                  <Button onClick={() => addKeyword('locked')} variant="secondary" size="sm" className="rounded-xl h-9">
-                    <Plus size={14} />
-                  </Button>
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {settings.locked_keywords.map((kw: string) => (
-                    <Badge key={kw} variant="secondary" className="px-2 py-1 rounded-lg bg-red-50 text-red-700 border-red-100 text-[10px] flex items-center gap-1">
-                      {kw}
-                      <button onClick={() => removeKeyword(kw, 'locked')} className="hover:text-red-900">
-                        <X size={10} />
-                      </button>
-                    </Badge>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-none shadow-sm rounded-2xl">
-              <CardHeader className="pb-4">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Briefcase className="text-amber-500" size={18} />
-                  Work Detection
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex gap-2">
-                  <Input 
-                    placeholder="e.g. audition" 
-                    value={newWorkKeyword}
-                    onChange={(e) => setNewWorkKeyword(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && addKeyword('work')}
-                    className="rounded-xl h-9 text-xs"
-                  />
-                  <Button onClick={() => addKeyword('work')} variant="secondary" size="sm" className="rounded-xl h-9">
-                    <Plus size={14} />
-                  </Button>
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {settings.work_keywords?.map((kw: string) => (
-                    <Badge key={kw} variant="secondary" className="px-2 py-1 rounded-lg bg-amber-50 text-amber-700 border-amber-100 text-[10px] flex items-center gap-1">
-                      {kw}
-                      <button onClick={() => removeKeyword(kw, 'work')} className="hover:text-amber-900">
-                        <X size={10} />
-                      </button>
-                    </Badge>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+            <KeywordManager 
+              title="Movable" 
+              icon={Sparkles} 
+              iconColor="text-indigo-600" 
+              keywords={settings.movable_keywords}
+              onAdd={(kw) => handleAddKeyword(kw, 'movable')}
+              onRemove={(kw) => handleRemoveKeyword(kw, 'movable')}
+              badgeVariant="indigo"
+            />
+            <KeywordManager 
+              title="Locked" 
+              icon={Ban} 
+              iconColor="text-red-500" 
+              keywords={settings.locked_keywords}
+              onAdd={(kw) => handleAddKeyword(kw, 'locked')}
+              onRemove={(kw) => handleRemoveKeyword(kw, 'locked')}
+              badgeVariant="red"
+            />
+            <KeywordManager 
+              title="Work Detection" 
+              icon={Briefcase} 
+              iconColor="text-amber-500" 
+              keywords={settings.work_keywords}
+              onAdd={(kw) => handleAddKeyword(kw, 'work')}
+              onRemove={(kw) => handleRemoveKeyword(kw, 'work')}
+              badgeVariant="amber"
+            />
           </div>
 
           <Card className="border-none shadow-sm rounded-2xl">
