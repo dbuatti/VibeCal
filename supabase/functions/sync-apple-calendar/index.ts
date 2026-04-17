@@ -33,12 +33,13 @@ serve(async (req) => {
 
     const { data: settings } = await supabaseAdmin
       .from('user_settings')
-      .select('movable_keywords, locked_keywords')
+      .select('movable_keywords, locked_keywords, work_keywords')
       .eq('user_id', user.id)
       .single();
     
     const movableKeywords = settings?.movable_keywords || [];
     const lockedKeywords = settings?.locked_keywords || [];
+    const workKeywords = settings?.work_keywords || ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session'];
 
     const { data: profile } = await supabaseAdmin.from('profiles').select('apple_id, apple_app_password, timezone').eq('id', user.id).single();
     if (!profile?.apple_id || !profile?.apple_app_password) {
@@ -180,7 +181,6 @@ serve(async (req) => {
         return new Date(Date.UTC(year, month, day, hour, min, sec));
       }
 
-      // For local times, we need to find the offset for the target timezone
       const targetTz = tzid || fallbackTz;
       try {
         const utcDate = new Date(Date.UTC(year, month, day, hour, min, sec));
@@ -207,13 +207,11 @@ serve(async (req) => {
         const offset = tzDate.getTime() - utcDate.getTime();
         return new Date(utcDate.getTime() - offset);
       } catch (e) {
-        console.warn(`[${functionName}] Timezone parsing failed for ${targetTz}, falling back to UTC.`);
         return new Date(Date.UTC(year, month, day, hour, min, sec));
       }
     };
 
     for (const cal of enabledCalendars) {
-      console.log(`[${functionName}] Fetching events for: "${cal.calendar_name}"`);
       const res = await fetch(getFullUrl(cal.calendar_id, homeSetUrl), {
         method: 'REPORT',
         headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/xml', 'Depth': '1' },
@@ -243,7 +241,8 @@ serve(async (req) => {
 
           if (!dtstartMatch || !uidMatch) continue;
 
-          const summary = (summaryMatch?.[1] || 'Untitled').trim();
+          // Clean up escaped characters in summary
+          const summary = (summaryMatch?.[1] || 'Untitled').trim().replace(/\\,/g, ',').replace(/\\;/g, ';');
           const start = parseIcsDate(dtstartMatch[2].trim(), dtstartMatch[1], userTimezone);
           if (!start) continue;
 
@@ -264,6 +263,8 @@ serve(async (req) => {
           const isExplicitlyLocked = lockedKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
           const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && (fixedKeywords.test(summary) || fixedPatterns.some(p => p.test(summary))));
           
+          const isWork = workKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
+
           const uniqueId = `${uid}-${start.getTime()}`;
           eventMap.set(uniqueId, {
             user_id: user.id,
@@ -273,6 +274,7 @@ serve(async (req) => {
             end_time: end.toISOString(),
             duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000),
             is_locked: isLocked,
+            is_work: isWork,
             provider: 'apple',
             source_calendar: cal.calendar_name,
             source_calendar_id: cal.calendar_id,

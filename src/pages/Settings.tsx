@@ -32,7 +32,7 @@ const Settings = () => {
     group_similar_tasks: true,
     movable_keywords: ['arrangement', 'email', 'outreach', 'draft', 'exploration', 'clean', 'chore', 'practice'],
     locked_keywords: ['meeting', 'call', 'appointment', 'rehearsal', 'lesson'],
-    work_keywords: ['meeting', 'call', 'lesson', 'audition', 'rehearsal']
+    work_keywords: ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session', 'assessment']
   });
 
   const [profile, setProfile] = useState<any>({
@@ -68,7 +68,7 @@ const Settings = () => {
             ...settingsRes.data,
             movable_keywords: settingsRes.data.movable_keywords || [],
             locked_keywords: settingsRes.data.locked_keywords || [],
-            work_keywords: settingsRes.data.work_keywords || []
+            work_keywords: settingsRes.data.work_keywords || ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session', 'assessment']
           });
         }
         if (profileRes.data) setProfile(profileRes.data);
