@@ -13,13 +13,10 @@ serve(async (req) => {
   }
 
   try {
-    console.log("[sync-calendar] Request received");
+    console.log("[sync-calendar] Starting Google Sync...");
     
     const authHeader = req.headers.get('Authorization')
-    if (!authHeader) throw new Error('No authorization header');
-
     const { googleAccessToken } = await req.json();
-    if (!googleAccessToken) throw new Error('Google access token is required');
 
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -27,30 +24,26 @@ serve(async (req) => {
       { global: { headers: { Authorization: authHeader } } }
     )
 
-    const { data: { user }, error: userError } = await supabaseClient.auth.getUser()
-    if (userError || !user) throw userError || new Error('User not found');
+    const { data: { user } } = await supabaseClient.auth.getUser()
 
-    // 1. Discover Google Calendars
-    const listRes = await fetch(
-      'https://www.googleapis.com/calendar/v3/users/me/calendarList',
-      { headers: { Authorization: `Bearer ${googleAccessToken}` } }
-    )
+    // 1. Discover/Update Calendar List
+    const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
+      headers: { Authorization: `Bearer ${googleAccessToken}` }
+    })
     const listData = await listRes.json()
-    const discovered = (listData.items || []).map(cal => ({
-      user_id: user.id,
-      calendar_id: cal.id,
-      calendar_name: cal.summary,
-      provider: 'google',
-      color: cal.backgroundColor || '#6366f1'
-    }))
-
-    if (discovered.length > 0) {
-      await supabaseClient
-        .from('user_calendars')
-        .upsert(discovered, { onConflict: 'user_id, calendar_id' })
+    
+    if (listData.items) {
+      const discovered = listData.items.map(cal => ({
+        user_id: user.id,
+        calendar_id: cal.id,
+        calendar_name: cal.summary,
+        provider: 'google',
+        color: cal.backgroundColor || '#6366f1'
+      }))
+      await supabaseClient.from('user_calendars').upsert(discovered, { onConflict: 'user_id, calendar_id' })
     }
 
-    // 2. Fetch enabled Google calendars
+    // 2. Get Enabled Calendars
     const { data: enabled } = await supabaseClient
       .from('user_calendars')
       .select('calendar_id, calendar_name')
@@ -58,69 +51,55 @@ serve(async (req) => {
       .eq('is_enabled', true)
       .eq('provider', 'google')
 
-    const enabledMap = new Map(enabled?.map(c => [c.calendar_id, c.calendar_name]) || [])
-    const enabledIds = Array.from(enabledMap.keys())
+    console.log(`[sync-calendar] Found ${enabled?.length || 0} enabled Google calendars.`);
 
-    // IMPORTANT: Clear the cache for Google events before re-syncing
-    // This prevents events from disabled calendars from sticking around.
-    await supabaseClient
-      .from('calendar_events_cache')
-      .delete()
-      .eq('user_id', user.id)
-      .eq('provider', 'google');
+    // Clear Google cache
+    await supabaseClient.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google');
 
-    if (enabledIds.length === 0) {
+    if (!enabled || enabled.length === 0) {
       return new Response(JSON.stringify({ message: 'No Google calendars enabled', count: 0 }), { headers: corsHeaders })
     }
 
-    // 3. Fetch events for enabled calendars
+    // 3. Fetch Events
     const now = new Date()
-    const fourteenDaysLater = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
-    
+    const end = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
     const allEvents = []
-    for (const calId of enabledIds) {
-      const response = await fetch(
-        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?timeMin=${now.toISOString()}&timeMax=${fourteenDaysLater.toISOString()}&singleEvents=true&orderBy=startTime`,
+
+    for (const cal of enabled) {
+      console.log(`[sync-calendar] Fetching events for: ${cal.calendar_name}`);
+      const res = await fetch(
+        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.calendar_id)}/events?timeMin=${now.toISOString()}&timeMax=${end.toISOString()}&singleEvents=true&orderBy=startTime`,
         { headers: { Authorization: `Bearer ${googleAccessToken}` } }
       )
-      const data = await response.json()
-      const events = data.items || []
+      const data = await res.json()
       
-      events.forEach(event => {
-        const start = new Date(event.start.dateTime || event.start.date)
-        const end = new Date(event.end.dateTime || event.end.date)
-        
-        allEvents.push({
-          user_id: user.id,
-          event_id: event.id,
-          title: event.summary || 'Untitled Event',
-          description: event.description || '',
-          start_time: start.toISOString(),
-          end_time: end.toISOString(),
-          duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000),
-          is_recurring: !!event.recurringEventId,
-          is_locked: !!event.recurringEventId || (!!event.attendees && event.attendees.length > 1),
-          provider: 'google',
-          source_calendar: enabledMap.get(calId),
-          last_synced_at: new Date().toISOString()
+      if (data.items) {
+        data.items.forEach(event => {
+          const start = new Date(event.start.dateTime || event.start.date)
+          const end = new Date(event.end.dateTime || event.end.date)
+          allEvents.push({
+            user_id: user.id,
+            event_id: event.id,
+            title: event.summary || 'Untitled',
+            start_time: start.toISOString(),
+            end_time: end.toISOString(),
+            duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000),
+            is_locked: !!event.recurringEventId || (event.attendees?.length > 1),
+            provider: 'google',
+            source_calendar: cal.calendar_name,
+            last_synced_at: new Date().toISOString()
+          })
         })
-      })
+      }
     }
 
     if (allEvents.length > 0) {
-      await supabaseClient
-        .from('calendar_events_cache')
-        .upsert(allEvents, { onConflict: 'user_id, event_id' })
+      await supabaseClient.from('calendar_events_cache').upsert(allEvents, { onConflict: 'user_id, event_id' })
     }
 
-    return new Response(
-      JSON.stringify({ message: 'Sync successful', count: allEvents.length, events: allEvents }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    )
+    return new Response(JSON.stringify({ count: allEvents.length }), { headers: corsHeaders })
   } catch (error) {
-    return new Response(
-      JSON.stringify({ error: error.message }),
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    )
+    console.error("[sync-calendar] Error:", error.message);
+    return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders })
   }
 })
