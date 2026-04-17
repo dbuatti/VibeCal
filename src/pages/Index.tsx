@@ -1,20 +1,45 @@
 "use client";
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Layout from '@/components/Layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Sparkles, ArrowRight, Calendar as CalendarIcon, Clock, CheckCircle2, Zap, Lock, Unlock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Link } from 'react-router-dom';
+import { supabase } from '@/integrations/supabase/client';
+import { format } from 'date-fns';
 
 const Dashboard = () => {
+  const [events, setEvents] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchEvents = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data, error } = await supabase
+        .from('calendar_events_cache')
+        .select('*')
+        .order('start_time', { ascending: true })
+        .limit(5);
+
+      if (!error && data) {
+        setEvents(data);
+      }
+      setLoading(false);
+    };
+
+    fetchEvents();
+  }, []);
+
   return (
     <Layout>
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 mb-10">
         <div>
-          <h1 className="text-4xl font-bold text-gray-900 tracking-tight">Good morning, Alex</h1>
-          <p className="text-gray-500 mt-2 text-lg">Your Monday is looking <span className="text-indigo-600 font-semibold">highly aligned</span> with your Music theme.</p>
+          <h1 className="text-4xl font-bold text-gray-900 tracking-tight">Good morning</h1>
+          <p className="text-gray-500 mt-2 text-lg">Your schedule is being <span className="text-indigo-600 font-semibold">aligned</span> with your themes.</p>
         </div>
         <Link to="/optimise">
           <Button className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl px-8 py-7 h-auto flex gap-3 shadow-xl shadow-indigo-100 transition-all hover:scale-[1.02] active:scale-[0.98]">
@@ -31,14 +56,14 @@ const Dashboard = () => {
           </CardHeader>
           <CardContent>
             <div className="flex items-baseline gap-2">
-              <div className="text-4xl font-black text-gray-900">5.5</div>
-              <div className="text-gray-400 font-medium">hours</div>
+              <div className="text-4xl font-black text-gray-900">{events.length > 0 ? events.length : '0'}</div>
+              <div className="text-gray-400 font-medium">events</div>
             </div>
             <div className="mt-4 h-2 bg-gray-50 rounded-full overflow-hidden">
-              <div className="h-full bg-green-500 rounded-full w-[70%]" />
+              <div className="h-full bg-green-500 rounded-full w-[40%]" />
             </div>
             <p className="text-xs text-green-600 mt-3 flex items-center gap-1 font-semibold">
-              <CheckCircle2 size={14} /> 85% of daily capacity
+              <CheckCircle2 size={14} /> Synced from Google
             </p>
           </CardContent>
         </Card>
@@ -49,14 +74,14 @@ const Dashboard = () => {
           </CardHeader>
           <CardContent>
             <div className="flex items-baseline gap-2">
-              <div className="text-4xl font-black text-indigo-600">92%</div>
+              <div className="text-4xl font-black text-indigo-600">88%</div>
             </div>
             <div className="mt-4 flex gap-1">
               {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((i) => (
-                <div key={i} className={cn("h-2 flex-1 rounded-full", i <= 9 ? "bg-indigo-500" : "bg-gray-100")} />
+                <div key={i} className={cn("h-2 flex-1 rounded-full", i <= 8 ? "bg-indigo-500" : "bg-gray-100")} />
               ))}
             </div>
-            <p className="text-xs text-indigo-600 mt-3 font-semibold">Music Day (Monday)</p>
+            <p className="text-xs text-indigo-600 mt-3 font-semibold">Optimisation Recommended</p>
           </CardContent>
         </Card>
 
@@ -66,17 +91,17 @@ const Dashboard = () => {
           </CardHeader>
           <CardContent>
             <div className="flex items-baseline gap-2">
-              <div className="text-4xl font-black text-gray-900">3</div>
+              <div className="text-4xl font-black text-gray-900">--</div>
               <div className="text-gray-400 font-medium">sessions</div>
             </div>
             <div className="mt-4 flex -space-x-2">
-              {[1, 2, 3].map((i) => (
+              {[1, 2].map((i) => (
                 <div key={i} className="w-8 h-8 rounded-full bg-indigo-100 border-2 border-white flex items-center justify-center">
                   <Zap size={14} className="text-indigo-600" />
                 </div>
               ))}
             </div>
-            <p className="text-xs text-gray-500 mt-3 font-semibold">Minimal context switching</p>
+            <p className="text-xs text-gray-500 mt-3 font-semibold">Run optimiser to group tasks</p>
           </CardContent>
         </Card>
       </div>
@@ -88,43 +113,43 @@ const Dashboard = () => {
               <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
                 <Clock size={20} className="text-indigo-600" />
               </div>
-              Today's Flow
+              Upcoming Events
             </h2>
-            <Button variant="ghost" className="text-indigo-600 font-bold hover:bg-indigo-50 rounded-xl">
-              View Full Calendar
-            </Button>
           </div>
           
           <div className="space-y-4">
-            {[
-              { title: 'Piano Practice', time: '10:00 - 10:30', category: 'Music', status: 'Locked', color: 'bg-purple-500' },
-              { title: 'Arranging Session', time: '10:30 - 11:30', category: 'Music', status: 'Movable', color: 'bg-purple-400' },
-              { title: 'Lunch & Rest', time: '12:00 - 13:00', category: 'Rest', status: 'Locked', color: 'bg-green-400' },
-              { title: 'Kinesiology Study', time: '13:00 - 14:00', category: 'Kinesiology', status: 'Locked', color: 'bg-blue-500' },
-            ].map((task, i) => (
-              <div key={i} className="bg-white p-5 rounded-[1.5rem] border border-gray-100 flex items-center justify-between group hover:border-indigo-200 hover:shadow-lg hover:shadow-indigo-50/50 transition-all duration-300 cursor-pointer">
-                <div className="flex items-center gap-5">
-                  <div className={cn("w-1.5 h-12 rounded-full", task.color)} />
-                  <div>
-                    <h3 className="font-bold text-gray-900 text-lg">{task.title}</h3>
-                    <div className="flex items-center gap-2 text-gray-500 mt-0.5">
-                      <span className="text-sm font-medium">{task.time}</span>
-                      <span className="w-1 h-1 bg-gray-300 rounded-full" />
-                      <span className="text-sm font-medium">{task.category}</span>
+            {loading ? (
+              <div className="text-center py-10 text-gray-400">Loading your schedule...</div>
+            ) : events.length > 0 ? (
+              events.map((event, i) => (
+                <div key={i} className="bg-white p-5 rounded-[1.5rem] border border-gray-100 flex items-center justify-between group hover:border-indigo-200 hover:shadow-lg hover:shadow-indigo-50/50 transition-all duration-300 cursor-pointer">
+                  <div className="flex items-center gap-5">
+                    <div className="w-1.5 h-12 rounded-full bg-indigo-400" />
+                    <div>
+                      <h3 className="font-bold text-gray-900 text-lg">{event.title}</h3>
+                      <div className="flex items-center gap-2 text-gray-500 mt-0.5">
+                        <span className="text-sm font-medium">
+                          {format(new Date(event.start_time), 'HH:mm')} - {format(new Date(event.end_time), 'HH:mm')}
+                        </span>
+                        <span className="w-1 h-1 bg-gray-300 rounded-full" />
+                        <span className="text-sm font-medium">{format(new Date(event.start_time), 'MMM d')}</span>
+                      </div>
                     </div>
                   </div>
+                  <div className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider bg-gray-50 text-gray-400">
+                    <Unlock size={14} />
+                    Movable
+                  </div>
                 </div>
-                <div className={cn(
-                  "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors",
-                  task.status === 'Locked' 
-                    ? "bg-gray-50 text-gray-400" 
-                    : "bg-indigo-50 text-indigo-600 group-hover:bg-indigo-600 group-hover:text-white"
-                )}>
-                  {task.status === 'Locked' ? <Lock size={14} /> : <Unlock size={14} />}
-                  {task.status}
-                </div>
+              ))
+            ) : (
+              <div className="bg-white p-10 rounded-[2rem] border border-dashed border-gray-200 text-center">
+                <p className="text-gray-500 mb-4">No events found in your cache.</p>
+                <Link to="/optimise">
+                  <Button variant="outline" className="rounded-xl">Sync Calendar Now</Button>
+                </Link>
               </div>
-            ))}
+            )}
           </div>
         </div>
 
@@ -178,16 +203,6 @@ const Dashboard = () => {
               </Link>
             </div>
           </div>
-
-          <Card className="border-none bg-gradient-to-br from-indigo-600 to-purple-700 rounded-[2rem] p-8 text-white shadow-xl shadow-indigo-200">
-            <h3 className="text-xl font-bold mb-2">AI Insight</h3>
-            <p className="text-indigo-100 leading-relaxed">
-              "You're most productive between 10 AM and 1 PM. I've moved your 'Arranging Session' to this window to maximise your creative output."
-            </p>
-            <Button className="mt-6 bg-white/20 hover:bg-white/30 text-white border-none rounded-xl font-bold">
-              Learn More
-            </Button>
-          </Card>
         </div>
       </div>
     </Layout>
