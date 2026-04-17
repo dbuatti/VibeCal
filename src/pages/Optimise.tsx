@@ -3,37 +3,50 @@ import Layout from '@/components/Layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
-import { Sparkles, RefreshCw, CheckCircle2, AlertCircle, ArrowRight } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { Sparkles, RefreshCw, CheckCircle2, AlertCircle } from 'lucide-react';
+import { supabase } from '@/integrations/supabase/client';
+import { showSuccess, showError } from '@/utils/toast';
 
 const Optimise = () => {
   const [isOptimising, setIsOptimising] = useState(false);
   const [progress, setProgress] = useState(0);
   const [step, setStep] = useState('');
 
-  const runOptimisation = () => {
+  const runOptimisation = async () => {
     setIsOptimising(true);
     setProgress(0);
     
-    const steps = [
-      { label: 'Syncing Google Calendar...', p: 20 },
-      { label: 'Classifying tasks via Gemini...', p: 45 },
-      { label: 'Applying day themes...', p: 70 },
-      { label: 'Resolving clashes...', p: 90 },
-      { label: 'Finalising schedule...', p: 100 },
-    ];
+    try {
+      // Step 1: Sync Calendar
+      setStep('Syncing Google Calendar...');
+      setProgress(20);
+      
+      const { data, error } = await supabase.functions.invoke('sync-calendar');
+      if (error) throw error;
 
-    let currentStep = 0;
-    const interval = setInterval(() => {
-      if (currentStep < steps.length) {
-        setStep(steps[currentStep].label);
-        setProgress(steps[currentStep].p);
-        currentStep++;
-      } else {
-        clearInterval(interval);
-        setIsOptimising(false);
-      }
-    }, 1500);
+      // Step 2: AI Processing (Simulated for now)
+      setStep('Classifying tasks via Gemini...');
+      setProgress(45);
+      await new Promise(r => setTimeout(r, 1500));
+
+      setStep('Applying day themes...');
+      setProgress(70);
+      await new Promise(r => setTimeout(r, 1500));
+
+      setStep('Resolving clashes...');
+      setProgress(90);
+      await new Promise(r => setTimeout(r, 1000));
+
+      setStep('Finalising schedule...');
+      setProgress(100);
+      await new Promise(r => setTimeout(r, 500));
+
+      showSuccess(`Successfully synced ${data.count} events!`);
+    } catch (err: any) {
+      showError(err.message);
+    } finally {
+      setIsOptimising(false);
+    }
   };
 
   return (

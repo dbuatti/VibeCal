@@ -27,6 +27,8 @@ const Login = () => {
             queryParams={{
               access_type: 'offline',
               prompt: 'consent',
+              // Requesting permission to read/write calendar events
+              scopes: 'https://www.googleapis.com/auth/calendar.events'
             }}
             onlyThirdPartyProviders={true}
             appearance={{
