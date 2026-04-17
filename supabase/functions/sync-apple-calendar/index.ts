@@ -13,7 +13,7 @@ serve(async (req) => {
   }
 
   try {
-    console.log("[sync-apple-calendar] Starting multi-stage calendar discovery...");
+    console.log("[sync-apple-calendar] Starting strict calendar discovery...");
     
     const authHeader = req.headers.get('Authorization')
     const supabaseClient = createClient(
@@ -78,7 +78,7 @@ serve(async (req) => {
     
     const homeSetUrl = getFullUrl(homeSetPath, homeSetRes.url);
 
-    // 3. Find individual calendars, names, and COLORS
+    // 3. Find individual calendars with STRICT component filtering
     const listRes = await fetch(homeSetUrl, {
       method: 'PROPFIND',
       headers: {
@@ -87,11 +87,12 @@ serve(async (req) => {
         'Depth': '1'
       },
       body: `<?xml version="1.0" encoding="utf-8" ?>
-      <d:propfind xmlns:d="DAV:" xmlns:ical="http://apple.com/ns/ical/">
+      <d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav" xmlns:ical="http://apple.com/ns/ical/">
         <d:prop>
           <d:resourcetype />
           <d:displayname />
           <ical:calendar-color />
+          <c:supported-calendar-component-set />
         </d:prop>
       </d:propfind>`
     });
@@ -102,14 +103,23 @@ serve(async (req) => {
     const normHomePath = homeSetPath.replace(/\/$/, '');
 
     for (const resp of responses) {
+      // Check if it's a calendar collection
       if (resp.includes('<calendar') || resp.includes(':calendar')) {
+        
+        // STRICT FILTER: Only include if it supports VEVENT (actual calendar events)
+        // Exclude if it only supports VTODO (Reminders)
+        const supportsEvents = resp.includes('VEVENT');
+        const supportsTasksOnly = resp.includes('VTODO') && !resp.includes('VEVENT');
+        
+        if (!supportsEvents || supportsTasksOnly) continue;
+
         const hrefMatch = resp.match(/<(?:[^:>]*:)?href[^>]*>([^<]+)/i);
         const nameMatch = resp.match(/<(?:[^:>]*:)?displayname[^>]*>([^<]+)/i);
         const colorMatch = resp.match(/<(?:[^:>]*:)?calendar-color[^>]*>([^<]+)/i);
         
         const href = hrefMatch?.[1];
         const name = nameMatch?.[1] || href?.split('/').filter(Boolean).pop() || 'Unnamed Calendar';
-        const color = colorMatch?.[1] || '#6366f1'; // Default indigo if not found
+        const color = colorMatch?.[1] || '#6366f1';
         
         if (href) {
           const normHref = href.replace(/\/$/, '');
