@@ -1,14 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Layout from '@/components/Layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, Bug, ArrowRight, Zap, Apple, Info, Globe } from 'lucide-react';
+import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, Bug, ArrowRight, Zap, Apple, Info, Globe, ChevronRight } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { format } from 'date-fns';
+import { cn } from '@/lib/utils';
 
 const Optimise = () => {
   const [isOptimising, setIsOptimising] = useState(false);
@@ -16,14 +17,16 @@ const Optimise = () => {
   const [step, setStep] = useState('');
   const [syncReport, setSyncReport] = useState<any>(null);
   const [optimisationResult, setOptimisationResult] = useState<any>(null);
-  const [showDebug, setShowDebug] = useState(false);
+  const [isReviewing, setIsReviewing] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
+  const [events, setEvents] = useState<any[]>([]);
 
   const runFullAlignment = async () => {
     setIsOptimising(true);
     setProgress(0);
     setSyncReport(null);
     setOptimisationResult(null);
+    setIsReviewing(false);
     
     try {
       // 1. Google Sync
@@ -33,51 +36,76 @@ const Optimise = () => {
       const providerToken = session?.provider_token;
 
       if (providerToken) {
-        const { data: gData, error: gError } = await supabase.functions.invoke('sync-calendar', {
+        await supabase.functions.invoke('sync-calendar', {
           body: { googleAccessToken: providerToken }
         });
-        if (gError) console.warn("Google sync failed:", gError);
-      } else {
-        console.warn("No Google token found, skipping Google sync.");
       }
 
       // 2. Apple Sync
       setProgress(40);
       setStep('Syncing Apple Calendar...');
-      const { data: aData, error: aError } = await supabase.functions.invoke('sync-apple-calendar');
-      if (aError) console.warn("Apple sync failed:", aError);
+      await supabase.functions.invoke('sync-apple-calendar');
 
-      // 3. Fetch Combined Cache for Report
-      setProgress(60);
-      setStep('Analyzing combined schedule...');
-      const { data: events, error: fetchError } = await supabase
+      // 3. Fetch Combined Cache
+      setProgress(70);
+      setStep('Preparing review list...');
+      const { data: fetchedEvents, error: fetchError } = await supabase
         .from('calendar_events_cache')
         .select('*')
         .order('start_time', { ascending: true });
 
       if (fetchError) throw fetchError;
 
+      setEvents(fetchedEvents || []);
       setSyncReport({
-        total: events?.length || 0,
-        googleCount: events?.filter(e => e.provider === 'google').length || 0,
-        appleCount: events?.filter(e => e.provider === 'apple').length || 0,
-        samples: events || [],
-        lastSync: new Date().toISOString()
+        total: fetchedEvents?.length || 0,
+        googleCount: fetchedEvents?.filter(e => e.provider === 'google').length || 0,
+        appleCount: fetchedEvents?.filter(e => e.provider === 'apple').length || 0,
       });
 
-      // 4. Run Optimisation
-      setProgress(80);
-      setStep('Calculating optimal alignment...');
-      const { data: optData, error: optError } = await supabase.functions.invoke('optimise-schedule');
-      
-      if (optError) throw optError;
-      if (optData?.error) throw new Error(optData.error);
-
-      setOptimisationResult(optData);
+      setIsReviewing(true);
       setProgress(100);
-      showSuccess("Alignment calculation complete!");
+      showSuccess("Calendars synced! Please review your tasks.");
     } catch (err: any) {
       showError(err.message);
+    } finally {
+      setIsOptimising(false);
+    }
+  };
+
+  const toggleLock = async (eventId: string, currentStatus: boolean) => {
+    try {
+      const { error } = await supabase
+        .from('calendar_events_cache')
+        .update({ is_locked: !currentStatus })
+        .eq('event_id', eventId);
+
+      if (error) throw error;
+
+      setEvents(events.map(e => e.event_id === eventId ? { ...e, is_locked: !currentStatus } : e));
+    } catch (err: any) {
+      showError("Failed to update lock status");
+    }
+  };
+
+  const runOptimisation = async () => {
+    setIsOptimising(true);
+    setProgress(0);
+    setStep('Calculating optimal alignment...');
+    setIsReviewing(false);
+    
+    try {
+      const { data, error } = await supabase.functions.invoke('optimise-schedule');
+      
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+
+      setOptimisationResult(data);
+      setProgress(100);
+      showSuccess("Optimisation complete!");
+    } catch (err: any) {
+      showError(err.message);
+      setIsReviewing(true); // Go back to review if it fails
     } finally {
       setIsOptimising(false);
     }
@@ -108,6 +136,7 @@ const Optimise = () => {
       showSuccess("Schedule updated successfully!");
       setOptimisationResult(null);
       setSyncReport(null);
+      setIsReviewing(false);
     } catch (err: any) {
       showError(err.message);
     } finally {
@@ -126,78 +155,43 @@ const Optimise = () => {
             <h1 className="text-4xl font-bold text-gray-900 mb-2">Schedule Optimiser</h1>
             <p className="text-lg text-gray-500">Align your movable tasks with your work window.</p>
           </div>
-          <div className="flex items-center space-x-2 bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
-            <Bug size={16} className="text-gray-400" />
-            <Label htmlFor="debug-mode" className="text-xs font-bold text-gray-500 uppercase tracking-wider">Debug Mode</Label>
-            <Switch id="debug-mode" checked={showDebug} onCheckedChange={setShowDebug} />
-          </div>
         </div>
 
-        {!isOptimising && !optimisationResult && (
-          <div className="space-y-8">
-            <Card className="border-none shadow-2xl shadow-indigo-100/50 rounded-[2.5rem] overflow-hidden bg-white">
-              <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-12 text-white text-center">
-                <div className="w-20 h-20 bg-white/20 rounded-3xl flex items-center justify-center mx-auto mb-8 backdrop-blur-md">
-                  <Zap size={40} />
-                </div>
-                <h2 className="text-3xl font-black mb-4">Full Schedule Alignment</h2>
-                <p className="text-indigo-100 text-lg max-w-md mx-auto mb-10">
-                  Sync both Google and Apple calendars, then automatically redistribute movable tasks to your optimal focus windows.
-                </p>
-                <Button 
-                  onClick={runFullAlignment}
-                  className="bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl px-12 py-8 text-xl font-black shadow-xl transition-all hover:scale-[1.02] active:scale-[0.98]"
-                >
-                  Start Alignment
-                </Button>
+        {/* INITIAL STATE */}
+        {!isOptimising && !isReviewing && !optimisationResult && (
+          <Card className="border-none shadow-2xl shadow-indigo-100/50 rounded-[2.5rem] overflow-hidden bg-white">
+            <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-12 text-white text-center">
+              <div className="w-20 h-20 bg-white/20 rounded-3xl flex items-center justify-center mx-auto mb-8 backdrop-blur-md">
+                <Zap size={40} />
               </div>
-              <CardContent className="p-8 bg-gray-50/50 border-t border-gray-100">
-                <div className="flex justify-center gap-12">
-                  <div className="flex items-center gap-3 text-gray-500 font-bold">
-                    <Globe size={20} className="text-blue-500" /> Google Sync
-                  </div>
-                  <div className="flex items-center gap-3 text-gray-500 font-bold">
-                    <Apple size={20} className="text-gray-900" /> Apple Sync
-                  </div>
-                  <div className="flex items-center gap-3 text-gray-500 font-bold">
-                    <Sparkles size={20} className="text-indigo-500" /> AI Optimise
-                  </div>
+              <h2 className="text-3xl font-black mb-4">Full Schedule Alignment</h2>
+              <p className="text-indigo-100 text-lg max-w-md mx-auto mb-10">
+                Sync both Google and Apple calendars, then manually review which tasks should be movable.
+              </p>
+              <Button 
+                onClick={runFullAlignment}
+                className="bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl px-12 py-8 text-xl font-black shadow-xl transition-all hover:scale-[1.02] active:scale-[0.98]"
+              >
+                Start Sync & Review
+              </Button>
+            </div>
+            <CardContent className="p-8 bg-gray-50/50 border-t border-gray-100">
+              <div className="flex justify-center gap-12">
+                <div className="flex items-center gap-3 text-gray-500 font-bold">
+                  <Globe size={20} className="text-blue-500" /> Google
                 </div>
-              </CardContent>
-            </Card>
-
-            {syncReport && showDebug && (
-              <div className="space-y-4">
-                <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-                  <Info size={20} className="text-indigo-600" />
-                  Discovered Events Debug ({syncReport.total})
-                </h3>
-                <div className="grid grid-cols-1 gap-3">
-                  {syncReport.samples.map((event: any, i: number) => (
-                    <div key={i} className="bg-slate-900 p-4 rounded-2xl font-mono text-xs text-emerald-400 border border-slate-800">
-                      <div className="flex justify-between mb-2 border-b border-slate-800 pb-2">
-                        <span className="text-slate-400">#{i + 1} {event.title}</span>
-                        <div className="flex items-center gap-3">
-                          <span className={event.is_locked ? "text-red-400" : "text-emerald-400"}>
-                            {event.is_locked ? '[LOCKED]' : '[MOVABLE]'}
-                          </span>
-                          <span className="text-indigo-400 uppercase">[{event.provider}]</span>
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>Start: {format(new Date(event.start_time), 'MMM d, HH:mm')}</div>
-                        <div>End: {format(new Date(event.end_time), 'MMM d, HH:mm')}</div>
-                        <div>Duration: {event.duration_minutes}m</div>
-                        <div>Calendar: {event.source_calendar}</div>
-                      </div>
-                    </div>
-                  ))}
+                <div className="flex items-center gap-3 text-gray-500 font-bold">
+                  <Apple size={20} className="text-gray-900" /> Apple
+                </div>
+                <div className="flex items-center gap-3 text-gray-500 font-bold">
+                  <Sparkles size={20} className="text-indigo-500" /> AI Optimise
                 </div>
               </div>
-            )}
-          </div>
+            </CardContent>
+          </Card>
         )}
 
+        {/* LOADING STATE */}
         {isOptimising && (
           <Card className="border-none shadow-sm rounded-[2.5rem] p-16 text-center bg-white">
             <div className="relative w-24 h-24 mx-auto mb-10">
@@ -214,11 +208,83 @@ const Optimise = () => {
           </Card>
         )}
 
+        {/* REVIEW STATE */}
+        {isReviewing && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex items-center justify-between bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900">Review & Lock Tasks</h2>
+                <p className="text-gray-500 font-medium">Decide which events the AI is allowed to move.</p>
+              </div>
+              <Button 
+                onClick={runOptimisation}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl px-8 py-6 h-auto font-black flex gap-3 shadow-lg shadow-indigo-100"
+              >
+                Calculate Optimisation
+                <ChevronRight size={20} />
+              </Button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4">
+              {events.map((event, i) => (
+                <div 
+                  key={i} 
+                  className={cn(
+                    "p-5 rounded-[1.5rem] border transition-all duration-300 flex items-center justify-between group",
+                    event.is_locked 
+                      ? "bg-white border-gray-100 opacity-80" 
+                      : "bg-indigo-50/30 border-indigo-100 shadow-sm"
+                  )}
+                >
+                  <div className="flex items-center gap-5">
+                    <div className={cn(
+                      "w-12 h-12 rounded-2xl flex items-center justify-center transition-colors",
+                      event.is_locked ? "bg-gray-50 text-gray-400" : "bg-white text-indigo-600 shadow-sm"
+                    )}>
+                      {event.is_locked ? <Lock size={20} /> : <Unlock size={20} />}
+                    </div>
+                    <div>
+                      <h3 className={cn("font-bold text-lg", event.is_locked ? "text-gray-500" : "text-gray-900")}>
+                        {event.title}
+                      </h3>
+                      <div className="flex items-center gap-2 text-gray-400 mt-0.5 font-medium text-sm">
+                        <span className="flex items-center gap-1">
+                          {event.provider === 'google' ? <Globe size={12} className="text-blue-400" /> : <Apple size={12} className="text-gray-400" />}
+                          {event.source_calendar}
+                        </span>
+                        <span className="w-1 h-1 bg-gray-200 rounded-full" />
+                        <span>{format(new Date(event.start_time), 'MMM d, HH:mm')}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-4">
+                    <div className="text-right hidden md:block">
+                      <p className={cn("text-[10px] font-black uppercase tracking-widest", event.is_locked ? "text-gray-400" : "text-indigo-400")}>
+                        Status
+                      </p>
+                      <p className={cn("font-bold text-sm", event.is_locked ? "text-gray-500" : "text-indigo-600")}>
+                        {event.is_locked ? 'Fixed' : 'Movable'}
+                      </p>
+                    </div>
+                    <Switch 
+                      checked={!event.is_locked} 
+                      onCheckedChange={() => toggleLock(event.event_id, event.is_locked)}
+                      className="data-[state=checked]:bg-indigo-600"
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* RESULTS STATE */}
         {optimisationResult && (
-          <div className="space-y-8">
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-bold text-gray-900">Proposed Schedule Changes</h2>
-              <Button variant="outline" onClick={() => { setSyncReport(null); setOptimisationResult(null); }} className="rounded-xl border-gray-200">
+              <Button variant="outline" onClick={() => { setSyncReport(null); setOptimisationResult(null); setIsReviewing(false); }} className="rounded-xl border-gray-200">
                 <RefreshCw size={16} className="mr-2" /> Reset & Re-sync
               </Button>
             </div>
