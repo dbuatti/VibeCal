@@ -54,10 +54,15 @@ serve(async (req) => {
     const dayThemes = themesRes.data || [];
     const workKeywords = settings.work_keywords || [];
 
-    // CRITICAL: Only process events from today onwards
-    const now = new Date();
-    now.setHours(0, 0, 0, 0);
-    const currentEvents = allEvents.filter(e => new Date(e.start_time) >= now);
+    // CRITICAL: Only process events from today onwards in user's timezone
+    const nowInTz = new Date(new Date().toLocaleString('en-US', { timeZone: userTimezone }));
+    const todayStart = new Date(nowInTz);
+    todayStart.setHours(0, 0, 0, 0);
+    
+    const currentEvents = allEvents.filter(e => {
+      const eventStart = new Date(e.start_time);
+      return eventStart >= todayStart;
+    });
 
     const fixedEvents = currentEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
     const movableEvents = currentEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
@@ -140,9 +145,8 @@ serve(async (req) => {
         
         let dayOffset = 0; // Start from today
         while (!foundSlot && dayOffset <= 14) {
-          let currentPointer = new Date();
+          let currentPointer = new Date(todayStart);
           currentPointer.setDate(currentPointer.getDate() + dayOffset);
-          currentPointer.setHours(0, 0, 0, 0);
           
           const dayOfWeek = currentPointer.getDay();
           const dayKey = currentPointer.toISOString().split('T')[0];
@@ -165,8 +169,6 @@ serve(async (req) => {
           if (!stats.lastPointer) {
             const dayStart = new Date(currentPointer);
             dayStart.setUTCHours(startH - offset, startM, 0, 0);
-            // If today, don't schedule in the past
-            const nowInTz = new Date(new Date().toLocaleString('en-US', { timeZone: userTimezone }));
             const effectiveStart = dayOffset === 0 && nowInTz > dayStart ? nowInTz : dayStart;
             stats.lastPointer = alignTime(effectiveStart, slotAlignment);
           }

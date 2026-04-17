@@ -14,139 +14,75 @@ serve(async (req) => {
 
   try {
     console.log("[sync-calendar] START - Google Sync Process");
-    
     const authHeader = req.headers.get('Authorization')
     const { googleAccessToken } = await req.json();
+    if (!googleAccessToken) return new Response(JSON.stringify({ error: "Missing Google Access Token" }), { status: 400, headers: corsHeaders });
 
-    if (!googleAccessToken) {
-      console.error("[sync-calendar] ERROR: Missing Google Access Token");
-      return new Response(JSON.stringify({ error: "Missing Google Access Token" }), { status: 400, headers: corsHeaders });
-    }
-
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    )
-
-    const supabaseUser = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: authHeader } } }
-    )
+    const supabaseAdmin = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '')
+    const supabaseUser = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_ANON_KEY') ?? '', { global: { headers: { Authorization: authHeader } } })
     const { data: { user } } = await supabaseUser.auth.getUser()
     if (!user) throw new Error("Unauthorized");
 
-    const { data: settings } = await supabaseAdmin
-      .from('user_settings')
-      .select('movable_keywords, locked_keywords')
-      .eq('user_id', user.id)
-      .single();
-    
+    const { data: settings } = await supabaseAdmin.from('user_settings').select('movable_keywords, locked_keywords').eq('user_id', user.id).single();
     const movableKeywords = settings?.movable_keywords || [];
     const lockedKeywords = settings?.locked_keywords || [];
 
-    // 1. Fetch Calendar List
-    const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
-      headers: { Authorization: `Bearer ${googleAccessToken}` }
-    })
-    
-    if (!listRes.ok) {
-      const errorData = await listRes.json();
-      throw new Error(`Google API Error: ${errorData.error?.message || 'Failed to fetch calendar list'}`);
-    }
-
+    const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { headers: { Authorization: `Bearer ${googleAccessToken}` } })
+    if (!listRes.ok) throw new Error(`Google API Error: ${listRes.statusText}`);
     const listData = await listRes.json()
     if (listData.items) {
-      const filteredItems = listData.items.filter(cal => !cal.id.includes('@import.calendar.google.com'));
-      
-      const discovered = filteredItems.map(cal => ({
-        user_id: user.id,
-        calendar_id: cal.id,
-        calendar_name: cal.summary,
-        provider: 'google',
-        color: cal.backgroundColor || '#6366f1'
+      const discovered = listData.items.filter(cal => !cal.id.includes('@import.calendar.google.com')).map(cal => ({
+        user_id: user.id, calendar_id: cal.id, calendar_name: cal.summary, provider: 'google', color: cal.backgroundColor || '#6366f1'
       }));
-      
-      if (discovered.length > 0) {
-        await supabaseAdmin.from('user_calendars').upsert(discovered, { onConflict: 'user_id, calendar_id' });
-      }
+      if (discovered.length > 0) await supabaseAdmin.from('user_calendars').upsert(discovered, { onConflict: 'user_id, calendar_id' });
     }
 
-    // 2. Get Enabled Calendars
-    const { data: enabled } = await supabaseAdmin
-      .from('user_calendars')
-      .select('calendar_id, calendar_name, is_enabled')
-      .eq('user_id', user.id)
-      .eq('provider', 'google');
-    
+    const { data: enabled } = await supabaseAdmin.from('user_calendars').select('calendar_id, calendar_name, is_enabled').eq('user_id', user.id).eq('provider', 'google');
     const enabledCalendars = (enabled || []).filter(c => c.is_enabled);
-    if (enabledCalendars.length === 0) {
-      return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
-    }
+    if (enabledCalendars.length === 0) return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
 
-    // 3. Fetch Events - Start from yesterday to keep context
+    // SYNC FROM TODAY ONLY
     const syncStartTime = new Date();
-    syncStartTime.setDate(syncStartTime.getDate() - 1);
+    syncStartTime.setHours(0, 0, 0, 0);
     const syncEndTime = new Date();
     syncEndTime.setDate(syncEndTime.getDate() + 365);
     
     const eventMap = new Map();
     const syncTimestamp = new Date().toISOString();
-
     const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga/i;
     const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i];
 
     for (const cal of enabledCalendars) {
-      let res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.calendar_id)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`, { 
-        headers: { Authorization: `Bearer ${googleAccessToken}` } 
-      });
-      
+      let res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.calendar_id)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`, { headers: { Authorization: `Bearer ${googleAccessToken}` } });
       if (!res.ok) continue;
-
       const data = await res.json()
       if (data.items) {
         data.items.forEach(event => {
           const title = event.summary || 'Untitled';
           let start = event.start.dateTime ? new Date(event.start.dateTime) : new Date(event.start.date + "T09:00:00");
           let end = event.end.dateTime ? new Date(event.end.dateTime) : new Date(event.end.date + "T09:30:00");
-
+          if (start < syncStartTime) return; // STRICT FILTER
           const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
           const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
-          
-          const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && (
-            (event.attendees?.length > 1) ||
-            fixedKeywords.test(title) ||
-            fixedPatterns.some(p => p.test(title))
-          ));
-          
+          const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && ((event.attendees?.length > 1) || fixedKeywords.test(title) || fixedPatterns.some(p => p.test(title))));
           eventMap.set(event.id, {
-            user_id: user.id,
-            event_id: event.id,
-            title: title,
-            start_time: start.toISOString(),
-            end_time: end.toISOString(),
-            duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000) || 30,
-            is_locked: isLocked,
-            provider: 'google',
-            source_calendar: cal.calendar_name,
-            source_calendar_id: cal.calendar_id,
-            last_synced_at: syncTimestamp
+            user_id: user.id, event_id: event.id, title: title, start_time: start.toISOString(), end_time: end.toISOString(),
+            duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000) || 30, is_locked: isLocked,
+            provider: 'google', source_calendar: cal.calendar_name, source_calendar_id: cal.calendar_id, last_synced_at: syncTimestamp
           });
         });
       }
     }
 
     const uniqueEvents = Array.from(eventMap.values());
-    if (uniqueEvents.length > 0) {
-      await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
-    }
+    if (uniqueEvents.length > 0) await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
 
-    // Cleanup: Remove events for this provider that weren't in the latest sync
+    // PURGE OLD EVENTS
     await supabaseAdmin.from('calendar_events_cache')
       .delete()
       .eq('user_id', user.id)
       .eq('provider', 'google')
-      .lt('last_synced_at', syncTimestamp);
+      .lt('start_time', syncStartTime.toISOString());
 
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders })
   } catch (error) {

@@ -59,7 +59,6 @@ serve(async (req) => {
     };
 
     // 1. Discovery
-    console.log(`[${functionName}] Discovering principal...`);
     const principalRes = await fetch(initialBase, {
       method: 'PROPFIND',
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' },
@@ -70,7 +69,6 @@ serve(async (req) => {
     let principalPath = principalXml.match(/current-user-principal[\s\S]*?href[^>]*>([^<]+)/i)?.[1];
     const discoveryUrl = principalPath ? getFullUrl(principalPath, initialBase) : initialBase;
 
-    console.log(`[${functionName}] Discovering home set...`);
     const discoveryRes = await fetch(discoveryUrl, { 
       method: 'PROPFIND', 
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }, 
@@ -132,11 +130,12 @@ serve(async (req) => {
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
 
-    // 4. Fetch Events
+    // 4. Fetch Events - START FROM TODAY ONLY
     const syncStartTime = new Date();
-    syncStartTime.setDate(syncStartTime.getDate() - 30);
+    syncStartTime.setHours(0, 0, 0, 0); // Start of today
+    
     const syncEndTime = new Date();
-    syncEndTime.setDate(syncEndTime.getDate() + 730);
+    syncEndTime.setDate(syncEndTime.getDate() + 365);
     
     const startStr = syncStartTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endStr = syncEndTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
@@ -165,50 +164,27 @@ serve(async (req) => {
 
     const parseIcsDate = (dateStr, tzid, fallbackTz = 'UTC') => {
       if (!dateStr) return null;
-      
       const isUtc = dateStr.endsWith('Z');
       const clean = dateStr.replace(/[^0-9]/g, '');
       if (clean.length < 8) return null;
-
       const year = parseInt(clean.substring(0, 4));
       const month = parseInt(clean.substring(4, 6)) - 1;
       const day = parseInt(clean.substring(6, 8));
       const hour = parseInt(clean.substring(8, 10) || 0);
       const min = parseInt(clean.substring(10, 12) || 0);
       const sec = parseInt(clean.substring(12, 14) || 0);
-      
-      if (isUtc) {
-        return new Date(Date.UTC(year, month, day, hour, min, sec));
-      }
-
+      if (isUtc) return new Date(Date.UTC(year, month, day, hour, min, sec));
       const targetTz = tzid || fallbackTz;
       try {
         const utcDate = new Date(Date.UTC(year, month, day, hour, min, sec));
-        const formatter = new Intl.DateTimeFormat('en-US', {
-          timeZone: targetTz,
-          year: 'numeric', month: 'numeric', day: 'numeric',
-          hour: 'numeric', minute: 'numeric', second: 'numeric',
-          hour12: false
-        });
-        
+        const formatter = new Intl.DateTimeFormat('en-US', { timeZone: targetTz, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false });
         const parts = formatter.formatToParts(utcDate);
         const p = {};
         parts.forEach(part => p[part.type] = part.value);
-        
-        const tzDate = new Date(Date.UTC(
-          parseInt(p.year),
-          parseInt(p.month) - 1,
-          parseInt(p.day),
-          parseInt(p.hour) === 24 ? 0 : parseInt(p.hour),
-          parseInt(p.minute),
-          parseInt(p.second)
-        ));
-        
+        const tzDate = new Date(Date.UTC(parseInt(p.year), parseInt(p.month) - 1, parseInt(p.day), parseInt(p.hour) === 24 ? 0 : parseInt(p.hour), parseInt(p.minute), parseInt(p.second)));
         const offset = tzDate.getTime() - utcDate.getTime();
         return new Date(utcDate.getTime() - offset);
-      } catch (e) {
-        return new Date(Date.UTC(year, month, day, hour, min, sec));
-      }
+      } catch (e) { return new Date(Date.UTC(year, month, day, hour, min, sec)); }
     };
 
     for (const cal of enabledCalendars) {
@@ -217,35 +193,23 @@ serve(async (req) => {
         headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/xml', 'Depth': '1' },
         body: reportXml
       });
-      
       if (!res.ok) continue;
-
       const xml = await res.text();
       const eventDataMatches = xml.matchAll(/<[^>]*calendar-data[^>]*>([\s\S]*?)<\/[^>]*calendar-data>/gi);
-      
       for (const match of eventDataMatches) {
-        let icsData = match[1].trim()
-          .replace(/</g, '<').replace(/>/g, '>').replace(/&/g, '&')
-          .replace(/&quot;/g, '"').replace(/&apos;/g, "'");
-
+        let icsData = match[1].trim().replace(/</g, '<').replace(/>/g, '>').replace(/&/g, '&').replace(/&quot;/g, '"').replace(/&apos;/g, "'");
         const veventMatches = icsData.matchAll(/BEGIN:VEVENT([\s\S]*?)END:VEVENT/gi);
-        
         for (const veventMatch of veventMatches) {
           const content = veventMatch[1];
-          
           const summaryMatch = content.match(/SUMMARY:(.*)/i);
           const dtstartMatch = content.match(/DTSTART(?:;VALUE=DATE)?(?:;TZID=([^:]+))?:(.*)/i);
           const dtendMatch = content.match(/DTEND(?:;VALUE=DATE)?(?:;TZID=([^:]+))?:(.*)/i);
           const durationMatch = content.match(/DURATION:PT(\d+)([HMS])/i);
           const uidMatch = content.match(/UID:(.*)/i);
-
           if (!dtstartMatch || !uidMatch) continue;
-
-          // Clean up escaped characters in summary
           const summary = (summaryMatch?.[1] || 'Untitled').trim().replace(/\\,/g, ',').replace(/\\;/g, ';');
           const start = parseIcsDate(dtstartMatch[2].trim(), dtstartMatch[1], userTimezone);
-          if (!start) continue;
-
+          if (!start || start < syncStartTime) continue; // STRICT FILTER: No past events
           let end = parseIcsDate(dtendMatch?.[2]?.trim(), dtendMatch?.[1], userTimezone);
           if (!end) {
             if (durationMatch) {
@@ -253,32 +217,18 @@ serve(async (req) => {
               const unit = durationMatch[2];
               const ms = unit === 'H' ? val * 3600000 : unit === 'M' ? val * 60000 : val * 1000;
               end = new Date(start.getTime() + ms);
-            } else {
-              end = new Date(start.getTime() + 30 * 60000);
-            }
+            } else { end = new Date(start.getTime() + 30 * 60000); }
           }
-
           const uid = uidMatch[1].trim();
           const isExplicitlyMovable = movableKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
           const isExplicitlyLocked = lockedKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
           const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && (fixedKeywords.test(summary) || fixedPatterns.some(p => p.test(summary))));
-          
           const isWork = workKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
-
           const uniqueId = `${uid}-${start.getTime()}`;
           eventMap.set(uniqueId, {
-            user_id: user.id,
-            event_id: uniqueId,
-            title: summary,
-            start_time: start.toISOString(),
-            end_time: end.toISOString(),
-            duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000),
-            is_locked: isLocked,
-            is_work: isWork,
-            provider: 'apple',
-            source_calendar: cal.calendar_name,
-            source_calendar_id: cal.calendar_id,
-            last_synced_at: syncTimestamp
+            user_id: user.id, event_id: uniqueId, title: summary, start_time: start.toISOString(), end_time: end.toISOString(),
+            duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000), is_locked: isLocked, is_work: isWork,
+            provider: 'apple', source_calendar: cal.calendar_name, source_calendar_id: cal.calendar_id, last_synced_at: syncTimestamp
           });
         }
       }
@@ -287,8 +237,14 @@ serve(async (req) => {
     const uniqueEvents = Array.from(eventMap.values());
     if (uniqueEvents.length > 0) {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
-      await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple').lt('last_synced_at', syncTimestamp);
     }
+    
+    // PURGE ALL OLD EVENTS FROM CACHE
+    await supabaseAdmin.from('calendar_events_cache')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('provider', 'apple')
+      .lt('start_time', syncStartTime.toISOString());
 
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders });
   } catch (error) {
