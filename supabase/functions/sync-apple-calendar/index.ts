@@ -58,10 +58,10 @@ serve(async (req) => {
 
     if (!principalRes.ok) throw new Error(`Principal Discovery Failed: ${principalRes.status}`);
     const principalXml = await principalRes.text();
-    const principalPath = principalXml.match(/current-user-principal[^>]*>\s*<[^>]*href[^>]*>([^<]+)/i)?.[1];
+    const principalPath = principalXml.match(/<(?:[^:>]*:)?current-user-principal[^>]*>\s*<(?:[^:>]*:)?href[^>]*>([^<]+)/i)?.[1];
     if (!principalPath) throw new Error("Could not find Principal path.");
     
-    // Important: principalRes.url might be a redirected shard URL (e.g. p46-caldav)
+    // Use the final URL from the response in case of redirects (shards)
     const principalUrl = getFullUrl(principalPath, principalRes.url);
     console.log("[sync-apple-calendar] Principal URL:", principalUrl);
 
@@ -78,7 +78,7 @@ serve(async (req) => {
     });
 
     const homeSetXml = await homeSetRes.text();
-    const homeSetPath = homeSetXml.match(/calendar-home-set[^>]*>\s*<[^>]*href[^>]*>([^<]+)/i)?.[1];
+    const homeSetPath = homeSetXml.match(/<(?:[^:>]*:)?calendar-home-set[^>]*>\s*<(?:[^:>]*:)?href[^>]*>([^<]+)/i)?.[1];
     if (!homeSetPath) throw new Error("Could not find Calendar Home Set.");
     
     const homeSetUrl = getFullUrl(homeSetPath, homeSetRes.url);
@@ -98,15 +98,15 @@ serve(async (req) => {
 
     const listXml = await listRes.text();
     const calendarPaths = [];
-    const responses = listXml.split(/<[^:]*:response>/i);
+    // Split by response tag, handling optional namespaces
+    const responses = listXml.split(/<(?:[^:>]*:)?response[^>]*>/i);
     
-    // Normalize homeSetPath for comparison (remove trailing slash)
     const normHomePath = homeSetPath.replace(/\/$/, '');
 
     for (const resp of responses) {
       // Look for the specific 'calendar' resource type tag
-      if (resp.includes(':calendar') || resp.includes('<calendar')) {
-        const hrefMatch = resp.match(/<[^:]*:href[^>]*>([^<]+)/i);
+      if (resp.includes('<calendar') || resp.includes(':calendar')) {
+        const hrefMatch = resp.match(/<(?:[^:>]*:)?href[^>]*>([^<]+)/i);
         const href = hrefMatch?.[1];
         
         if (href) {
