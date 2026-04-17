@@ -34,20 +34,8 @@ serve(async (req) => {
     const userTimezone = profileRes.data?.timezone || 'UTC';
     const allEvents = eventsRes.data || [];
 
-    console.log(`[optimise-schedule] Total events in cache: ${allEvents.length}`);
-    
-    // Debug: Specifically look for Choir
-    const choirEvent = allEvents.find(e => e.title.toLowerCase().includes('choir'));
-    if (choirEvent) {
-      console.log(`[optimise-schedule] DEBUG FOUND CHOIR: "${choirEvent.title}", Locked: ${choirEvent.is_locked}, Start: ${choirEvent.start_time}`);
-    } else {
-      console.log(`[optimise-schedule] DEBUG: "Choir" not found in allEvents list!`);
-    }
-
     const fixedEvents = allEvents.filter(e => e.is_locked);
     const movableEvents = allEvents.filter(e => !e.is_locked);
-
-    console.log(`[optimise-schedule] Fixed count: ${fixedEvents.length}, Movable count: ${movableEvents.length}`);
 
     if (movableEvents.length === 0) {
       return new Response(JSON.stringify({ message: 'No movable events found.', changes: [] }), { headers: corsHeaders });
@@ -55,10 +43,12 @@ serve(async (req) => {
 
     const proposedChanges = [];
     
-    const now = new Date();
-    const tzDate = new Date(now.toLocaleString('en-US', { timeZone: userTimezone }));
-    const offsetMs = tzDate.getTime() - now.getTime();
-    const offsetHours = Math.round(offsetMs / 3600000);
+    // Helper to get UTC offset for a specific date in user's TZ
+    const getOffset = (date) => {
+      const tzDate = new Date(date.toLocaleString('en-US', { timeZone: userTimezone }));
+      const diff = tzDate.getTime() - date.getTime();
+      return Math.round(diff / 3600000);
+    };
 
     // Start from tomorrow
     let currentDay = new Date();
@@ -78,14 +68,16 @@ serve(async (req) => {
 
       while (!foundSlot && attempts < 14) {
         const dayKey = currentPointer.toISOString().split('T')[0];
+        const offset = getOffset(currentPointer);
+
         if (!dailyStats.has(dayKey)) {
           dailyStats.set(dayKey, { tasks: 0, hours: 0 });
-          currentPointer.setUTCHours(startH - offsetHours, startM, 0, 0);
+          currentPointer.setUTCHours(startH - offset, startM, 0, 0);
         }
         const stats = dailyStats.get(dayKey);
 
         const dayEnd = new Date(currentPointer);
-        dayEnd.setUTCHours(endH - offsetHours, endM, 0, 0);
+        dayEnd.setUTCHours(endH - offset, endM, 0, 0);
 
         const potentialEnd = new Date(currentPointer.getTime() + durationMs);
         const potentialHours = stats.hours + (event.duration_minutes / 60);
@@ -97,7 +89,7 @@ serve(async (req) => {
 
         if (pastWorkday || pastHoursLimit || pastTasksLimit) {
           currentPointer.setUTCDate(currentPointer.getUTCDate() + 1);
-          currentPointer.setUTCHours(startH - offsetHours, startM, 0, 0);
+          currentPointer.setUTCHours(startH - offset, startM, 0, 0);
           attempts++;
           continue;
         }
@@ -106,14 +98,7 @@ serve(async (req) => {
         const collision = fixedEvents.find(f => {
           const fStart = new Date(f.start_time);
           const fEnd = new Date(f.end_time);
-          const overlaps = (currentPointer < fEnd && potentialEnd > fStart);
-          
-          // Extra logging for Choir collisions
-          if (f.title.toLowerCase().includes('choir')) {
-            console.log(`[optimise-schedule] Checking Choir overlap: Slot(${currentPointer.toISOString()} - ${potentialEnd.toISOString()}) vs Choir(${fStart.toISOString()} - ${fEnd.toISOString()}). Overlaps: ${overlaps}`);
-          }
-          
-          return overlaps;
+          return (currentPointer < fEnd && potentialEnd > fStart);
         });
 
         if (collision) {
@@ -146,7 +131,6 @@ serve(async (req) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (error) {
-    console.error("[optimise-schedule] Error:", error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders })
   }
 })

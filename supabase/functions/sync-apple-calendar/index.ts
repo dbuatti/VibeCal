@@ -29,9 +29,10 @@ serve(async (req) => {
     const { data: { user } } = await supabaseUser.auth.getUser()
     if (!user) throw new Error("Unauthorized");
 
-    const { data: profile } = await supabaseAdmin.from('profiles').select('apple_id, apple_app_password').eq('id', user.id).single();
+    const { data: profile } = await supabaseAdmin.from('profiles').select('apple_id, apple_app_password, timezone').eq('id', user.id).single();
     if (!profile?.apple_id || !profile?.apple_app_password) throw new Error('Apple credentials missing.');
 
+    const userTimezone = profile.timezone || 'UTC';
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
     const initialBase = "https://caldav.icloud.com";
     
@@ -42,7 +43,7 @@ serve(async (req) => {
       return `${urlObj.origin}${path.startsWith('/') ? '' : '/'}${path}`;
     };
 
-    // 1. Discovery - Step A: Get Principal
+    // 1. Discovery
     console.log("[sync-apple-calendar] Discovering principal...");
     const principalRes = await fetch(initialBase, {
       method: 'PROPFIND',
@@ -52,12 +53,8 @@ serve(async (req) => {
     
     const principalXml = await principalRes.text();
     let principalPath = principalXml.match(/current-user-principal[\s\S]*?href[^>]*>([^<]+)/i)?.[1];
-    
-    // If principal discovery fails, try the home-set directly on the root (fallback)
     const discoveryUrl = principalPath ? getFullUrl(principalPath, initialBase) : initialBase;
 
-    // 1. Discovery - Step B: Get Home Set
-    console.log("[sync-apple-calendar] Discovering home set from:", discoveryUrl);
     const discoveryRes = await fetch(discoveryUrl, { 
       method: 'PROPFIND', 
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }, 
@@ -69,15 +66,10 @@ serve(async (req) => {
     const discoveryXml = await discoveryRes.text();
     let homeSetPath = discoveryXml.match(/calendar-home-set[\s\S]*?href[^>]*>([^<]+)/i)?.[1];
     
-    if (!homeSetPath) {
-      console.error("[sync-apple-calendar] XML Response:", discoveryXml);
-      throw new Error("Could not find Calendar Home Set. Please verify your App-Specific Password.");
-    }
-    
+    if (!homeSetPath) throw new Error("Could not find Calendar Home Set.");
     const homeSetUrl = getFullUrl(homeSetPath, discoveryRes.url);
-    console.log("[sync-apple-calendar] Home set found:", homeSetUrl);
 
-    // 2. Get Enabled Apple Calendars
+    // 2. Get Enabled Calendars
     const { data: enabled } = await supabaseAdmin
       .from('user_calendars')
       .select('calendar_id, calendar_name')
@@ -85,13 +77,9 @@ serve(async (req) => {
       .eq('is_enabled', true)
       .eq('provider', 'apple');
 
-    // Clear Apple cache
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
 
-    if (!enabled || enabled.length === 0) {
-      console.log("[sync-apple-calendar] No enabled Apple calendars found in DB.");
-      return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
-    }
+    if (!enabled || enabled.length === 0) return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
 
     // 3. Fetch Events
     const now = new Date();
@@ -100,29 +88,16 @@ serve(async (req) => {
 
     const reportXml = `
       <c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
-        <d:prop>
-          <d:getetag />
-          <c:calendar-data>
-            <c:expand start="${startStr}" end="${endStr}"/>
-          </c:calendar-data>
-        </d:prop>
-        <c:filter>
-          <c:comp-filter name="VCALENDAR">
-            <c:comp-filter name="VEVENT">
-              <c:time-range start="${startStr}" end="${endStr}"/>
-            </c:comp-filter>
-          </c:comp-filter>
-        </c:filter>
+        <d:prop><d:getetag /><c:calendar-data><c:expand start="${startStr}" end="${endStr}"/></c:calendar-data></d:prop>
+        <c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"><c:time-range start="${startStr}" end="${endStr}"/></c:comp-filter></c:comp-filter></c:filter>
       </c:calendar-query>
     `;
 
-    // Added 'choir' to fixed keywords
-    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|ceremony|work session|gig|rehearsal/i;
+    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|gig|work session/i;
     const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i, /[\u{1F300}-\u{1F9FF}]/u];
 
     const eventMap = new Map();
     for (const cal of enabled) {
-      console.log(`[sync-apple-calendar] Fetching events for: ${cal.calendar_name}`);
       const res = await fetch(getFullUrl(cal.calendar_id, homeSetUrl), {
         method: 'REPORT',
         headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/xml', 'Depth': '1' },
@@ -140,8 +115,8 @@ serve(async (req) => {
         const uid = block.match(/^UID[^:]*:(.*)$/m)?.[1]?.trim();
 
         if (dtStart && dtEnd && uid) {
-          const start = parseIcsDate(dtStart);
-          const end = parseIcsDate(dtEnd);
+          const start = parseIcsDate(dtStart, userTimezone);
+          const end = parseIcsDate(dtEnd, userTimezone);
           
           const isLocked = fixedKeywords.test(summary) || fixedPatterns.some(p => p.test(summary));
           
@@ -166,26 +141,49 @@ serve(async (req) => {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
     }
 
-    console.log(`[sync-apple-calendar] Sync complete. Found ${uniqueEvents.length} events.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders });
   } catch (error) {
-    console.error("[sync-apple-calendar] Error:", error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 });
 
-function parseIcsDate(icsDate) {
+function parseIcsDate(icsDate, timezone) {
   const parts = icsDate.split(':');
   const dateStr = parts[parts.length - 1].trim();
   const y = parseInt(dateStr.substring(0, 4));
   const m = parseInt(dateStr.substring(4, 6)) - 1;
   const d = parseInt(dateStr.substring(6, 8));
+  
   if (dateStr.includes('T')) {
     const h = parseInt(dateStr.substring(9, 11));
     const min = parseInt(dateStr.substring(11, 13));
     const s = parseInt(dateStr.substring(13, 15));
+    
     if (dateStr.endsWith('Z')) return new Date(Date.UTC(y, m, d, h, min, s));
-    return new Date(y, m, d, h, min, s);
+    
+    // Floating time: interpret in user's timezone
+    const utcDate = new Date(Date.UTC(y, m, d, h, min, s));
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      year: 'numeric', month: 'numeric', day: 'numeric',
+      hour: 'numeric', minute: 'numeric', second: 'numeric',
+      hour12: false
+    });
+    
+    const tzParts = formatter.formatToParts(utcDate);
+    const tzMap = Object.fromEntries(tzParts.map(p => [p.type, p.value]));
+    
+    const tzDate = new Date(Date.UTC(
+      parseInt(tzMap.year),
+      parseInt(tzMap.month) - 1,
+      parseInt(tzMap.day),
+      parseInt(tzMap.hour) === 24 ? 0 : parseInt(tzMap.hour),
+      parseInt(tzMap.minute),
+      parseInt(tzMap.second)
+    ));
+    
+    const diff = tzDate.getTime() - utcDate.getTime();
+    return new Date(utcDate.getTime() - diff);
   }
-  return new Date(y, m, d);
+  return new Date(Date.UTC(y, m, d));
 }
