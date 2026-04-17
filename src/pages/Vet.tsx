@@ -23,12 +23,15 @@ import {
   Layers,
   Zap,
   Briefcase,
-  Globe
+  Globe,
+  Sparkles,
+  Info
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
 import { 
   DropdownMenu, 
   DropdownMenuContent, 
@@ -181,7 +184,8 @@ const Vet = () => {
     const total = events.length;
     const locked = events.filter(e => e.is_locked).length;
     const movable = total - locked;
-    return { total, locked, movable };
+    const progress = total > 0 ? (movable / total) * 100 : 0;
+    return { total, locked, movable, progress };
   }, [events]);
 
   const providers = Array.from(new Set(events.map(e => e.provider)));
@@ -197,7 +201,7 @@ const Vet = () => {
     <Layout>
       <div className="max-w-5xl mx-auto pb-24">
         {/* Header Section */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-6">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-6">
           <div className="space-y-1">
             <button 
               onClick={() => navigate('/plan')}
@@ -217,9 +221,10 @@ const Vet = () => {
               variant="outline" 
               onClick={runAIClassification} 
               disabled={isProcessing}
-              className="flex-1 md:flex-none rounded-2xl h-14 px-8 font-black text-xs uppercase tracking-widest border-indigo-100 text-indigo-600 hover:bg-indigo-50 shadow-sm transition-all hover:scale-[1.02] active:scale-[0.98]"
+              className="flex-1 md:flex-none rounded-2xl h-14 px-8 font-black text-xs uppercase tracking-widest border-indigo-100 text-indigo-600 hover:bg-indigo-50 shadow-sm transition-all hover:scale-[1.02] active:scale-[0.98] relative overflow-hidden group"
             >
-              {isProcessing ? <RefreshCw className="animate-spin mr-2" size={18} /> : <BrainCircuit className="mr-2" size={18} />}
+              <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/10 to-purple-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+              {isProcessing ? <RefreshCw className="animate-spin mr-2" size={18} /> : <Sparkles className="mr-2 text-indigo-500 animate-pulse" size={18} />}
               AI Auto-Vet
             </Button>
             <Button 
@@ -231,27 +236,26 @@ const Vet = () => {
           </div>
         </div>
 
-        {/* Stats Pulse Bar */}
-        <div className="grid grid-cols-3 gap-4 mb-10">
-          {[
-            { label: 'Total Tasks', value: stats.total, icon: Layers, color: 'bg-gray-100 text-gray-600' },
-            { label: 'Locked', value: stats.locked, icon: Lock, color: 'bg-red-50 text-red-600' },
-            { label: 'Movable', value: stats.movable, icon: Unlock, color: 'bg-green-50 text-green-600' },
-          ].map((stat, i) => (
-            <div key={i} className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm flex items-center gap-4">
-              <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center", stat.color)}>
-                <stat.icon size={20} />
-              </div>
-              <div>
-                <div className="text-2xl font-black text-gray-900">{stat.value}</div>
-                <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{stat.label}</div>
-              </div>
+        {/* Vetting Progress Bar */}
+        <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm mb-8">
+          <div className="flex justify-between items-end mb-3 px-2">
+            <div className="flex items-center gap-2">
+              <Zap size={14} className="text-indigo-600" />
+              <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Movable Ratio</span>
             </div>
-          ))}
+            <span className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">
+              {Math.round(stats.progress)}% Flexible
+            </span>
+          </div>
+          <Progress value={stats.progress} className="h-2 bg-gray-50" />
+          <div className="flex justify-between mt-3 px-2 text-[9px] font-black uppercase tracking-widest text-gray-400">
+            <span>{stats.locked} Fixed</span>
+            <span>{stats.movable} Movable</span>
+          </div>
         </div>
 
         {/* Sticky Filter & Search Bar */}
-        <div className="sticky top-4 z-50 bg-white/80 backdrop-blur-xl rounded-[2.5rem] border border-gray-100 shadow-xl overflow-hidden mb-8">
+        <div className="sticky top-4 z-50 bg-white/90 backdrop-blur-xl rounded-[2.5rem] border border-gray-100 shadow-xl overflow-hidden mb-10">
           <div className="p-4 flex flex-col lg:flex-row gap-4 justify-between items-center">
             <div className="relative w-full lg:w-96">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
@@ -272,7 +276,7 @@ const Vet = () => {
                     showLocked ? "bg-white text-red-500 shadow-sm" : "text-gray-400 hover:text-gray-600"
                   )}
                 >
-                  {showLocked ? <Eye size={14} /> : <EyeOff size={14} />} Locked
+                  {showLocked ? <Eye size={14} /> : <EyeOff size={14} />} Fixed
                 </button>
                 <button 
                   onClick={() => setShowUnlocked(!showUnlocked)}
@@ -333,7 +337,7 @@ const Vet = () => {
         </div>
 
         {/* Task List Grouped by Date */}
-        <div className="space-y-12">
+        <div className="space-y-16">
           {loading ? (
             <div className="p-20 text-center">
               <RefreshCw className="animate-spin text-indigo-600 mx-auto mb-4" size={32} />
@@ -341,77 +345,89 @@ const Vet = () => {
             </div>
           ) : Object.keys(groupedEvents).length > 0 ? (
             Object.keys(groupedEvents).sort().map(dateKey => (
-              <div key={dateKey} className="space-y-4">
-                <div className="flex items-center gap-4 px-4">
-                  <h2 className="text-sm font-black text-gray-400 uppercase tracking-[0.2em]">
-                    {getDateLabel(dateKey)}
-                  </h2>
-                  <div className="h-px flex-1 bg-gray-100" />
+              <div key={dateKey} className="space-y-6">
+                <div className="sticky top-24 z-40 bg-[#F8F9FC]/80 backdrop-blur-md py-4 -mx-4 px-4">
+                  <div className="flex items-center gap-4">
+                    <div className="bg-white px-6 py-2 rounded-full shadow-sm border border-gray-100 flex items-center gap-3">
+                      <Calendar size={14} className="text-indigo-600" />
+                      <h2 className="text-xs font-black text-gray-900 uppercase tracking-widest">
+                        {getDateLabel(dateKey)}
+                      </h2>
+                      <Badge variant="secondary" className="bg-indigo-50 text-indigo-600 border-none text-[9px] font-black px-2 py-0">
+                        {groupedEvents[dateKey].length}
+                      </Badge>
+                    </div>
+                    <div className="h-px flex-1 bg-gray-200/50" />
+                  </div>
                 </div>
                 
-                <div className="grid grid-cols-1 gap-3">
+                <div className="grid grid-cols-1 gap-4">
                   {groupedEvents[dateKey].map((event) => (
                     <div key={event.event_id} className={cn(
-                      "p-5 rounded-[2rem] border transition-all duration-300 group flex items-center justify-between relative overflow-hidden",
+                      "p-6 rounded-[2.5rem] border transition-all duration-300 group flex items-center justify-between relative overflow-hidden hover:shadow-md",
                       event.is_locked 
-                        ? "bg-white border-gray-100 shadow-sm" 
-                        : "bg-indigo-50/30 border-indigo-100/50 shadow-sm"
+                        ? "bg-white border-gray-100" 
+                        : "bg-indigo-50/40 border-indigo-100/50"
                     )}>
                       {/* Work Watermark */}
                       {event.is_work && (
-                        <div className="absolute -right-2 -bottom-2 opacity-[0.03] pointer-events-none rotate-12">
-                          <Briefcase size={64} />
+                        <div className="absolute -right-2 -bottom-2 opacity-[0.04] pointer-events-none rotate-12 group-hover:rotate-0 transition-transform duration-700">
+                          <Briefcase size={80} />
                         </div>
                       )}
 
-                      <div className="flex items-center gap-5 flex-1 min-w-0 relative z-10">
+                      <div className="flex items-center gap-6 flex-1 min-w-0 relative z-10">
                         <div className={cn(
-                          "w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-all duration-500 group-hover:rotate-6",
-                          event.is_locked ? "bg-gray-50 text-gray-400" : "bg-white text-indigo-600 shadow-md"
+                          "w-14 h-14 rounded-[1.5rem] flex items-center justify-center shrink-0 transition-all duration-500 group-hover:rotate-6 shadow-sm",
+                          event.is_locked ? "bg-gray-50 text-gray-400" : "bg-white text-indigo-600"
                         )}>
-                          {event.is_locked ? <Lock size={20} /> : <Unlock size={20} />}
+                          {event.is_locked ? <Lock size={22} /> : <Unlock size={22} />}
                         </div>
                         
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <h3 className="font-black text-base text-gray-900 tracking-tight truncate">{event.title}</h3>
+                          <div className="flex items-center gap-3 mb-2">
+                            <h3 className="font-black text-lg text-gray-900 tracking-tight truncate">{event.title}</h3>
                             {event.is_work && (
-                              <Badge variant="secondary" className="bg-slate-100 text-slate-500 text-[8px] font-black px-1.5 py-0 h-4 uppercase tracking-tighter border-none">
+                              <Badge variant="secondary" className="bg-slate-200/50 text-slate-600 text-[8px] font-black px-2 py-0.5 h-5 uppercase tracking-tighter border-none">
                                 Work
                               </Badge>
                             )}
                           </div>
                           
-                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                            <div className="flex items-center gap-1.5 text-[9px] font-black text-gray-400 uppercase tracking-widest">
-                              <Clock size={12} className="text-indigo-400" />
+                          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+                            <div className="flex items-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                              <Clock size={14} className="text-indigo-400" />
                               {format(parseISO(event.start_time), 'HH:mm')}
                             </div>
-                            <div className="flex items-center gap-1.5 text-[9px] font-black text-gray-400 uppercase tracking-widest">
-                              <Zap size={12} className="text-indigo-400" />
+                            <div className="flex items-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                              <Zap size={14} className="text-indigo-400" />
                               {event.duration_minutes}m
                             </div>
-                            <div className="flex items-center gap-1.5 text-[9px] font-black text-gray-400 uppercase tracking-widest">
-                              <Globe size={12} className="text-indigo-400" />
+                            <div className="flex items-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                              <Globe size={14} className="text-indigo-400" />
                               {event.source_calendar || event.provider}
                             </div>
                           </div>
                         </div>
                       </div>
                       
-                      <div className="flex items-center gap-6 ml-4 relative z-10">
+                      <div className="flex items-center gap-8 ml-6 relative z-10">
                         <div className="hidden sm:flex flex-col items-end">
                           <span className={cn(
-                            "text-[9px] font-black uppercase tracking-widest",
+                            "text-[10px] font-black uppercase tracking-widest mb-1",
                             event.is_locked ? "text-red-400" : "text-indigo-600"
                           )}>
                             {event.is_locked ? 'Fixed' : 'Movable'}
                           </span>
+                          <div className="flex items-center gap-1 text-[8px] font-bold text-gray-300 uppercase tracking-tighter">
+                            <Info size={10} />
+                            Status
+                          </div>
                         </div>
                         <Switch 
                           checked={!event.is_locked} 
                           onCheckedChange={() => toggleLock(event.event_id, event.is_locked)} 
-                          className="data-[state=checked]:bg-indigo-600 scale-110" 
+                          className="data-[state=checked]:bg-indigo-600 scale-125 shadow-sm" 
                         />
                       </div>
                     </div>
@@ -420,18 +436,19 @@ const Vet = () => {
               </div>
             ))
           ) : (
-            <div className="p-20 text-center bg-white rounded-[3rem] border border-dashed border-gray-200">
-              <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-6">
-                <Search className="text-gray-300" size={32} />
+            <div className="p-24 text-center bg-white rounded-[4rem] border border-dashed border-gray-200 shadow-inner">
+              <div className="w-24 h-24 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-8">
+                <Search className="text-gray-200" size={40} />
               </div>
-              <p className="text-gray-400 font-bold text-lg">No tasks found matching your filters.</p>
+              <h3 className="text-xl font-black text-gray-900 mb-2 tracking-tight">No tasks found</h3>
+              <p className="text-gray-400 font-medium max-w-xs mx-auto">Try adjusting your filters or search query to find what you're looking for.</p>
               <Button variant="link" onClick={() => {
                 setSearchQuery('');
                 setShowLocked(true);
                 setShowUnlocked(true);
                 setSelectedProvider('all');
-              }} className="text-indigo-600 font-black text-xs uppercase tracking-widest mt-2">
-                Clear all filters
+              }} className="text-indigo-600 font-black text-xs uppercase tracking-widest mt-6 hover:no-underline hover:text-indigo-700">
+                Reset all filters
               </Button>
             </div>
           )}
