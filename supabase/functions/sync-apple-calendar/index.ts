@@ -102,7 +102,7 @@ serve(async (req) => {
       </c:calendar-query>
     `;
 
-    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|gig|work session/i;
+    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|gig|work session|q & a|weekly/i;
     const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i, /[\u{1F300}-\u{1F9FF}]/u];
 
     const eventMap = new Map();

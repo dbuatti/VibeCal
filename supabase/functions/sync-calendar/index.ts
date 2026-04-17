@@ -76,7 +76,7 @@ serve(async (req) => {
     const end = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
     const eventMap = new Map();
 
-    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|gig|work session|check in|grocery|lecture/i;
+    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|gig|work session|check in|grocery|lecture|q & a|weekly/i;
     const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i, /[\u{1F300}-\u{1F9FF}]/u];
 
     for (const cal of enabled) {
