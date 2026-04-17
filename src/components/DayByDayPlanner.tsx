@@ -249,6 +249,7 @@ const DayByDayPlanner = ({
             changes={dayChanges.filter(c => format(parseISO(c.new_start), 'yyyy-MM-dd') === currentDateStr)} 
             appliedChanges={appliedChanges} 
             isVetted={isDayVetted}
+            workKeywords={workKeywords}
           />
         </div>
       </div>
