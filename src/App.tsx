@@ -16,7 +16,10 @@ const App = () => (
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Index />} />
-          {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+          {/* Placeholder routes for the rest of the architecture */}
+          <Route path="/optimise" element={<Index />} />
+          <Route path="/history" element={<Index />} />
+          <Route path="/settings" element={<Index />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
