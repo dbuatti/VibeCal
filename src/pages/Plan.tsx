@@ -5,14 +5,14 @@ import Layout from '@/components/Layout';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import DayByDayPlanner from '@/components/DayByDayPlanner';
-import { Brain, RefreshCw, Trash2, Eye, EyeOff, Sparkles, Calendar, Clock, ListOrdered, ChevronRight, BrainCircuit, Inbox, Unlock, Lock, History } from 'lucide-react';
+import { Brain, RefreshCw, Trash2, Eye, EyeOff, Sparkles, Calendar, Clock, ListOrdered, ChevronRight, BrainCircuit, Inbox, Unlock, Lock, History, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { format, nextSaturday, formatDistanceToNow } from 'date-fns';
+import { format, nextSaturday, formatDistanceToNow, parseISO } from 'date-fns';
 import { cn } from '@/lib/utils';
 
 type PlanStep = 'initial' | 'analysis' | 'vetting_tasks' | 'requirements' | 'active_plan';
@@ -242,6 +242,29 @@ const Plan = () => {
     } catch (err: any) {
       showError(err.message);
       throw err;
+    }
+  };
+
+  const handleUndoApplyDay = async (dateChanges: any[]) => {
+    try {
+      const changeIds = dateChanges.map(c => c.event_id);
+      const newAppliedIds = appliedChanges.filter(id => !changeIds.includes(id));
+
+      const updatedProposedChanges = proposal.proposed_changes.map((c: any) => ({
+        ...c,
+        applied: newAppliedIds.includes(c.event_id)
+      }));
+
+      await supabase
+        .from('optimisation_history')
+        .update({ proposed_changes: updatedProposedChanges })
+        .eq('id', proposal.id);
+
+      setAppliedChanges(newAppliedIds);
+      setProposal({ ...proposal, proposed_changes: updatedProposedChanges });
+      showSuccess("Day vetting reset. You can now re-sync if needed.");
+    } catch (err: any) {
+      showError("Failed to undo vetting");
     }
   };
 
@@ -508,6 +531,7 @@ const Plan = () => {
               changes={proposal.proposed_changes}
               appliedChanges={appliedChanges}
               onApplyDay={handleApplyDay}
+              onUndoApplyDay={handleUndoApplyDay}
               maxHours={maxHoursOverride}
               maxTasks={maxTasksOverride}
             />

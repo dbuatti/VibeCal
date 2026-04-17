@@ -20,7 +20,8 @@ import {
   Zap,
   Trophy,
   LayoutDashboard,
-  Star
+  Star,
+  RotateCcw
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import VisualSchedule from './VisualSchedule';
@@ -31,6 +32,7 @@ interface DayByDayPlannerProps {
   changes: any[];
   appliedChanges: string[];
   onApplyDay: (dateChanges: any[]) => Promise<void>;
+  onUndoApplyDay: (dateChanges: any[]) => Promise<void>;
   maxHours: number;
   maxTasks: number;
 }
@@ -40,6 +42,7 @@ const DayByDayPlanner = ({
   changes, 
   appliedChanges, 
   onApplyDay, 
+  onUndoApplyDay,
   maxHours, 
   maxTasks
 }: DayByDayPlannerProps) => {
@@ -116,6 +119,15 @@ const DayByDayPlanner = ({
       } else {
         setTimeout(() => setCurrentIndex(prev => prev + 1), 600);
       }
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleUndoDay = async () => {
+    setIsSyncing(true);
+    try {
+      await onUndoApplyDay(dayChanges);
     } finally {
       setIsSyncing(false);
     }
@@ -366,24 +378,28 @@ const DayByDayPlanner = ({
           </Card>
 
           <div className="space-y-4">
-            <Button 
-              onClick={handleSyncDay} 
-              disabled={isSyncing || (dayChanges.length > 0 && isDayVetted)}
-              className={cn(
-                "w-full rounded-[2.5rem] py-12 text-2xl font-black shadow-2xl transition-all hover:scale-[1.02] active:scale-[0.98]",
-                isDayVetted 
-                  ? "bg-green-500 hover:bg-green-600 text-white shadow-green-100" 
-                  : "bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-100"
-              )}
-            >
-              {isSyncing ? (
-                <RefreshCw className="animate-spin mr-4" size={28} />
-              ) : isDayVetted ? (
-                <><CheckCircle2 className="mr-4" size={28} /> Day Vetted</>
-              ) : (
-                <><Zap className="mr-4" size={28} /> Confirm & Sync Day</>
-              )}
-            </Button>
+            {isDayVetted ? (
+              <Button 
+                onClick={handleUndoDay} 
+                disabled={isSyncing}
+                variant="outline"
+                className="w-full rounded-[2.5rem] py-12 text-2xl font-black border-gray-100 text-gray-400 hover:text-indigo-600 hover:border-indigo-100 transition-all"
+              >
+                {isSyncing ? <RefreshCw className="animate-spin mr-4" size={28} /> : <><RotateCcw className="mr-4" size={28} /> Undo Vetting</>}
+              </Button>
+            ) : (
+              <Button 
+                onClick={handleSyncDay} 
+                disabled={isSyncing}
+                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded-[2.5rem] py-12 text-2xl font-black shadow-2xl shadow-indigo-100 transition-all hover:scale-[1.02] active:scale-[0.98]"
+              >
+                {isSyncing ? (
+                  <RefreshCw className="animate-spin mr-4" size={28} />
+                ) : (
+                  <><Zap className="mr-4" size={28} /> Confirm & Sync Day</>
+                )}
+              </Button>
+            )}
             
             <div className="flex gap-4">
               {isDayVetted && currentIndex < allDates.length - 1 && (
