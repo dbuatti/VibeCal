@@ -78,7 +78,7 @@ serve(async (req) => {
     
     const homeSetUrl = getFullUrl(homeSetPath, homeSetRes.url);
 
-    // 3. Find individual calendars with STRICT component filtering
+    // 3. Find individual calendars
     const listRes = await fetch(homeSetUrl, {
       method: 'PROPFIND',
       headers: {
@@ -132,7 +132,6 @@ serve(async (req) => {
       }
     }
 
-    // Upsert discovered calendars
     if (discoveredCalendars.length > 0) {
       await supabaseClient
         .from('user_calendars')
@@ -150,7 +149,9 @@ serve(async (req) => {
     const enabledMap = new Map(enabledCalendars?.map(c => [c.calendar_id, c.calendar_name]) || []);
     const enabledPaths = Array.from(enabledMap.keys());
 
-    // IMPORTANT: Clear the cache for Apple events before re-syncing
+    console.log(`[sync-apple-calendar] Syncing ${enabledPaths.length} calendars:`, Array.from(enabledMap.values()));
+
+    // Clear cache for Apple events before re-syncing
     await supabaseClient
       .from('calendar_events_cache')
       .delete()
@@ -233,6 +234,7 @@ serve(async (req) => {
             }
           }
         }
+        console.log(`[sync-apple-calendar] Found ${events.length} events in "${calName}"`);
         return events;
       } catch (e) {
         console.error(`[sync-apple-calendar] Error fetching ${path}:`, e.message);
@@ -267,16 +269,31 @@ serve(async (req) => {
 });
 
 function parseIcsDate(icsDate: string) {
-  const clean = icsDate.trim().replace(/[^0-9TZ]/g, '');
-  const y = parseInt(clean.substring(0, 4));
-  const m = parseInt(clean.substring(4, 6)) - 1;
-  const d = parseInt(clean.substring(6, 8));
-  if (clean.includes('T')) {
-    const h = parseInt(clean.substring(9, 11));
-    const min = parseInt(clean.substring(11, 13));
-    const s = parseInt(clean.substring(13, 15));
-    if (clean.endsWith('Z')) return new Date(Date.UTC(y, m, d, h, min, s));
+  // Handle formats like:
+  // 20260418T100000
+  // 20260418T100000Z
+  // TZID=Australia/Melbourne:20260418T100000
+  
+  const parts = icsDate.split(':');
+  const dateStr = parts[parts.length - 1].trim();
+  
+  const y = parseInt(dateStr.substring(0, 4));
+  const m = parseInt(dateStr.substring(4, 6)) - 1;
+  const d = parseInt(dateStr.substring(6, 8));
+  
+  if (dateStr.includes('T')) {
+    const h = parseInt(dateStr.substring(9, 11));
+    const min = parseInt(dateStr.substring(11, 13));
+    const s = parseInt(dateStr.substring(13, 15));
+    
+    if (dateStr.endsWith('Z')) {
+      return new Date(Date.UTC(y, m, d, h, min, s));
+    }
+    
+    // For local time, we'll just create a date object. 
+    // Since the server is UTC, this will be interpreted as UTC.
     return new Date(y, m, d, h, min, s);
   }
+  
   return new Date(y, m, d);
 }
