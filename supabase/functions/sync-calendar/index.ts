@@ -19,7 +19,6 @@ serve(async (req) => {
     const { googleAccessToken } = await req.json();
 
     if (!googleAccessToken) {
-      console.error("[sync-calendar] No Google Access Token provided.");
       throw new Error("Missing Google Access Token");
     }
 
@@ -36,7 +35,6 @@ serve(async (req) => {
     const { data: { user } } = await supabaseUser.auth.getUser()
     if (!user) throw new Error("Unauthorized");
 
-    // Fetch user settings for movable keywords
     const { data: settings } = await supabaseAdmin
       .from('user_settings')
       .select('movable_keywords')
@@ -45,16 +43,11 @@ serve(async (req) => {
     
     const movableKeywords = settings?.movable_keywords || [];
 
-    // 1. Discover/Update Calendar List
     const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
       headers: { Authorization: `Bearer ${googleAccessToken}` }
     })
     const listData = await listRes.json()
     
-    if (listData.error) throw new Error(`Google API Error: ${listData.error.message}`);
-
-    await supabaseAdmin.from('user_calendars').delete().eq('user_id', user.id).eq('provider', 'google').like('calendar_id', '%@import.calendar.google.com%');
-
     if (listData.items) {
       const filteredItems = listData.items.filter(cal => !cal.id.includes('@import.calendar.google.com') && !cal.id.toLowerCase().includes('icloud'));
       const discovered = filteredItems.map(cal => ({
@@ -68,16 +61,14 @@ serve(async (req) => {
     }
 
     const { data: enabled } = await supabaseAdmin.from('user_calendars').select('calendar_id, calendar_name').eq('user_id', user.id).eq('is_enabled', true).eq('provider', 'google')
-    if (!enabled || enabled.length === 0) return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders })
-
+    
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google');
+
+    if (!enabled || enabled.length === 0) return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders })
 
     const now = new Date()
     const end = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
     const eventMap = new Map();
-
-    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|gig|work session|check in|grocery|lecture|q & a|weekly/i;
-    const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i, /[\u{1F300}-\u{1F9FF}]/u];
 
     for (const cal of enabled) {
       const encodedId = encodeURIComponent(cal.calendar_id);
@@ -89,14 +80,8 @@ serve(async (req) => {
           const start = new Date(event.start.dateTime || event.start.date)
           const end = new Date(event.end.dateTime || event.end.date)
           
-          // Check if title contains any user-defined movable keywords
           const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
-          
-          const isLocked = !isExplicitlyMovable && (
-                           !!event.recurringEventId || 
-                           (event.attendees?.length > 1) ||
-                           fixedKeywords.test(title) ||
-                           fixedPatterns.some(p => p.test(title)));
+          const isLocked = !isExplicitlyMovable && (!!event.recurringEventId || (event.attendees?.length > 1));
           
           eventMap.set(event.id, {
             user_id: user.id,
@@ -108,6 +93,7 @@ serve(async (req) => {
             is_locked: isLocked,
             provider: 'google',
             source_calendar: cal.calendar_name,
+            source_calendar_id: cal.calendar_id,
             last_synced_at: new Date().toISOString()
           });
         });

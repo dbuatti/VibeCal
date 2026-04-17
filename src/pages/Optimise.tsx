@@ -182,44 +182,44 @@ const Optimise = () => {
 
   // Step 4: Apply Single Change
   const applySingleChange = async (change: any) => {
-    const payload = {
-      start_time: change.new_start,
-      end_time: change.new_end,
-      duration_minutes: change.duration,
-      last_synced_at: new Date().toISOString()
-    };
-
-    console.log("[Optimise] Attempting to apply single change for:", change.title);
-    console.log("[Optimise] Event ID:", change.event_id);
-    console.log("[Optimise] Update Payload:", payload);
-
+    console.log("[Optimise] Applying change and pushing to provider:", change.title);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        console.error("[Optimise] User not found during applySingleChange");
-        throw new Error("User not found");
-      }
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!user) throw new Error("User not found");
 
-      const { data, error } = await supabase
+      // 1. Find the event in cache to get provider info
+      const eventInCache = events.find(e => e.event_id === change.event_id);
+      if (!eventInCache) throw new Error("Event not found in cache");
+
+      // 2. Push to Provider
+      const { error: pushError } = await supabase.functions.invoke('push-to-provider', {
+        body: {
+          eventId: change.event_id,
+          provider: eventInCache.provider,
+          calendarId: eventInCache.source_calendar_id,
+          startTime: change.new_start,
+          endTime: change.new_end,
+          googleAccessToken: session?.provider_token
+        }
+      });
+
+      if (pushError) throw pushError;
+
+      // 3. Update Local Cache
+      await supabase
         .from('calendar_events_cache')
-        .update(payload)
+        .update({
+          start_time: change.new_start,
+          end_time: change.new_end,
+          duration_minutes: change.duration,
+          last_synced_at: new Date().toISOString()
+        })
         .eq('event_id', change.event_id)
-        .eq('user_id', user.id)
-        .select();
-      
-      if (error) {
-        console.error("[Optimise] Supabase update error:", error);
-        throw error;
-      }
-
-      console.log("[Optimise] Supabase update successful. Returned data:", data);
-
-      if (!data || data.length === 0) {
-        console.warn("[Optimise] No rows were updated. Check if the event_id exists in the cache for this user.");
-      }
+        .eq('user_id', user.id);
 
       setAppliedChanges(prev => [...prev, change.event_id]);
-      showSuccess(`Updated: ${change.title}`);
+      showSuccess(`Synced: ${change.title}`);
     } catch (err: any) {
       console.error("[Optimise] applySingleChange failed:", err);
       showError(err.message);
@@ -229,45 +229,19 @@ const Optimise = () => {
   const applyAllChanges = async () => {
     if (!optimisationResult?.changes) return;
     
-    console.log("[Optimise] Attempting to apply all changes. Total changes:", optimisationResult.changes.length);
     setIsProcessing(true);
     setCurrentStep('applying');
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("User not found");
-
       const pendingChanges = optimisationResult.changes.filter((c: any) => !appliedChanges.includes(c.event_id));
-      console.log("[Optimise] Pending changes to apply:", pendingChanges.length);
-
+      
       for (const change of pendingChanges) {
-        const payload = {
-          start_time: change.new_start,
-          end_time: change.new_end,
-          duration_minutes: change.duration,
-          last_synced_at: new Date().toISOString()
-        };
-        
-        console.log(`[Optimise] Applying change for: ${change.title} (ID: ${change.event_id})`);
-        console.log(`[Optimise] Payload:`, payload);
-
-        const { error } = await supabase
-          .from('calendar_events_cache')
-          .update(payload)
-          .eq('event_id', change.event_id)
-          .eq('user_id', user.id);
-        
-        if (error) {
-          console.error("[Optimise] Error applying change for", change.title, ":", error);
-          throw error;
-        }
+        await applySingleChange(change);
       }
 
-      console.log("[Optimise] All changes applied successfully to cache.");
-      showSuccess("All changes applied!");
+      showSuccess("All changes synced to your calendar!");
       setCurrentStep('initial');
       setOptimisationResult(null);
     } catch (err: any) {
-      console.error("[Optimise] applyAllChanges failed:", err);
       showError(err.message);
       setCurrentStep('proposed');
     } finally {
@@ -584,7 +558,7 @@ const Optimise = () => {
                             )}
                           >
                             {isApplied ? <Check size={16} className="mr-2" /> : <Sparkles size={14} className="mr-2" />}
-                            {isApplied ? 'Applied' : 'Apply This'}
+                            {isApplied ? 'Synced' : 'Sync to Calendar'}
                           </Button>
                         </div>
                       </div>
@@ -612,7 +586,7 @@ const Optimise = () => {
                 disabled={optimisationResult.changes.length === appliedChanges.length}
                 className="w-full bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl py-8 text-xl font-black shadow-xl transition-all hover:scale-[1.01]"
               >
-                Apply All Remaining Changes
+                Sync All Remaining Changes
               </Button>
             </div>
           </div>
@@ -623,7 +597,7 @@ const Optimise = () => {
             <div className="w-24 h-24 bg-indigo-50 rounded-full flex items-center justify-center mx-auto mb-8">
               <RefreshCw className="text-indigo-600 animate-spin" size={48} />
             </div>
-            <h2 className="text-3xl font-black text-gray-900 mb-4">Applying Changes...</h2>
+            <h2 className="text-3xl font-black text-gray-900 mb-4">Syncing with Provider...</h2>
             <p className="text-gray-500 text-lg">Updating your calendar events. Please wait.</p>
           </Card>
         )}
