@@ -93,7 +93,8 @@ serve(async (req) => {
     // 3. Fetch Events
     const now = new Date();
     const startStr = now.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-    const endStr = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    // Extend to 30 days
+    const endStr = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
     const reportXml = `
       <c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">

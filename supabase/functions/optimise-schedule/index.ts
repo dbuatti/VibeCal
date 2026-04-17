@@ -80,7 +80,6 @@ serve(async (req) => {
         }
       }
     } catch (aiError) {
-      // Log the error but DO NOT throw it. We want the function to continue with "General" themes.
       console.error("[optimise-schedule] AI categorization failed (likely 503 or quota). Falling back to General.", aiError.message);
     }
 
@@ -113,7 +112,8 @@ serve(async (req) => {
       let foundSlot = false;
       let dayOffset = 1;
 
-      while (!foundSlot && dayOffset < 14) {
+      // Extend search window to 30 days
+      while (!foundSlot && dayOffset < 30) {
         let currentPointer = new Date();
         currentPointer.setDate(currentPointer.getDate() + dayOffset);
         currentPointer.setHours(0, 0, 0, 0);

@@ -68,7 +68,8 @@ serve(async (req) => {
     if (!enabled || enabled.length === 0) return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders })
 
     const now = new Date()
-    const end = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
+    // Extend to 30 days
+    const end = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
     const eventMap = new Map();
 
     // Shared locking logic

@@ -1,7 +1,7 @@
 import React from 'react';
-import { format, parseISO, startOfDay, addHours, differenceInMinutes } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { cn } from '@/lib/utils';
-import { Lock, Sparkles, Clock, MapPin, RefreshCw, Utensils, Music, Laptop, Coffee, CheckCircle2 } from 'lucide-react';
+import { Lock, Sparkles, Clock, MapPin, RefreshCw, Utensils, Music, Laptop, Coffee } from 'lucide-react';
 
 interface VisualScheduleProps {
   events: any[];
@@ -68,86 +68,89 @@ const VisualSchedule = ({ events, changes, appliedChanges }: VisualScheduleProps
   };
 
   return (
-    <div className="w-full overflow-x-auto pb-8">
-      <div className="min-w-[1000px] grid grid-cols-5 gap-px bg-gray-100 border border-gray-100 rounded-3xl overflow-hidden shadow-sm">
-        {/* Day Headers */}
-        {sortedDayKeys.slice(0, 5).map(dayKey => (
-          <div key={`header-${dayKey}`} className="bg-white p-6 text-center border-b border-gray-100">
-            <h3 className="text-lg font-bold text-gray-900">
-              {format(parseISO(dayKey), 'EEE d')}
-            </h3>
-          </div>
-        ))}
-
+    <div className="w-full overflow-x-auto pb-8 scrollbar-thin scrollbar-thumb-gray-200 scrollbar-track-transparent">
+      <div className="inline-grid grid-flow-col auto-cols-[280px] gap-px bg-gray-100 border border-gray-100 rounded-3xl overflow-hidden shadow-sm">
         {/* Day Columns */}
-        {sortedDayKeys.slice(0, 5).map(dayKey => (
-          <div key={`col-${dayKey}`} className="bg-[#F8F9FC] min-h-[800px] p-3 space-y-3 relative">
-            {/* Grid Lines (Visual only) */}
-            <div className="absolute inset-0 pointer-events-none">
-              {[...Array(12)].map((_, i) => (
-                <div key={i} className="h-20 border-b border-gray-50/50 w-full" />
-              ))}
+        {sortedDayKeys.map(dayKey => (
+          <div key={`col-${dayKey}`} className="flex flex-col bg-[#F8F9FC] min-h-[800px]">
+            {/* Day Header */}
+            <div className="bg-white p-6 text-center border-b border-gray-100 sticky top-0 z-20">
+              <h3 className="text-lg font-bold text-gray-900">
+                {format(parseISO(dayKey), 'EEE d')}
+              </h3>
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mt-1">
+                {format(parseISO(dayKey), 'MMMM')}
+              </p>
             </div>
 
-            {/* Events */}
-            <div className="relative z-10 space-y-3">
-              {days[dayKey]
-                .sort((a: any, b: any) => parseISO(a.start_time).getTime() - parseISO(b.start_time).getTime())
-                .map((event: any, idx: number) => {
-                  const isApplied = appliedChanges.includes(event.event_id);
-                  const styles = getEventStyles(event);
-                  const icon = getEventIcon(event.title);
+            <div className="p-3 space-y-3 relative flex-1">
+              {/* Grid Lines (Visual only) */}
+              <div className="absolute inset-0 pointer-events-none">
+                {[...Array(12)].map((_, i) => (
+                  <div key={i} className="h-20 border-b border-gray-50/50 w-full" />
+                ))}
+              </div>
 
-                  return (
-                    <div 
-                      key={`${dayKey}-${idx}`}
-                      className={cn(
-                        "p-4 rounded-xl border transition-all duration-300 group relative",
-                        styles,
-                        isApplied && "opacity-40 grayscale"
-                      )}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            {icon && <span className="opacity-70">{icon}</span>}
-                            <h4 className="font-bold text-sm leading-tight">
-                              {event.title}
-                            </h4>
-                          </div>
-                          
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-1.5 text-[10px] font-bold opacity-60">
-                              <Clock size={10} />
-                              {format(parseISO(event.start_time), 'HH:mm')} – {format(parseISO(event.end_time), 'HH:mm')}
+              {/* Events */}
+              <div className="relative z-10 space-y-3">
+                {days[dayKey]
+                  .sort((a: any, b: any) => parseISO(a.start_time).getTime() - parseISO(b.start_time).getTime())
+                  .map((event: any, idx: number) => {
+                    const isApplied = appliedChanges.includes(event.event_id);
+                    const styles = getEventStyles(event);
+                    const icon = getEventIcon(event.title);
+
+                    return (
+                      <div 
+                        key={`${dayKey}-${idx}`}
+                        className={cn(
+                          "p-4 rounded-xl border transition-all duration-300 group relative",
+                          styles,
+                          isApplied && "opacity-40 grayscale"
+                        )}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              {icon && <span className="opacity-70">{icon}</span>}
+                              <h4 className="font-bold text-sm leading-tight">
+                                {event.title}
+                              </h4>
                             </div>
                             
-                            {event.location && (
+                            <div className="space-y-1">
                               <div className="flex items-center gap-1.5 text-[10px] font-bold opacity-60">
-                                <MapPin size={10} />
-                                {event.location}
+                                <Clock size={10} />
+                                {format(parseISO(event.start_time), 'HH:mm')} – {format(parseISO(event.end_time), 'HH:mm')}
                               </div>
+                              
+                              {event.location && (
+                                <div className="flex items-center gap-1.5 text-[10px] font-bold opacity-60">
+                                  <MapPin size={10} />
+                                  {event.location}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex flex-col items-end gap-2">
+                            {event.type === 'proposed' ? (
+                              <Sparkles size={14} className="text-indigo-500" />
+                            ) : (
+                              <RefreshCw size={12} className="opacity-30" />
                             )}
                           </div>
                         </div>
 
-                        <div className="flex flex-col items-end gap-2">
-                          {event.type === 'proposed' ? (
-                            <Sparkles size={14} className="text-indigo-500" />
-                          ) : (
-                            <RefreshCw size={12} className="opacity-30" />
-                          )}
-                        </div>
+                        {event.type === 'proposed' && !isApplied && (
+                          <div className="absolute -right-1 -top-1">
+                            <div className="w-3 h-3 bg-indigo-500 rounded-full border-2 border-white shadow-sm animate-pulse" />
+                          </div>
+                        )}
                       </div>
-
-                      {event.type === 'proposed' && !isApplied && (
-                        <div className="absolute -right-1 -top-1">
-                          <div className="w-3 h-3 bg-indigo-500 rounded-full border-2 border-white shadow-sm animate-pulse" />
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+              </div>
             </div>
           </div>
         ))}
