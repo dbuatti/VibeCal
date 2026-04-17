@@ -46,38 +46,42 @@ serve(async (req) => {
       return new Response(JSON.stringify({ message: 'No movable events found.', changes: [] }), { headers: corsHeaders });
     }
 
-    // 1. Categorize tasks using AI to match themes (with Fallback)
+    // 1. Categorize tasks using AI to match themes (with Robust Fallback)
     let categories = movableEvents.map(() => "General");
     
     try {
-      console.log("[optimise-schedule] Attempting AI categorization...");
-      const genAI = new GoogleGenerativeAI(Deno.env.get('GEMINI_API_KEY'));
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+      const geminiKey = Deno.env.get('GEMINI_API_KEY');
+      if (geminiKey && dayThemes.length > 0) {
+        console.log("[optimise-schedule] Attempting AI categorization...");
+        const genAI = new GoogleGenerativeAI(geminiKey);
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
-      const themeList = dayThemes.map(t => t.theme).filter(Boolean);
-      if (themeList.length > 0) {
-        const prompt = `
-          You are a scheduling assistant. Categorize the following tasks into one of these themes: [${themeList.join(', ')}].
-          If a task doesn't fit any theme, categorize it as "General".
-          
-          Tasks:
-          ${movableEvents.map(e => `- ${e.title}`).join('\n')}
-          
-          Return ONLY a JSON array of strings representing the theme for each task in order.
-          Example: ["Music", "Admin", "General"]
-        `;
+        const themeList = dayThemes.map(t => t.theme).filter(Boolean);
+        if (themeList.length > 0) {
+          const prompt = `
+            You are a scheduling assistant. Categorize the following tasks into one of these themes: [${themeList.join(', ')}].
+            If a task doesn't fit any theme, categorize it as "General".
+            
+            Tasks:
+            ${movableEvents.map(e => `- ${e.title}`).join('\n')}
+            
+            Return ONLY a JSON array of strings representing the theme for each task in order.
+            Example: ["Music", "Admin", "General"]
+          `;
 
-        const aiResult = await model.generateContent(prompt);
-        const aiResponse = await aiResult.response;
-        const text = aiResponse.text();
-        const jsonMatch = text.match(/\[.*\]/s);
-        if (jsonMatch) {
-          categories = JSON.parse(jsonMatch[0]);
-          console.log("[optimise-schedule] AI categorization successful.");
+          const aiResult = await model.generateContent(prompt);
+          const aiResponse = await aiResult.response;
+          const text = aiResponse.text();
+          const jsonMatch = text.match(/\[.*\]/s);
+          if (jsonMatch) {
+            categories = JSON.parse(jsonMatch[0]);
+            console.log("[optimise-schedule] AI categorization successful.");
+          }
         }
       }
     } catch (aiError) {
-      console.warn("[optimise-schedule] AI service unavailable or failed. Falling back to General themes.", aiError.message);
+      // Log the error but DO NOT throw it. We want the function to continue with "General" themes.
+      console.error("[optimise-schedule] AI categorization failed (likely 503 or quota). Falling back to General.", aiError.message);
     }
 
     const proposedChanges = [];
@@ -102,15 +106,12 @@ serve(async (req) => {
       const effectiveDuration = durationOverride || event.duration_minutes;
       const durationMs = effectiveDuration * 60000;
       
-      // Find which days match this theme
       const preferredDays = dayThemes
         .filter(t => t.theme.toLowerCase() === taskTheme.toLowerCase())
         .map(t => t.day_of_week);
 
       let foundSlot = false;
-      let dayOffset = 1; // Start from tomorrow
-
-      console.log(`[optimise-schedule] Placing "${event.title}" (Theme: ${taskTheme})`);
+      let dayOffset = 1;
 
       while (!foundSlot && dayOffset < 14) {
         let currentPointer = new Date();
@@ -120,13 +121,11 @@ serve(async (req) => {
         const dayOfWeek = currentPointer.getDay();
         const dayKey = currentPointer.toISOString().split('T')[0];
         
-        // SKIP if day is not in user-selected allowed days
         if (!selectedDays.includes(dayOfWeek)) {
           dayOffset++;
           continue;
         }
 
-        // Skip if this day doesn't match the theme (unless we've searched a full week and found nothing)
         if (preferredDays.length > 0 && !preferredDays.includes(dayOfWeek) && dayOffset < 8) {
           dayOffset++;
           continue;
@@ -174,7 +173,7 @@ serve(async (req) => {
             foundSlot = true;
             stats.tasks += 1;
             stats.hours += (effectiveDuration / 60);
-            stats.lastPointer = new Date(potentialEnd.getTime() + 5 * 60000); // 5 min gap
+            stats.lastPointer = new Date(potentialEnd.getTime() + 5 * 60000);
             stats.lastPointer = alignTime(stats.lastPointer, slotAlignment);
 
             proposedChanges.push({

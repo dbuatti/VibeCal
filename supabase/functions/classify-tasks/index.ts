@@ -33,42 +33,55 @@ serve(async (req) => {
       .order('created_at', { ascending: false })
       .limit(20);
 
-    const genAI = new GoogleGenerativeAI(Deno.env.get('GEMINI_API_KEY'));
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+    let classifications = tasks.map(() => false); // Default to fixed for safety
 
-    const prompt = `
-      You are a personal assistant helping to organize a calendar. 
-      Classify the following tasks as either "movable" (can be rescheduled) or "fixed" (must happen at this specific time).
-      
-      General Rules:
-      - Fixed: Meetings with others, appointments, live classes, rehearsals, ceremonies, specific deadlines.
-      - Movable: Solo work, drafting, chores, practice, exploration, personal projects.
-      
-      User's Custom Movable Keywords: ${movableKeywords.join(', ')}
-      
-      User's Past Corrections (Learn from these!):
-      ${feedback?.map(f => `- "${f.task_name}" is ${f.is_movable ? 'movable' : 'fixed'}`).join('\n')}
-      
-      Tasks to classify:
-      ${tasks.map(t => `- "${t}"`).join('\n')}
-      
-      Return ONLY a JSON array of booleans where true means movable and false means fixed.
-      Example: [true, false, true]
-    `;
+    try {
+      const geminiKey = Deno.env.get('GEMINI_API_KEY');
+      if (geminiKey) {
+        const genAI = new GoogleGenerativeAI(geminiKey);
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
-    
-    // Clean the response to ensure it's valid JSON
-    const jsonMatch = text.match(/\[.*\]/s);
-    const classifications = jsonMatch ? JSON.parse(jsonMatch[0]) : tasks.map(() => false);
+        const prompt = `
+          You are a personal assistant helping to organize a calendar. 
+          Classify the following tasks as either "movable" (can be rescheduled) or "fixed" (must happen at this specific time).
+          
+          General Rules:
+          - Fixed: Meetings with others, appointments, live classes, rehearsals, ceremonies, specific deadlines.
+          - Movable: Solo work, drafting, chores, practice, exploration, personal projects.
+          
+          User's Custom Movable Keywords: ${movableKeywords.join(', ')}
+          
+          User's Past Corrections (Learn from these!):
+          ${feedback?.map(f => `- "${f.task_name}" is ${f.is_movable ? 'movable' : 'fixed'}`).join('\n')}
+          
+          Tasks to classify:
+          ${tasks.map(t => `- "${t}"`).join('\n')}
+          
+          Return ONLY a JSON array of booleans where true means movable and false means fixed.
+          Example: [true, false, true]
+        `;
+
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        const text = response.text();
+        const jsonMatch = text.match(/\[.*\]/s);
+        if (jsonMatch) {
+          classifications = JSON.parse(jsonMatch[0]);
+        }
+      }
+    } catch (aiError) {
+      console.error("[classify-tasks] AI classification failed. Defaulting to fixed.", aiError.message);
+      // Fallback: check keywords manually if AI fails
+      classifications = tasks.map(title => 
+        movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()))
+      );
+    }
 
     return new Response(JSON.stringify({ classifications }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
   } catch (error) {
-    console.error("[classify-tasks] Error:", error);
+    console.error("[classify-tasks] Fatal Error:", error);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders })
   }
 })
