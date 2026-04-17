@@ -14,7 +14,7 @@ serve(async (req) => {
   }
 
   try {
-    console.log("[optimise-schedule] Starting theme-aware redistribution with surplus handling...");
+    console.log("[optimise-schedule] Starting theme-aware redistribution...");
     
     const authHeader = req.headers.get('Authorization')
     const { durationOverride, maxTasksOverride, slotAlignment = 15, selectedDays = [1, 2, 3, 4, 5], placeholderDate } = await req.json();
@@ -54,21 +54,32 @@ serve(async (req) => {
       return new Response(JSON.stringify({ message: 'No movable events found.', changes: [] }), { headers: corsHeaders });
     }
 
-    // AI Categorization
+    // AI Categorization with robust fallback
     let categories = movableEvents.map(() => "General");
-    try {
-      const geminiKey = Deno.env.get('GEMINI_API_KEY');
-      if (geminiKey) {
-        const genAI = new GoogleGenerativeAI(geminiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
-        const themeList = dayThemes.map(t => t.theme).filter(Boolean);
-        const prompt = `Categorize these tasks into themes: [${themeList.join(', ')}]. Tasks: ${movableEvents.map(e => e.title).join(', ')}. Return JSON array of strings.`;
-        const aiResult = await model.generateContent(prompt);
-        const text = (await aiResult.response).text();
-        const jsonMatch = text.match(/\[.*\]/s);
-        if (jsonMatch) categories = JSON.parse(jsonMatch[0]);
+    const themeList = dayThemes.map(t => t.theme).filter(Boolean);
+
+    if (themeList.length > 0) {
+      try {
+        const geminiKey = Deno.env.get('GEMINI_API_KEY');
+        if (geminiKey) {
+          const genAI = new GoogleGenerativeAI(geminiKey);
+          const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+          const prompt = `Categorize these tasks into themes: [${themeList.join(', ')}]. Tasks: ${movableEvents.map(e => e.title).join(', ')}. Return ONLY a JSON array of strings.`;
+          const aiResult = await model.generateContent(prompt);
+          const text = (await aiResult.response).text();
+          const jsonMatch = text.match(/\[.*\]/s);
+          if (jsonMatch) categories = JSON.parse(jsonMatch[0]);
+        }
+      } catch (e) { 
+        console.warn("[optimise-schedule] AI Categorization failed (likely quota). Using keyword fallback.");
+        // Simple keyword fallback for categorization
+        categories = movableEvents.map(event => {
+          const title = event.title.toLowerCase();
+          const matchedTheme = themeList.find(theme => title.includes(theme.toLowerCase()));
+          return matchedTheme || "General";
+        });
       }
-    } catch (e) { console.error("AI Error", e); }
+    }
 
     const categorizedEvents = movableEvents.map((event, index) => ({
       ...event,
@@ -95,7 +106,6 @@ serve(async (req) => {
       return new Date(Math.ceil(date.getTime() / ms) * ms);
     };
 
-    // Pre-calculate fixed work hours per day
     fixedEvents.forEach(f => {
       const dayKey = new Date(f.start_time).toISOString().split('T')[0];
       const isWork = workKeywords.some(kw => f.title.toLowerCase().includes(kw.toLowerCase()));
@@ -113,7 +123,6 @@ serve(async (req) => {
       let foundSlot = false;
       let dayOffset = 1;
 
-      // Search window: next 7 days
       while (!foundSlot && dayOffset <= 7) {
         let currentPointer = new Date();
         currentPointer.setDate(currentPointer.getDate() + dayOffset);
@@ -181,14 +190,13 @@ serve(async (req) => {
         if (!foundSlot) dayOffset++;
       }
 
-      // If no slot found in the window, move to placeholder
       if (!foundSlot && placeholderDate) {
         const pDate = new Date(placeholderDate);
         const offset = getOffset(pDate);
         const [startH, startM] = settings.day_start_time.split(':').map(Number);
         
         const pStart = new Date(pDate);
-        pStart.setUTCHours(startH - offset, startM + surplusCount, 0, 0); // Stack with 1min offset
+        pStart.setUTCHours(startH - offset, startM + surplusCount, 0, 0);
         const pEnd = new Date(pStart.getTime() + durationMs);
 
         proposedChanges.push({
@@ -208,6 +216,7 @@ serve(async (req) => {
 
     return new Response(JSON.stringify({ changes: proposedChanges }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
+    console.error("[optimise-schedule] Fatal Error:", error);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })
