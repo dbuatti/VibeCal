@@ -135,24 +135,23 @@ serve(async (req) => {
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
 
-    // 4. Fetch Events - EXTENDED RANGE FOR 2026
+    // 4. Fetch Events
     const syncStartTime = new Date();
-    syncStartTime.setDate(syncStartTime.getDate() - 30); // Look back 30 days
+    syncStartTime.setDate(syncStartTime.getDate() - 14); // Look back 2 weeks
     const syncEndTime = new Date();
-    syncEndTime.setDate(syncEndTime.getDate() + 730); // Look ahead 2 years (730 days)
+    syncEndTime.setDate(syncEndTime.getDate() + 60); // Look ahead 2 months
     
     const startStr = syncStartTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endStr = syncEndTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
     console.log(`[${functionName}] Sync Range: ${startStr} to ${endStr}`);
 
+    // Standard CalDAV REPORT query
     const reportXml = `
       <c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
         <d:prop>
           <d:getetag />
-          <c:calendar-data>
-            <c:expand start="${startStr}" end="${endStr}"/>
-          </c:calendar-data>
+          <c:calendar-data />
         </d:prop>
         <c:filter>
           <c:comp-filter name="VCALENDAR">
@@ -186,20 +185,24 @@ serve(async (req) => {
 
       const xml = await res.text();
       
-      // DEEP INSPECTION: Log a snippet of the XML if no events found yet
-      if (xml.length < 500) {
-        console.log(`[${functionName}] Raw XML Response (Short):`, xml);
-      } else {
-        console.log(`[${functionName}] XML Response received. Length: ${xml.length}`);
-      }
+      // DEEP INSPECTION: Log the start of the XML to see if it contains any data
+      console.log(`[${functionName}] Raw XML Snippet (first 1000 chars):`, xml.substring(0, 1000));
 
       const eventDataMatches = xml.matchAll(/<c:calendar-data>([\s\S]*?)<\/c:calendar-data>/gi);
       let matchCount = 0;
       
       for (const match of eventDataMatches) {
         matchCount++;
-        const icsData = match[1].replace(/</g, '<').replace(/>/g, '>').replace(/&/g, '&');
+        let icsData = match[1].trim();
         
+        // Clean up XML entities
+        icsData = icsData
+          .replace(/</g, '<')
+          .replace(/>/g, '>')
+          .replace(/&/g, '&')
+          .replace(/&quot;/g, '"')
+          .replace(/&apos;/g, "'");
+
         try {
           const jcalData = ICAL.parse(icsData);
           const vcalendar = new ICAL.Component(jcalData);
@@ -234,18 +237,19 @@ serve(async (req) => {
             }
           }
         } catch (parseErr) {
-          console.error(`[${functionName}] ICAL Parse Error:`, parseErr.message);
+          console.error(`[${functionName}] ICAL Parse Error for event in "${cal.calendar_name}":`, parseErr.message);
         }
       }
       console.log(`[${functionName}] Found ${matchCount} calendar-data blocks in "${cal.calendar_name}"`);
     }
 
     const uniqueEvents = Array.from(eventMap.values());
-    console.log(`[${functionName}] Total unique events found: ${uniqueEvents.length}`);
+    console.log(`[${functionName}] Total unique events found across all calendars: ${uniqueEvents.length}`);
 
     if (uniqueEvents.length > 0) {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
       
+      // Cleanup old events for this provider
       await supabaseAdmin.from('calendar_events_cache')
         .delete()
         .eq('user_id', user.id)
