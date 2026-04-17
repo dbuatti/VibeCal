@@ -5,7 +5,6 @@ import { format, parseISO } from 'date-fns';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -18,10 +17,13 @@ import {
   Inbox,
   Calendar as CalendarIcon,
   RefreshCw,
-  Zap
+  Zap,
+  Trophy,
+  LayoutDashboard
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import VisualSchedule from './VisualSchedule';
+import { Link } from 'react-router-dom';
 
 interface DayByDayPlannerProps {
   events: any[];
@@ -40,7 +42,6 @@ const DayByDayPlanner = ({
   maxHours, 
   maxTasks
 }: DayByDayPlannerProps) => {
-  // Get all unique dates from changes and locked events
   const allDates = useMemo(() => {
     const dates = new Set<string>();
     changes.forEach(c => dates.add(format(parseISO(c.new_start), 'yyyy-MM-dd')));
@@ -50,11 +51,11 @@ const DayByDayPlanner = ({
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isFinished, setIsFinished] = useState(false);
   
   const currentDateStr = allDates[currentIndex];
   const currentDate = currentDateStr ? parseISO(currentDateStr) : new Date();
 
-  // Filter data for the current day
   const dayChanges = useMemo(() => 
     changes.filter(c => format(parseISO(c.new_start), 'yyyy-MM-dd') === currentDateStr),
     [changes, currentDateStr]
@@ -65,7 +66,6 @@ const DayByDayPlanner = ({
     [events, currentDateStr]
   );
 
-  // Calculate stats
   const stats = useMemo(() => {
     const totalTasks = dayChanges.length + dayLockedEvents.filter(e => !e.title.toLowerCase().includes('break')).length;
     const totalMinutes = [...dayChanges, ...dayLockedEvents].reduce((acc, e) => acc + (e.duration || e.duration_minutes || 0), 0);
@@ -84,7 +84,9 @@ const DayByDayPlanner = ({
     setIsSyncing(true);
     try {
       await onApplyDay(dayChanges);
-      if (currentIndex < allDates.length - 1) {
+      if (currentIndex === allDates.length - 1) {
+        setTimeout(() => setIsFinished(true), 800);
+      } else {
         setTimeout(() => setCurrentIndex(prev => prev + 1), 600);
       }
     } finally {
@@ -92,12 +94,35 @@ const DayByDayPlanner = ({
     }
   };
 
-  const isDayVetted = dayChanges.length > 0 && dayChanges.every(c => appliedChanges.includes(c.event_id));
+  const isDayVetted = dayChanges.length === 0 || dayChanges.every(c => appliedChanges.includes(c.event_id));
   const sessionProgress = ((currentIndex + 1) / allDates.length) * 100;
+
+  if (isFinished) {
+    return (
+      <div className="max-w-2xl mx-auto text-center py-12 animate-in zoom-in-95 duration-500">
+        <div className="w-24 h-24 bg-green-100 rounded-[2rem] flex items-center justify-center mx-auto mb-8 shadow-xl shadow-green-50">
+          <Trophy className="text-green-600" size={48} />
+        </div>
+        <h2 className="text-4xl font-black text-gray-900 mb-4 tracking-tight">Session Complete!</h2>
+        <p className="text-gray-500 text-lg mb-10 font-medium">
+          You've successfully vetted your schedule for the next {allDates.length} days. Your calendar is now perfectly aligned.
+        </p>
+        <div className="grid grid-cols-2 gap-4">
+          <Link to="/">
+            <Button className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl py-8 text-lg font-black shadow-xl shadow-indigo-100">
+              <LayoutDashboard className="mr-2" /> Dashboard
+            </Button>
+          </Link>
+          <Button variant="outline" onClick={() => setIsFinished(false)} className="rounded-2xl py-8 text-lg font-black border-gray-200 text-gray-500">
+            Review Plan
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-      {/* Session Progress Bar */}
       <div className="space-y-2">
         <div className="flex justify-between items-end px-2">
           <span className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-600">Session Progress</span>
@@ -111,7 +136,6 @@ const DayByDayPlanner = ({
         </div>
       </div>
 
-      {/* Date Navigation */}
       <div className="flex items-center justify-between bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm">
         <Button 
           variant="ghost" 
@@ -147,7 +171,6 @@ const DayByDayPlanner = ({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Left: Day Status & Suggestions */}
         <div className="space-y-6">
           <Card className="border-none shadow-sm rounded-[2rem] bg-white overflow-hidden">
             <CardHeader className="pb-2">
@@ -284,7 +307,6 @@ const DayByDayPlanner = ({
           </div>
         </div>
 
-        {/* Right: Visual Timeline */}
         <div className="lg:col-span-2">
           <Card className="border-none shadow-sm rounded-[2.5rem] bg-white overflow-hidden h-full flex flex-col">
             <CardHeader className="border-b border-gray-50 flex flex-row items-center justify-between p-8">

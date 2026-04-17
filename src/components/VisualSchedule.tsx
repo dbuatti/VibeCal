@@ -1,7 +1,8 @@
 import React from 'react';
 import { format, parseISO } from 'date-fns';
 import { cn } from '@/lib/utils';
-import { Lock, Sparkles, Clock, MapPin, RefreshCw, Utensils, Music, Laptop, Coffee } from 'lucide-react';
+import { Lock, Sparkles, Clock, MapPin, RefreshCw, Utensils, Music, Laptop, Coffee, Inbox } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 
 interface VisualScheduleProps {
   events: any[];
@@ -10,7 +11,6 @@ interface VisualScheduleProps {
 }
 
 const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: VisualScheduleProps) => {
-  // Combine locked events with proposed changes
   const allVisualEvents = [
     ...events.filter(e => e && e.is_locked).map(e => ({ ...e, type: 'locked' })),
     ...changes.map(c => ({
@@ -23,7 +23,6 @@ const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: Visu
     }))
   ];
 
-  // Group by day
   const days = allVisualEvents.reduce((acc: any, event) => {
     if (!event.start_time) return acc;
     try {
@@ -46,7 +45,6 @@ const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: Visu
     );
   }
 
-  // Helper to get icon based on title
   const getEventIcon = (title: string = '') => {
     const t = title.toLowerCase();
     if (t.includes('lunch')) return <Utensils size={14} />;
@@ -57,9 +55,13 @@ const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: Visu
     return null;
   };
 
-  // Helper to get color based on title or type
   const getEventStyles = (event: any) => {
     const t = (event.title || '').toLowerCase();
+    
+    if (event.is_surplus) {
+      return "bg-amber-50/30 border-amber-200 border-dashed text-amber-800";
+    }
+
     if (event.type === 'locked') {
       if (t.includes('lunch') || t.includes('dinner')) return "bg-blue-50/50 border-blue-100 text-blue-700";
       return "bg-gray-50/50 border-gray-100 text-gray-500";
@@ -75,10 +77,8 @@ const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: Visu
   return (
     <div className="w-full overflow-x-auto pb-8 scrollbar-thin scrollbar-thumb-gray-200 scrollbar-track-transparent">
       <div className="inline-grid grid-flow-col auto-cols-[280px] gap-px bg-gray-100 border border-gray-100 rounded-3xl overflow-hidden shadow-sm">
-        {/* Day Columns */}
         {sortedDayKeys.map(dayKey => (
           <div key={`col-${dayKey}`} className="flex flex-col bg-[#F8F9FC] min-h-[800px]">
-            {/* Day Header */}
             <div className="bg-white p-6 text-center border-b border-gray-100 sticky top-0 z-20">
               <h3 className="text-lg font-bold text-gray-900">
                 {format(parseISO(dayKey), 'EEE d')}
@@ -89,14 +89,12 @@ const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: Visu
             </div>
 
             <div className="p-3 space-y-3 relative flex-1">
-              {/* Grid Lines (Visual only) */}
               <div className="absolute inset-0 pointer-events-none">
                 {[...Array(12)].map((_, i) => (
                   <div key={i} className="h-20 border-b border-gray-50/50 w-full" />
                 ))}
               </div>
 
-              {/* Events */}
               <div className="relative z-10 space-y-3">
                 {days[dayKey]
                   .sort((a: any, b: any) => parseISO(a.start_time).getTime() - parseISO(b.start_time).getTime())
@@ -117,7 +115,7 @@ const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: Visu
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1">
-                              {icon && <span className="opacity-70">{icon}</span>}
+                              {event.is_surplus ? <Inbox size={14} className="text-amber-500" /> : icon && <span className="opacity-70">{icon}</span>}
                               <h4 className="font-bold text-sm leading-tight">
                                 {event.title}
                               </h4>
@@ -128,26 +126,21 @@ const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: Visu
                                 <Clock size={10} />
                                 {format(parseISO(event.start_time), 'HH:mm')} – {format(parseISO(event.end_time), 'HH:mm')}
                               </div>
-                              
-                              {event.location && (
-                                <div className="flex items-center gap-1.5 text-[10px] font-bold opacity-60">
-                                  <MapPin size={10} />
-                                  {event.location}
-                                </div>
-                              )}
                             </div>
                           </div>
 
                           <div className="flex flex-col items-end gap-2">
-                            {event.type === 'proposed' ? (
+                            {event.is_surplus ? (
+                              <Badge variant="outline" className="text-[8px] font-black border-amber-200 text-amber-600 bg-white">BACKLOG</Badge>
+                            ) : event.type === 'proposed' ? (
                               <Sparkles size={14} className="text-indigo-500" />
                             ) : (
-                              <RefreshCw size={12} className="opacity-30" />
+                              <Lock size={12} className="opacity-30" />
                             )}
                           </div>
                         </div>
 
-                        {event.type === 'proposed' && !isApplied && (
+                        {event.type === 'proposed' && !isApplied && !event.is_surplus && (
                           <div className="absolute -right-1 -top-1">
                             <div className="w-3 h-3 bg-indigo-500 rounded-full border-2 border-white shadow-sm animate-pulse" />
                           </div>
