@@ -12,6 +12,8 @@ import PlanInitialView from '@/components/plan/PlanInitialView';
 import PlanLoadingView from '@/components/plan/PlanLoadingView';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { format, nextSaturday, parseISO, addMinutes } from 'date-fns';
+import { AlertCircle, LogIn } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
 type PlanStep = 'initial' | 'analysis' | 'vetting_tasks' | 'requirements' | 'active_plan';
 
@@ -21,6 +23,7 @@ const Plan = () => {
   const [currentStep, setCurrentStep] = useState<PlanStep>('initial');
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusText, setStatusText] = useState('');
+  const [tokenMissing, setTokenMissing] = useState(false);
   
   const [proposal, setProposal] = useState<any>(null);
   const [events, setEvents] = useState<any[]>([]);
@@ -59,8 +62,6 @@ const Plan = () => {
       if (settingsRes.data) {
         const s = settingsRes.data;
         setSettings(s);
-        
-        // Load persisted requirements
         setMaxHoursOverride(s.max_hours_per_day || 6);
         setMaxTasksOverride(s.max_tasks_per_day || 5);
         if (s.duration_override) setDurationOverride(s.duration_override);
@@ -92,32 +93,29 @@ const Plan = () => {
     fetchData();
   }, []);
 
-  const saveRequirements = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    await supabase.from('user_settings').upsert({
-      user_id: user.id,
-      max_hours_per_day: maxHoursOverride,
-      max_tasks_per_day: maxTasksOverride,
-      duration_override: durationOverride,
-      slot_alignment: slotAlignment,
-      selected_days: selectedDays,
-      placeholder_date: placeholderDate
-    }, { onConflict: 'user_id' });
-  };
-
   const runAnalysis = async (skipSync = false) => {
     setIsProcessing(true);
+    setTokenMissing(false);
     setStatusText(skipSync ? 'Loading cached data...' : 'Syncing Calendars...');
+    
     try {
       if (!skipSync) {
         const { data: { session } } = await supabase.auth.getSession();
+        console.log("[Plan] Syncing... Provider:", session?.user?.app_metadata?.provider);
+        
         if (session?.provider_token) {
+          console.log("[Plan] Invoking sync-calendar with token...");
           await supabase.functions.invoke('sync-calendar', { 
             body: { googleAccessToken: session.provider_token } 
           });
+        } else if (session?.user?.app_metadata?.provider === 'google') {
+          console.warn("[Plan] Google token missing from session.");
+          setTokenMissing(true);
+          setIsProcessing(false);
+          return;
         }
+
+        console.log("[Plan] Invoking sync-apple-calendar...");
         await supabase.functions.invoke('sync-apple-calendar');
       }
       
@@ -130,9 +128,14 @@ const Plan = () => {
       
       showSuccess(skipSync ? 'Loaded from cache!' : 'Calendar synced!');
     } catch (err: any) { 
+      console.error("[Plan] Sync Error:", err);
       showError(err.message); 
     }
     finally { setIsProcessing(false); }
+  };
+
+  const handleReauth = () => {
+    navigate('/login');
   };
 
   const handleFullReset = async () => {
@@ -141,23 +144,13 @@ const Plan = () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-
-      // 1. Clear Cache
       await supabase.from('calendar_events_cache').delete().eq('user_id', user.id);
-      
-      // 2. Clear History
       await supabase.from('optimisation_history').delete().eq('user_id', user.id);
-
-      // 3. Reset State
       setEvents([]);
       setProposal(null);
       setAppliedChanges([]);
       setCurrentStep('initial');
-
-      // 4. Trigger Fresh Sync
       await runAnalysis(false);
-      
-      showSuccess("System reset complete. Everything is fresh!");
     } catch (err: any) {
       showError("Reset failed: " + err.message);
     } finally {
@@ -173,8 +166,15 @@ const Plan = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // Save requirements to DB
-      await saveRequirements();
+      await supabase.from('user_settings').upsert({
+        user_id: user.id,
+        max_hours_per_day: maxHoursOverride,
+        max_tasks_per_day: maxTasksOverride,
+        duration_override: durationOverride,
+        slot_alignment: slotAlignment,
+        selected_days: selectedDays,
+        placeholder_date: placeholderDate
+      }, { onConflict: 'user_id' });
 
       const currentApplied = isResuggest ? appliedChanges : [];
 
@@ -341,6 +341,25 @@ const Plan = () => {
         renderRequirementsForm={renderRequirementsForm}
       />
 
+      {tokenMissing && (
+        <Card className="border-none shadow-xl rounded-[2rem] overflow-hidden bg-white mb-8 animate-in zoom-in-95 duration-300">
+          <div className="p-10 text-center space-y-6">
+            <div className="w-16 h-16 bg-amber-50 rounded-2xl flex items-center justify-center mx-auto">
+              <AlertCircle className="text-amber-500" size={32} />
+            </div>
+            <div className="space-y-2">
+              <h2 className="text-2xl font-black text-gray-900 tracking-tight">Google Token Expired</h2>
+              <p className="text-gray-500 font-medium max-w-md mx-auto">
+                To sync your Google Calendar, we need a fresh access token. Please sign out and sign back in with Google.
+              </p>
+            </div>
+            <Button onClick={handleReauth} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-8 py-6 font-black">
+              <LogIn className="mr-2" size={18} /> Re-authenticate
+            </Button>
+          </div>
+        </Card>
+      )}
+
       {isProcessing ? (
         <PlanLoadingView statusText={statusText} />
       ) : (
@@ -351,17 +370,6 @@ const Plan = () => {
               onSyncFresh={() => runAnalysis(false)}
               onUseCache={() => runAnalysis(true)}
             />
-          )}
-
-          {currentStep === 'requirements' && (
-            <Card className="border-none shadow-xl rounded-[2rem] overflow-hidden bg-white animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <CardHeader className="p-8 border-b border-gray-50">
-                <CardTitle className="text-2xl font-black tracking-tight">Requirements</CardTitle>
-              </CardHeader>
-              <CardContent className="p-8">
-                {renderRequirementsForm()}
-              </CardContent>
-            </Card>
           )}
 
           {currentStep === 'active_plan' && proposal && (
