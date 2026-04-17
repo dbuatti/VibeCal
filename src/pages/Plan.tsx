@@ -114,7 +114,12 @@ const Plan = () => {
       if (fetchedEvents && fetchedEvents.length > 0) {
         setLastSynced(fetchedEvents[0].last_synced_at);
       }
-      setCurrentStep('vetting_tasks');
+      
+      // Only move to vetting if we aren't already in an active plan
+      if (currentStep !== 'active_plan') {
+        setCurrentStep('vetting_tasks');
+      }
+      
       showSuccess(skipSync ? 'Loaded from cache!' : 'Calendar synced!');
     } catch (err: any) { 
       showError(err.message); 
