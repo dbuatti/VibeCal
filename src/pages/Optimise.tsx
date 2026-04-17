@@ -5,7 +5,8 @@ import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, Bug, ArrowRight, Zap, Apple, Info, Globe, ChevronRight } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, Bug, ArrowRight, Zap, Apple, Info, Globe, ChevronRight, Settings2 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { format } from 'date-fns';
@@ -20,6 +21,9 @@ const Optimise = () => {
   const [isReviewing, setIsReviewing] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
   const [events, setEvents] = useState<any[]>([]);
+  
+  // New state for pre-optimisation settings
+  const [durationOverride, setDurationOverride] = useState<string>("original");
 
   const fetchEventsAndReview = async (providerLabel: string) => {
     setStep('Preparing review list...');
@@ -41,44 +45,6 @@ const Optimise = () => {
     setIsReviewing(true);
     setProgress(100);
     showSuccess(`${providerLabel} synced! Please review your tasks.`);
-  };
-
-  const runGoogleSync = async () => {
-    setIsOptimising(true);
-    setProgress(0);
-    try {
-      setStep('Syncing Google Calendar...');
-      setProgress(20);
-      const { data: { session } } = await supabase.auth.getSession();
-      const providerToken = session?.provider_token;
-
-      if (!providerToken) throw new Error("Google token not found. Please re-login.");
-
-      await supabase.functions.invoke('sync-calendar', {
-        body: { googleAccessToken: providerToken }
-      });
-      
-      await fetchEventsAndReview('Google');
-    } catch (err: any) {
-      showError(err.message);
-    } finally {
-      setIsOptimising(false);
-    }
-  };
-
-  const runAppleSync = async () => {
-    setIsOptimising(true);
-    setProgress(0);
-    try {
-      setStep('Syncing Apple Calendar...');
-      setProgress(20);
-      await supabase.functions.invoke('sync-apple-calendar');
-      await fetchEventsAndReview('Apple');
-    } catch (err: any) {
-      showError(err.message);
-    } finally {
-      setIsOptimising(false);
-    }
   };
 
   const runFullAlignment = async () => {
@@ -134,7 +100,11 @@ const Optimise = () => {
     setIsReviewing(false);
     
     try {
-      const { data, error } = await supabase.functions.invoke('optimise-schedule');
+      const { data, error } = await supabase.functions.invoke('optimise-schedule', {
+        body: { 
+          durationOverride: durationOverride === "original" ? null : parseInt(durationOverride) 
+        }
+      });
       
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
@@ -164,6 +134,7 @@ const Optimise = () => {
           .update({
             start_time: change.new_start,
             end_time: change.new_end,
+            duration_minutes: change.duration,
             last_synced_at: new Date().toISOString()
           })
           .eq('event_id', change.event_id)
@@ -229,30 +200,6 @@ const Optimise = () => {
                 </div>
               </CardContent>
             </Card>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <Card className="border-none shadow-sm rounded-3xl bg-white p-6 flex flex-col items-center text-center">
-                <div className="w-12 h-12 bg-blue-50 rounded-xl flex items-center justify-center mb-4">
-                  <Globe className="text-blue-600" size={24} />
-                </div>
-                <h3 className="font-bold text-gray-900 mb-2">Debug: Google Only</h3>
-                <p className="text-sm text-gray-500 mb-6">Sync only Google Calendar events for testing.</p>
-                <Button variant="outline" onClick={runGoogleSync} className="w-full rounded-xl border-gray-200">
-                  Sync Google
-                </Button>
-              </Card>
-
-              <Card className="border-none shadow-sm rounded-3xl bg-white p-6 flex flex-col items-center text-center">
-                <div className="w-12 h-12 bg-gray-50 rounded-xl flex items-center justify-center mb-4">
-                  <Apple className="text-gray-900" size={24} />
-                </div>
-                <h3 className="font-bold text-gray-900 mb-2">Debug: Apple Only</h3>
-                <p className="text-sm text-gray-500 mb-6">Sync only Apple Calendar events for testing.</p>
-                <Button variant="outline" onClick={runAppleSync} className="w-full rounded-xl border-gray-200">
-                  Sync Apple
-                </Button>
-              </Card>
-            </div>
           </div>
         )}
 
@@ -276,22 +223,44 @@ const Optimise = () => {
         {/* REVIEW STATE */}
         {isReviewing && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="flex items-center justify-between bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm">
-              <div>
+            <div className="flex flex-col md:flex-row items-start md:items-center justify-between bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm gap-6">
+              <div className="flex-1">
                 <h2 className="text-2xl font-bold text-gray-900">Review & Lock Tasks</h2>
                 <p className="text-gray-500 font-medium">Decide which events the AI is allowed to move.</p>
               </div>
-              <div className="flex gap-3">
-                <Button variant="outline" onClick={() => setIsReviewing(false)} className="rounded-xl">
-                  Back
-                </Button>
-                <Button 
-                  onClick={runOptimisation}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl px-8 py-6 h-auto font-black flex gap-3 shadow-lg shadow-indigo-100"
-                >
-                  Calculate Optimisation
-                  <ChevronRight size={20} />
-                </Button>
+              
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 w-full md:w-auto">
+                <div className="flex items-center gap-3 bg-gray-50 px-4 py-2 rounded-xl border border-gray-100">
+                  <Settings2 size={18} className="text-indigo-600" />
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-gray-400">Block Size</span>
+                    <Select value={durationOverride} onValueChange={setDurationOverride}>
+                      <SelectTrigger className="h-auto p-0 border-none bg-transparent shadow-none focus:ring-0 font-bold text-sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="original">Original Duration</SelectItem>
+                        <SelectItem value="15">15 Min Blocks</SelectItem>
+                        <SelectItem value="30">30 Min Blocks</SelectItem>
+                        <SelectItem value="45">45 Min Blocks</SelectItem>
+                        <SelectItem value="60">60 Min Blocks</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="flex gap-3">
+                  <Button variant="outline" onClick={() => setIsReviewing(false)} className="rounded-xl h-12">
+                    Back
+                  </Button>
+                  <Button 
+                    onClick={runOptimisation}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-8 h-12 font-black flex gap-3 shadow-lg shadow-indigo-100"
+                  >
+                    Optimise
+                    <ChevronRight size={20} />
+                  </Button>
+                </div>
               </div>
             </div>
 
@@ -324,6 +293,11 @@ const Optimise = () => {
                         </span>
                         <span className="w-1 h-1 bg-gray-200 rounded-full" />
                         <span>{format(new Date(event.start_time), 'MMM d, HH:mm')}</span>
+                        <span className="w-1 h-1 bg-gray-200 rounded-full" />
+                        <span className="flex items-center gap-1">
+                          <Clock size={12} />
+                          {event.duration_minutes}m
+                        </span>
                       </div>
                     </div>
                   </div>
