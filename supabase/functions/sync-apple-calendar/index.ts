@@ -46,10 +46,11 @@ serve(async (req) => {
     
     const movableKeywords = settings?.movable_keywords || [];
     const lockedKeywords = settings?.locked_keywords || [];
-    const workKeywords = settings?.work_keywords || ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session'];
+    const workKeywords = settings?.work_keywords || ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session', 'work session'];
 
     const { data: profile } = await supabaseAdmin.from('profiles').select('apple_id, apple_app_password, timezone').eq('id', user.id).single();
     if (!profile?.apple_id || !profile?.apple_app_password) {
+      console.log(`[${functionName}] No Apple credentials found for user.`);
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
 
@@ -65,6 +66,7 @@ serve(async (req) => {
     };
 
     // 1. Discovery
+    console.log(`[${functionName}] Discovering principal...`);
     const principalRes = await fetch(initialBase, {
       method: 'PROPFIND',
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' },
@@ -74,6 +76,7 @@ serve(async (req) => {
     let principalPath = principalXml.match(/current-user-principal[\s\S]*?href[^>]*>([^<]+)/i)?.[1];
     const discoveryUrl = principalPath ? getFullUrl(principalPath, initialBase) : initialBase;
 
+    console.log(`[${functionName}] Discovering home set...`);
     const discoveryRes = await fetch(discoveryUrl, { 
       method: 'PROPFIND', 
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }, 
@@ -85,6 +88,7 @@ serve(async (req) => {
     const homeSetUrl = getFullUrl(homeSetPath, discoveryRes.url);
 
     // 2. Discovery of all calendars
+    console.log(`[${functionName}] Fetching calendar list...`);
     const calendarsRes = await fetch(homeSetUrl, {
       method: 'PROPFIND',
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '1' },
@@ -103,6 +107,7 @@ serve(async (req) => {
 
     const { data: enabled } = await supabaseAdmin.from('user_calendars').select('calendar_id, calendar_name, is_enabled').eq('user_id', user.id).eq('provider', 'apple');
     const enabledCalendars = (enabled || []).filter(c => c.is_enabled);
+    console.log(`[${functionName}] Enabled calendars: ${enabledCalendars.map(c => c.calendar_name).join(', ')}`);
     if (enabledCalendars.length === 0) return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
 
     const syncStartTime = new Date();
@@ -151,6 +156,7 @@ serve(async (req) => {
     };
 
     for (const cal of enabledCalendars) {
+      console.log(`[${functionName}] Querying calendar: ${cal.calendar_name}`);
       const res = await fetch(getFullUrl(cal.calendar_id, homeSetUrl), {
         method: 'REPORT',
         headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/xml', 'Depth': '1' },
@@ -159,6 +165,7 @@ serve(async (req) => {
       if (!res.ok) continue;
       const xml = await res.text();
       const eventDataMatches = xml.matchAll(/<[^>]*calendar-data[^>]*>([\s\S]*?)<\/[^>]*calendar-data>/gi);
+      let count = 0;
       for (const match of eventDataMatches) {
         let icsData = match[1].trim().replace(/</g, '<').replace(/>/g, '>').replace(/&/g, '&').replace(/&quot;/g, '"').replace(/&apos;/g, "'");
         icsData = icsData.replace(/\r\n /g, '').replace(/\n /g, '');
@@ -178,7 +185,6 @@ serve(async (req) => {
           if (!end) end = new Date(start.getTime() + 30 * 60000);
           const uid = uidMatch[1].trim();
           
-          // CRITICAL: Use a unique ID per instance for recurring events to prevent overwriting
           const uniqueId = `${uid}-${start.toISOString()}`; 
           
           let isLocked = existingLockStatus.has(uniqueId) ? existingLockStatus.get(uniqueId) : null;
@@ -186,10 +192,7 @@ serve(async (req) => {
           if (isLocked === null) {
             const isExplicitlyMovable = movableKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
             const isExplicitlyLocked = lockedKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
-            
-            // Force lock for high-priority fixed terms
             const isHighPriorityFixed = /lunch|dinner|birthday|party|quinceanera|wedding|funeral/i.test(summary);
-            
             isLocked = isExplicitlyLocked || isHighPriorityFixed || (!isExplicitlyMovable && (fixedKeywords.test(summary) || fixedPatterns.some(p => p.test(summary))));
           }
 
@@ -199,13 +202,23 @@ serve(async (req) => {
             duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000), is_locked: isLocked, is_work: isWork,
             provider: 'apple', source_calendar: cal.calendar_name, source_calendar_id: cal.calendar_id, last_synced_at: syncTimestamp
           });
+          count++;
         }
       }
+      console.log(`[${functionName}] Found ${count} events in ${cal.calendar_name}`);
     }
 
     const uniqueEvents = Array.from(eventMap.values());
-    if (uniqueEvents.length > 0) await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
+    console.log(`[${functionName}] Total unique events to upsert: ${uniqueEvents.length}`);
+    if (uniqueEvents.length > 0) {
+      const { error: upsertError } = await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
+      if (upsertError) {
+        console.error(`[${functionName}] Upsert Error:`, upsertError);
+        throw upsertError;
+      }
+    }
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple').lt('start_time', syncStartTime.toISOString());
+    console.log(`[${functionName}] SUCCESS`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders });
   } catch (error) {
     console.error(`[${functionName}] FATAL ERROR:`, error.message);

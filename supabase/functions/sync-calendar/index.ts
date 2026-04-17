@@ -12,8 +12,10 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders })
   }
 
+  const functionName = "sync-calendar";
+
   try {
-    console.log("[sync-calendar] START - Google Sync Process");
+    console.log(`[${functionName}] START - Google Sync Process`);
     const authHeader = req.headers.get('Authorization')
     const { googleAccessToken } = await req.json();
     if (!googleAccessToken) return new Response(JSON.stringify({ error: "Missing Google Access Token" }), { status: 400, headers: corsHeaders });
@@ -30,9 +32,10 @@ serve(async (req) => {
     
     const existingLockStatus = new Map(existingEvents?.map(e => [e.event_id, e.is_locked]) || []);
 
-    const { data: settings } = await supabaseAdmin.from('user_settings').select('movable_keywords, locked_keywords').eq('user_id', user.id).single();
+    const { data: settings } = await supabaseAdmin.from('user_settings').select('movable_keywords, locked_keywords, work_keywords').eq('user_id', user.id).single();
     const movableKeywords = settings?.movable_keywords || [];
     const lockedKeywords = settings?.locked_keywords || [];
+    const workKeywords = settings?.work_keywords || ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session', 'work session'];
 
     const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { headers: { Authorization: `Bearer ${googleAccessToken}` } })
     if (!listRes.ok) throw new Error(`Google API Error: ${listRes.statusText}`);
@@ -56,7 +59,6 @@ serve(async (req) => {
     const eventMap = new Map();
     const syncTimestamp = new Date().toISOString();
     
-    // Expanded fixed keywords to catch more common non-movable events
     const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga|show|tech|dress|night|opening|closing|birthday|party|gala|buffer|probe|experiment|quinceanera|🎭|✨|lunch|dinner|breakfast|brunch|bump in|performance|gig|concert|wedding|funeral|doctor|dentist|flight|train|hotel|check-in|check-out|reservation|40th|50th|60th|anniversary/i;
     const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i];
 
@@ -76,16 +78,14 @@ serve(async (req) => {
           if (isLocked === null) {
             const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
             const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
-            
-            // Force lock for high-priority fixed terms even if they match a movable keyword (e.g. "Lunch" shouldn't be moved just because "email" is movable)
             const isHighPriorityFixed = /lunch|dinner|birthday|party|quinceanera|wedding|funeral/i.test(title);
-            
             isLocked = isExplicitlyLocked || isHighPriorityFixed || (!isExplicitlyMovable && ((event.attendees?.length > 1) || fixedKeywords.test(title) || fixedPatterns.some(p => p.test(title))));
           }
 
+          const isWork = workKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
           eventMap.set(event.id, {
             user_id: user.id, event_id: event.id, title: title, start_time: start.toISOString(), end_time: end.toISOString(),
-            duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000) || 30, is_locked: isLocked,
+            duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000) || 30, is_locked: isLocked, is_work: isWork,
             provider: 'google', source_calendar: cal.calendar_name, source_calendar_id: cal.calendar_id, last_synced_at: syncTimestamp
           });
         });
@@ -93,11 +93,14 @@ serve(async (req) => {
     }
 
     const uniqueEvents = Array.from(eventMap.values());
-    if (uniqueEvents.length > 0) await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
+    if (uniqueEvents.length > 0) {
+      const { error: upsertError } = await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
+      if (upsertError) throw upsertError;
+    }
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google').lt('start_time', syncStartTime.toISOString());
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders })
   } catch (error) {
-    console.error("[sync-calendar] FATAL ERROR:", error.message);
+    console.error(`[${functionName}] FATAL ERROR:`, error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders })
   }
 })
