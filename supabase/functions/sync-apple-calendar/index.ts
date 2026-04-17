@@ -118,6 +118,7 @@ serve(async (req) => {
     }
 
     if (discoveredCals.length > 0) {
+      console.log(`[${functionName}] Discovered ${discoveredCals.length} calendars.`);
       await supabaseAdmin.from('user_calendars').upsert(discoveredCals, { onConflict: 'user_id, calendar_id' });
     }
 
@@ -129,9 +130,10 @@ serve(async (req) => {
       .eq('provider', 'apple');
 
     const enabledCalendars = (enabled || []).filter(c => c.is_enabled);
-    console.log(`[${functionName}] Found ${enabledCalendars.length} enabled Apple calendars.`);
+    console.log(`[${functionName}] Enabled calendars: ${enabledCalendars.map(c => c.calendar_name).join(', ')}`);
     
     if (enabledCalendars.length === 0) {
+      console.warn(`[${functionName}] No Apple calendars are enabled in settings.`);
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
 
@@ -184,9 +186,7 @@ serve(async (req) => {
       
       const targetTz = tzid || fallbackTz;
       try {
-        // Create a date object in UTC first
         const utcDate = new Date(Date.UTC(year, month, day, hour, min, sec));
-        // Use Intl to find the offset for the target timezone at that specific time
         const formatter = new Intl.DateTimeFormat('en-US', { 
           timeZone: targetTz, 
           year: 'numeric', month: 'numeric', day: 'numeric', 
@@ -229,6 +229,7 @@ serve(async (req) => {
       const xml = await res.text();
       const eventDataMatches = xml.matchAll(/<[^>]*calendar-data[^>]*>([\s\S]*?)<\/[^>]*calendar-data>/gi);
       
+      let eventsInCalendar = 0;
       for (const match of eventDataMatches) {
         let icsData = match[1].trim()
           .replace(/</g, '<')
@@ -237,7 +238,6 @@ serve(async (req) => {
           .replace(/&quot;/g, '"')
           .replace(/&apos;/g, "'");
           
-        // Handle line folding in ICS
         icsData = icsData.replace(/\r\n /g, '').replace(/\n /g, '');
         
         const veventMatches = icsData.matchAll(/BEGIN:VEVENT([\s\S]*?)END:VEVENT/gi);
@@ -245,10 +245,8 @@ serve(async (req) => {
           const content = veventMatch[1];
           
           const summaryMatch = content.match(/SUMMARY:(.*)/i);
-          // Improved DTSTART regex to handle multiple parameters
           const dtstartMatch = content.match(/DTSTART[^:]*:(.*)/i);
           const tzidMatch = content.match(/DTSTART;TZID=([^:;]+)/i);
-          
           const dtendMatch = content.match(/DTEND[^:]*:(.*)/i);
           const durationMatch = content.match(/DURATION:PT(\d+)([HMS])/i);
           const uidMatch = content.match(/UID:(.*)/i);
@@ -258,12 +256,8 @@ serve(async (req) => {
           const summary = (summaryMatch?.[1] || 'Untitled').trim().replace(/\\,/g, ',').replace(/\\;/g, ';');
           const start = parseIcsDate(dtstartMatch[1].trim(), tzidMatch?.[1], userTimezone);
           
-          if (!start) {
-            console.warn(`[${functionName}] Could not parse start date for: ${summary}`);
-            continue;
-          }
-          
-          if (start < syncStartTime) continue; // STRICT FILTER: No past events
+          if (!start) continue;
+          if (start < syncStartTime) continue;
           
           let end = parseIcsDate(dtendMatch?.[1]?.trim(), tzidMatch?.[1], userTimezone);
           if (!end) {
@@ -285,8 +279,6 @@ serve(async (req) => {
           
           const uniqueId = `${uid}-${start.getTime()}`;
           
-          console.log(`[${functionName}] Found event: "${summary}" at ${start.toISOString()} (Locked: ${isLocked})`);
-          
           eventMap.set(uniqueId, {
             user_id: user.id, 
             event_id: uniqueId, 
@@ -301,8 +293,10 @@ serve(async (req) => {
             source_calendar_id: cal.calendar_id, 
             last_synced_at: syncTimestamp
           });
+          eventsInCalendar++;
         }
       }
+      console.log(`[${functionName}] Found ${eventsInCalendar} events in ${cal.calendar_name}`);
     }
 
     const uniqueEvents = Array.from(eventMap.values());
@@ -310,14 +304,9 @@ serve(async (req) => {
     
     if (uniqueEvents.length > 0) {
       const { error: upsertError } = await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
-      if (upsertError) {
-        console.error(`[${functionName}] Upsert Error:`, upsertError);
-        throw upsertError;
-      }
+      if (upsertError) throw upsertError;
     }
     
-    // PURGE ALL OLD EVENTS FROM CACHE
-    console.log(`[${functionName}] Purging old events before ${syncStartTime.toISOString()}`);
     await supabaseAdmin.from('calendar_events_cache')
       .delete()
       .eq('user_id', user.id)
