@@ -49,8 +49,16 @@ serve(async (req) => {
     }
 
     if (listData.items) {
-      console.log(`[sync-calendar] Found ${listData.items.length} calendars in Google account.`);
-      const discovered = listData.items.map(cal => ({
+      // FILTER: Only keep calendars that are NOT imports (e.g. skip @import.calendar.google.com)
+      // and skip anything that looks like an iCloud ID we might have accidentally labeled
+      const filteredItems = listData.items.filter(cal => 
+        !cal.id.includes('@import.calendar.google.com') && 
+        !cal.id.includes('icloud')
+      );
+
+      console.log(`[sync-calendar] Found ${filteredItems.length} native Google calendars (skipped ${listData.items.length - filteredItems.length} imports).`);
+      
+      const discovered = filteredItems.map(cal => ({
         user_id: user.id,
         calendar_id: cal.id,
         calendar_name: cal.summary,
@@ -58,9 +66,10 @@ serve(async (req) => {
         color: cal.backgroundColor || '#6366f1'
       }))
       
-      // Upsert discovered calendars - this will also fix the 'provider' if it was wrong
-      const { error: upsertError } = await supabaseAdmin.from('user_calendars').upsert(discovered, { onConflict: 'user_id, calendar_id' });
-      if (upsertError) console.error("[sync-calendar] Error upserting calendars:", upsertError);
+      if (discovered.length > 0) {
+        const { error: upsertError } = await supabaseAdmin.from('user_calendars').upsert(discovered, { onConflict: 'user_id, calendar_id' });
+        if (upsertError) console.error("[sync-calendar] Error upserting calendars:", upsertError);
+      }
     }
 
     // 2. Get Enabled Calendars from DB (Strictly Google)
@@ -85,12 +94,6 @@ serve(async (req) => {
     const eventMap = new Map();
 
     for (const cal of enabled) {
-      // Skip IDs that clearly aren't Google IDs (like 'icloud-personal')
-      if (cal.calendar_id.includes('icloud')) {
-        console.warn(`[sync-calendar] Skipping invalid Google ID: ${cal.calendar_id}`);
-        continue;
-      }
-
       const encodedId = encodeURIComponent(cal.calendar_id);
       console.log(`[sync-calendar] Fetching events for: ${cal.calendar_name} (ID: ${cal.calendar_id})`);
       

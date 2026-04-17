@@ -45,7 +45,7 @@ const Optimise = () => {
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
 
-      await finalizeSync(data.count, 'google', data.events);
+      await finalizeSync(data.count ?? 0, 'google', data.events);
     } catch (err: any) {
       showError(err.message);
     } finally {
@@ -67,7 +67,7 @@ const Optimise = () => {
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
 
-      await finalizeSync(data.count, 'apple', data.events);
+      await finalizeSync(data.count ?? 0, 'apple', data.events);
     } catch (err: any) {
       showError(err.message);
     } finally {
