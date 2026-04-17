@@ -44,7 +44,6 @@ serve(async (req) => {
     
     const movableKeywords = settings?.movable_keywords || [];
     const lockedKeywords = settings?.locked_keywords || [];
-    console.log(`[sync-calendar] Keywords - Movable: ${movableKeywords.length}, Locked: ${lockedKeywords.length}`);
 
     const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
       headers: { Authorization: `Bearer ${googleAccessToken}` }
@@ -86,9 +85,19 @@ serve(async (req) => {
       const data = await res.json()
       
       if (data.items) {
-        console.log(`[sync-calendar] Found ${data.items.length} events in ${cal.calendar_name}`);
         data.items.forEach(event => {
           const title = event.summary || 'Untitled';
+          
+          // DEEP LOGGING FOR TIME DEBUGGING
+          if (title.includes("Pay Fine") || title.includes("Fine")) {
+            console.log(`[sync-calendar] DEBUG EVENT: "${title}"`, {
+              id: event.id,
+              start: event.start,
+              end: event.end,
+              status: event.status
+            });
+          }
+
           const start = new Date(event.start.dateTime || event.start.date)
           const end = new Date(event.end.dateTime || event.end.date)
           
@@ -102,8 +111,6 @@ serve(async (req) => {
             fixedPatterns.some(p => p.test(title))
           ));
           
-          console.log(`[sync-calendar] Event: "${title}" | Locked: ${isLocked} | Reason: ${isExplicitlyLocked ? 'Explicit' : isExplicitlyMovable ? 'Movable' : 'Heuristic'}`);
-
           eventMap.set(event.id, {
             user_id: user.id,
             event_id: event.id,
