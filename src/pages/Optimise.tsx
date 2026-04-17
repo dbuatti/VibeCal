@@ -12,14 +12,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
-import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, ArrowRight, Zap, Apple, Globe, ChevronRight, Settings2, ListOrdered, BrainCircuit, AlignLeft, Check, LayoutList, LayoutGrid, ChevronLeft, Briefcase, CheckSquare, Square, Inbox } from 'lucide-react';
+import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, ArrowRight, Zap, Apple, Globe, ChevronRight, Settings2, ListOrdered, BrainCircuit, AlignLeft, Check, LayoutList, LayoutGrid, ChevronLeft, Briefcase, CheckSquare, Square, Inbox, Brain } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { format, nextSaturday } from 'date-fns';
 import { cn } from '@/lib/utils';
 import VisualSchedule from '@/components/VisualSchedule';
+import DayByDayPlanner from '@/components/DayByDayPlanner';
 
 type Step = 'initial' | 'vetting' | 'requirements' | 'proposed' | 'applying';
+type PlanningMode = 'batch' | 'adhd';
 
 const DAYS = [
   { label: 'Sun', value: 0 }, { label: 'Mon', value: 1 }, { label: 'Tue', value: 2 },
@@ -28,8 +30,8 @@ const DAYS = [
 
 const Optimise = () => {
   const [currentStep, setCurrentStep] = useState<Step>('initial');
+  const [planningMode, setPlanningMode] = useState<PlanningMode>('batch');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [progress, setProgress] = useState(0);
   const [statusText, setStatusText] = useState('');
   const [events, setEvents] = useState<any[]>([]);
   const [optimisationResult, setOptimisationResult] = useState<any>(null);
@@ -38,9 +40,23 @@ const Optimise = () => {
   
   const [durationOverride, setDurationOverride] = useState<string>("original");
   const [maxTasksOverride, setMaxTasksOverride] = useState<number>(5);
+  const [maxHoursOverride, setMaxHoursOverride] = useState<number>(6);
   const [slotAlignment, setSlotAlignment] = useState<string>("15");
   const [selectedDays, setSelectedDays] = useState<number[]>([1, 2, 3, 4, 5]);
   const [placeholderDate, setPlaceholderDate] = useState<string>(format(nextSaturday(new Date()), 'yyyy-MM-dd'));
+
+  useEffect(() => {
+    const fetchSettings = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data } = await supabase.from('user_settings').select('max_hours_per_day, max_tasks_per_day').eq('user_id', user.id).single();
+      if (data) {
+        setMaxHoursOverride(data.max_hours_per_day || 6);
+        setMaxTasksOverride(data.max_tasks_per_day || 5);
+      }
+    };
+    fetchSettings();
+  }, []);
 
   const toggleDay = (day: number) => {
     setSelectedDays(prev => prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day]);
@@ -48,7 +64,6 @@ const Optimise = () => {
 
   const runAnalysis = async () => {
     setIsProcessing(true);
-    setProgress(0);
     setStatusText('Syncing Calendars...');
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -64,10 +79,8 @@ const Optimise = () => {
     finally { setIsProcessing(false); }
   };
 
-  const toggleLock = async (eventId: string, currentStatus: boolean, taskName: string) => {
+  const toggleLock = async (eventId: string, currentStatus: boolean) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
       await supabase.from('calendar_events_cache').update({ is_locked: !currentStatus }).eq('event_id', eventId);
       setEvents(events.map(e => e.event_id === eventId ? { ...e, is_locked: !currentStatus } : e));
     } catch (err: any) { showError("Failed to update lock status"); }
@@ -124,7 +137,6 @@ const Optimise = () => {
 
   const applySingleChange = async (change: any) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
       const { data: { session } } = await supabase.auth.getSession();
       const eventInCache = events.find(e => e.event_id === change.event_id);
       if (!eventInCache) throw new Error("Event not found");
@@ -135,8 +147,7 @@ const Optimise = () => {
 
       await supabase.from('calendar_events_cache').update({ start_time: change.new_start, end_time: change.new_end, duration_minutes: change.duration, last_synced_at: new Date().toISOString() }).eq('event_id', change.event_id);
       setAppliedChanges(prev => [...prev, change.event_id]);
-      showSuccess(`Synced: ${change.title}`);
-    } catch (err: any) { showError(err.message); }
+    } catch (err: any) { showError(err.message); throw err; }
   };
 
   const applySelectedChanges = async () => {
@@ -151,6 +162,13 @@ const Optimise = () => {
       setOptimisationResult(null);
     } catch (err: any) { showError(err.message); setCurrentStep('proposed'); }
     finally { setIsProcessing(false); }
+  };
+
+  const applyDayChanges = async (dateChanges: any[]) => {
+    for (const change of dateChanges) {
+      await applySingleChange(change);
+    }
+    showSuccess(`Day synced successfully!`);
   };
 
   const toggleSelection = (id: string) => {
@@ -218,7 +236,7 @@ const Optimise = () => {
                     <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center", event.is_locked ? "bg-gray-50 text-gray-400" : "bg-white text-indigo-600 shadow-sm")}>{event.is_locked ? <Lock size={20} /> : <Unlock size={20} />}</div>
                     <div><h3 className="font-bold text-lg">{event.title}</h3></div>
                   </div>
-                  <Switch checked={!event.is_locked} onCheckedChange={() => toggleLock(event.event_id, event.is_locked, event.title)} className="data-[state=checked]:bg-indigo-600" />
+                  <Switch checked={!event.is_locked} onCheckedChange={() => toggleLock(event.event_id, event.is_locked)} className="data-[state=checked]:bg-indigo-600" />
                 </div>
               ))}
             </div>
@@ -263,15 +281,8 @@ const Optimise = () => {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
                 <div className="space-y-4">
-                  <Label className="text-lg font-bold flex items-center gap-2"><Clock className="text-indigo-600" size={20} />Duration Override</Label>
-                  <Select value={durationOverride} onValueChange={setDurationOverride}>
-                    <SelectTrigger className="h-14 rounded-2xl border-gray-200 font-bold"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="original">Keep Original</SelectItem>
-                      <SelectItem value="30">30m Blocks</SelectItem>
-                      <SelectItem value="60">60m Blocks</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label className="text-lg font-bold flex items-center gap-2"><Clock className="text-indigo-600" size={20} />Max Work Hours/Day</Label>
+                  <Input type="number" value={maxHoursOverride} onChange={(e) => setMaxHoursOverride(parseInt(e.target.value))} className="h-14 rounded-2xl border-gray-200 font-bold text-lg" />
                 </div>
                 <div className="space-y-4">
                   <Label className="text-lg font-bold flex items-center gap-2"><ListOrdered className="text-indigo-600" size={20} />Max Tasks/Day</Label>
@@ -284,7 +295,7 @@ const Optimise = () => {
         )}
 
         {currentStep === 'proposed' && optimisationResult && (
-          <Tabs defaultValue="list" className="w-full space-y-8">
+          <div className="space-y-8">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-bold text-gray-900">Proposed Schedule</h2>
               <div className="flex gap-3">
@@ -294,68 +305,107 @@ const Optimise = () => {
 
             <div className="flex items-center justify-between bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
               <div className="flex items-center gap-3">
-                <Button 
-                  variant="ghost" 
-                  onClick={toggleAll} 
-                  className="flex items-center gap-2 font-bold text-indigo-600 hover:bg-indigo-50 rounded-xl"
-                >
-                  {selectedChanges.length === optimisationResult.changes.length ? (
-                    <><CheckSquare size={20} /> Deselect All</>
-                  ) : (
-                    <><Square size={20} /> Select All</>
-                  )}
-                </Button>
-                <span className="text-sm text-gray-400 font-medium">
-                  {selectedChanges.length} of {optimisationResult.changes.length} tasks selected
-                </span>
+                <div className="flex bg-gray-100 p-1 rounded-xl">
+                  <button 
+                    onClick={() => setPlanningMode('batch')}
+                    className={cn(
+                      "px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2",
+                      planningMode === 'batch' ? "bg-white text-indigo-600 shadow-sm" : "text-gray-400 hover:text-gray-600"
+                    )}
+                  >
+                    <LayoutList size={14} /> Batch Mode
+                  </button>
+                  <button 
+                    onClick={() => setPlanningMode('adhd')}
+                    className={cn(
+                      "px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2",
+                      planningMode === 'adhd' ? "bg-white text-indigo-600 shadow-sm" : "text-gray-400 hover:text-gray-600"
+                    )}
+                  >
+                    <Brain size={14} /> ADHD Focus Mode
+                  </button>
+                </div>
               </div>
               
-              <TabsList className="bg-gray-100 p-1 rounded-xl">
-                <TabsTrigger value="list" className="rounded-lg px-4 py-1.5 data-[state=active]:bg-white flex gap-2 text-xs"><LayoutList size={14} />List</TabsTrigger>
-                <TabsTrigger value="visual" className="rounded-lg px-4 py-1.5 data-[state=active]:bg-white flex gap-2 text-xs"><LayoutGrid size={14} />Visual</TabsTrigger>
-              </TabsList>
+              {planningMode === 'batch' && (
+                <Tabs defaultValue="list" className="w-auto">
+                  <TabsList className="bg-gray-100 p-1 rounded-xl">
+                    <TabsTrigger value="list" className="rounded-lg px-4 py-1.5 data-[state=active]:bg-white flex gap-2 text-xs"><LayoutList size={14} />List</TabsTrigger>
+                    <TabsTrigger value="visual" className="rounded-lg px-4 py-1.5 data-[state=active]:bg-white flex gap-2 text-xs"><LayoutGrid size={14} />Visual</TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              )}
             </div>
 
-            <TabsContent value="list" className="space-y-4">
-              {optimisationResult.changes.map((change: any, i: number) => {
-                const isApplied = appliedChanges.includes(change.event_id);
-                const isSelected = selectedChanges.includes(change.event_id);
-                const isSurplus = change.is_surplus;
+            {planningMode === 'adhd' ? (
+              <DayByDayPlanner 
+                events={events}
+                changes={optimisationResult.changes}
+                appliedChanges={appliedChanges}
+                onApplyDay={applyDayChanges}
+                maxHours={maxHoursOverride}
+                maxTasks={maxTasksOverride}
+                selectedDays={selectedDays}
+              />
+            ) : (
+              <Tabs defaultValue="list" className="w-full">
+                <TabsContent value="list" className="space-y-4">
+                  <div className="flex items-center gap-3 mb-4">
+                    <Button 
+                      variant="ghost" 
+                      onClick={toggleAll} 
+                      className="flex items-center gap-2 font-bold text-indigo-600 hover:bg-indigo-50 rounded-xl"
+                    >
+                      {selectedChanges.length === optimisationResult.changes.length ? (
+                        <><CheckSquare size={20} /> Deselect All</>
+                      ) : (
+                        <><Square size={20} /> Select All</>
+                      )}
+                    </Button>
+                    <span className="text-sm text-gray-400 font-medium">
+                      {selectedChanges.length} of {optimisationResult.changes.length} tasks selected
+                    </span>
+                  </div>
+                  {optimisationResult.changes.map((change: any, i: number) => {
+                    const isApplied = appliedChanges.includes(change.event_id);
+                    const isSelected = selectedChanges.includes(change.event_id);
+                    const isSurplus = change.is_surplus;
 
-                return (
-                  <Card key={i} className={cn("border-none shadow-sm bg-white rounded-2xl overflow-hidden group transition-all", isApplied && "opacity-50 grayscale", isSurplus && "border-l-4 border-l-amber-400")}>
-                    <div className="flex flex-col md:flex-row">
-                      <div className="p-6 flex-1 flex items-center gap-4">
-                        <Checkbox checked={isSelected} onCheckedChange={() => toggleSelection(change.event_id)} disabled={isApplied} className="w-6 h-6 rounded-lg border-2 border-indigo-100 data-[state=checked]:bg-indigo-600" />
-                        <div className="flex-1">
-                          <div className="flex items-center gap-3 mb-2">
-                            <h3 className="font-bold text-gray-900 text-lg">{change.title}</h3>
-                            {change.is_work && <Badge variant="secondary" className="bg-amber-50 text-amber-700 border-amber-100 flex gap-1 items-center"><Briefcase size={10} /> Work</Badge>}
-                            {isSurplus && <Badge variant="secondary" className="bg-indigo-50 text-indigo-700 border-indigo-100 flex gap-1 items-center"><Inbox size={10} /> Surplus</Badge>}
+                    return (
+                      <Card key={i} className={cn("border-none shadow-sm bg-white rounded-2xl overflow-hidden group transition-all", isApplied && "opacity-50 grayscale", isSurplus && "border-l-4 border-l-amber-400")}>
+                        <div className="flex flex-col md:flex-row">
+                          <div className="p-6 flex-1 flex items-center gap-4">
+                            <Checkbox checked={isSelected} onCheckedChange={() => toggleSelection(change.event_id)} disabled={isApplied} className="w-6 h-6 rounded-lg border-2 border-indigo-100 data-[state=checked]:bg-indigo-600" />
+                            <div className="flex-1">
+                              <div className="flex items-center gap-3 mb-2">
+                                <h3 className="font-bold text-gray-900 text-lg">{change.title}</h3>
+                                {change.is_work && <Badge variant="secondary" className="bg-amber-50 text-amber-700 border-amber-100 flex gap-1 items-center"><Briefcase size={10} /> Work</Badge>}
+                                {isSurplus && <Badge variant="secondary" className="bg-indigo-50 text-indigo-700 border-indigo-100 flex gap-1 items-center"><Inbox size={10} /> Surplus</Badge>}
+                              </div>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div><p className="text-[10px] font-bold text-gray-400 uppercase">Current</p><p className="text-sm font-medium text-gray-500 line-through">{format(new Date(change.old_start), 'MMM d, HH:mm')}</p></div>
+                                <div><p className={cn("text-[10px] font-bold uppercase", isSurplus ? "text-amber-500" : "text-indigo-400")}>{isSurplus ? 'Placeholder' : 'Proposed'}</p><p className={cn("text-sm font-bold", isSurplus ? "text-amber-600" : "text-indigo-600")}>{format(new Date(change.new_start), 'MMM d, HH:mm')} → {format(new Date(change.new_end), 'HH:mm')}</p></div>
+                              </div>
+                            </div>
                           </div>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div><p className="text-[10px] font-bold text-gray-400 uppercase">Current</p><p className="text-sm font-medium text-gray-500 line-through">{format(new Date(change.old_start), 'MMM d, HH:mm')}</p></div>
-                            <div><p className={cn("text-[10px] font-bold uppercase", isSurplus ? "text-amber-500" : "text-indigo-400")}>{isSurplus ? 'Placeholder' : 'Proposed'}</p><p className={cn("text-sm font-bold", isSurplus ? "text-amber-600" : "text-indigo-600")}>{format(new Date(change.new_start), 'MMM d, HH:mm')} → {format(new Date(change.new_end), 'HH:mm')}</p></div>
+                          <div className="bg-indigo-50/50 px-6 py-4 md:w-48 flex flex-col justify-center items-center gap-3 border-t md:border-t-0 md:border-l border-indigo-100/50">
+                            <div className="flex items-center gap-2 text-indigo-600 font-bold text-sm"><Clock size={14} />{change.duration}m</div>
+                            {isApplied && <Badge className="bg-green-500 text-white border-none">Synced</Badge>}
                           </div>
                         </div>
-                      </div>
-                      <div className="bg-indigo-50/50 px-6 py-4 md:w-48 flex flex-col justify-center items-center gap-3 border-t md:border-t-0 md:border-l border-indigo-100/50">
-                        <div className="flex items-center gap-2 text-indigo-600 font-bold text-sm"><Clock size={14} />{change.duration}m</div>
-                        {isApplied && <Badge className="bg-green-500 text-white border-none">Synced</Badge>}
-                      </div>
-                    </div>
-                  </Card>
-                );
-              })}
-            </TabsContent>
-            <TabsContent value="visual"><VisualSchedule events={events} changes={optimisationResult.changes} appliedChanges={appliedChanges} /></TabsContent>
-            
-            <div className="bg-indigo-600 p-10 rounded-[3rem] text-white shadow-2xl shadow-indigo-200 mt-10">
-              <h3 className="text-3xl font-black mb-2">Ready to align?</h3>
-              <p className="opacity-80 text-lg mb-8">{selectedChanges.filter(id => !appliedChanges.includes(id)).length} tasks selected for sync.</p>
-              <Button onClick={applySelectedChanges} disabled={selectedChanges.filter(id => !appliedChanges.includes(id)).length === 0} className="w-full bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl py-8 text-xl font-black shadow-xl transition-all hover:scale-[1.01]">Sync Selected Changes</Button>
-            </div>
-          </Tabs>
+                      </Card>
+                    );
+                  })}
+                  <div className="bg-indigo-600 p-10 rounded-[3rem] text-white shadow-2xl shadow-indigo-200 mt-10">
+                    <h3 className="text-3xl font-black mb-2">Ready to align?</h3>
+                    <p className="opacity-80 text-lg mb-8">{selectedChanges.filter(id => !appliedChanges.includes(id)).length} tasks selected for sync.</p>
+                    <Button onClick={applySelectedChanges} disabled={selectedChanges.filter(id => !appliedChanges.includes(id)).length === 0} className="w-full bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl py-8 text-xl font-black shadow-xl transition-all hover:scale-[1.01]">Sync Selected Changes</Button>
+                  </div>
+                </TabsContent>
+                <TabsContent value="visual"><VisualSchedule events={events} changes={optimisationResult.changes} appliedChanges={appliedChanges} /></TabsContent>
+              </Tabs>
+            )}
+          </div>
         )}
 
         {currentStep === 'applying' && (
