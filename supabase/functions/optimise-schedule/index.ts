@@ -46,26 +46,40 @@ serve(async (req) => {
       return new Response(JSON.stringify({ message: 'No movable events found.', changes: [] }), { headers: corsHeaders });
     }
 
-    // 1. Categorize tasks using AI to match themes
-    console.log("[optimise-schedule] Categorizing tasks against themes...");
-    const genAI = new GoogleGenerativeAI(Deno.env.get('GEMINI_API_KEY'));
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    // 1. Categorize tasks using AI to match themes (with Fallback)
+    let categories = movableEvents.map(() => "General");
+    
+    try {
+      console.log("[optimise-schedule] Attempting AI categorization...");
+      const genAI = new GoogleGenerativeAI(Deno.env.get('GEMINI_API_KEY'));
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
-    const themeList = dayThemes.map(t => t.theme).filter(Boolean);
-    const prompt = `
-      You are a scheduling assistant. Categorize the following tasks into one of these themes: [${themeList.join(', ')}].
-      If a task doesn't fit any theme, categorize it as "General".
-      
-      Tasks:
-      ${movableEvents.map(e => `- ${e.title}`).join('\n')}
-      
-      Return ONLY a JSON array of strings representing the theme for each task in order.
-      Example: ["Music", "Admin", "General"]
-    `;
+      const themeList = dayThemes.map(t => t.theme).filter(Boolean);
+      if (themeList.length > 0) {
+        const prompt = `
+          You are a scheduling assistant. Categorize the following tasks into one of these themes: [${themeList.join(', ')}].
+          If a task doesn't fit any theme, categorize it as "General".
+          
+          Tasks:
+          ${movableEvents.map(e => `- ${e.title}`).join('\n')}
+          
+          Return ONLY a JSON array of strings representing the theme for each task in order.
+          Example: ["Music", "Admin", "General"]
+        `;
 
-    const aiResult = await model.generateContent(prompt);
-    const aiResponse = await aiResult.response;
-    const categories = JSON.parse(aiResponse.text().match(/\[.*\]/s)[0]);
+        const aiResult = await model.generateContent(prompt);
+        const aiResponse = await aiResult.response;
+        const text = aiResponse.text();
+        const jsonMatch = text.match(/\[.*\]/s);
+        if (jsonMatch) {
+          categories = JSON.parse(jsonMatch[0]);
+          console.log("[optimise-schedule] AI categorization successful.");
+        }
+      }
+    } catch (aiError) {
+      console.warn("[optimise-schedule] AI service unavailable or failed. Falling back to General themes.", aiError.message);
+      // categories remains as "General" for all tasks
+    }
 
     const proposedChanges = [];
     const dailyStats = new Map();
@@ -85,7 +99,7 @@ serve(async (req) => {
     // 2. Redistribution Loop
     for (let i = 0; i < movableEvents.length; i++) {
       const event = movableEvents[i];
-      const taskTheme = categories[i];
+      const taskTheme = categories[i] || "General";
       const effectiveDuration = durationOverride || event.duration_minutes;
       const durationMs = effectiveDuration * 60000;
       
