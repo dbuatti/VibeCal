@@ -14,7 +14,7 @@ serve(async (req) => {
   }
 
   try {
-    const { tasks, movableKeywords } = await req.json();
+    const { tasks, movableKeywords, lockedKeywords } = await req.json();
     const authHeader = req.headers.get('Authorization')
     
     const supabaseClient = createClient(
@@ -25,7 +25,6 @@ serve(async (req) => {
 
     const { data: { user } } = await supabaseClient.auth.getUser()
     
-    // Fetch recent feedback for few-shot learning
     const { data: feedback } = await supabaseClient
       .from('task_classification_feedback')
       .select('task_name, is_movable')
@@ -33,7 +32,7 @@ serve(async (req) => {
       .order('created_at', { ascending: false })
       .limit(20);
 
-    let classifications = tasks.map(() => false); // Default to fixed for safety
+    let classifications = tasks.map(() => false);
 
     try {
       const geminiKey = Deno.env.get('GEMINI_API_KEY');
@@ -45,20 +44,21 @@ serve(async (req) => {
           You are a personal assistant helping to organize a calendar. 
           Classify the following tasks as either "movable" (can be rescheduled) or "fixed" (must happen at this specific time).
           
+          STRICT RULES:
+          - FIXED: Any task containing these keywords: ${lockedKeywords.join(', ')}.
+          - MOVABLE: Any task containing these keywords: ${movableKeywords.join(', ')}.
+          
           General Rules:
           - Fixed: Meetings with others, appointments, live classes, rehearsals, ceremonies, specific deadlines.
           - Movable: Solo work, drafting, chores, practice, exploration, personal projects.
           
-          User's Custom Movable Keywords: ${movableKeywords.join(', ')}
-          
-          User's Past Corrections (Learn from these!):
+          User's Past Corrections:
           ${feedback?.map(f => `- "${f.task_name}" is ${f.is_movable ? 'movable' : 'fixed'}`).join('\n')}
           
           Tasks to classify:
           ${tasks.map(t => `- "${t}"`).join('\n')}
           
           Return ONLY a JSON array of booleans where true means movable and false means fixed.
-          Example: [true, false, true]
         `;
 
         const result = await model.generateContent(prompt);
@@ -70,11 +70,12 @@ serve(async (req) => {
         }
       }
     } catch (aiError) {
-      console.error("[classify-tasks] AI classification failed. Defaulting to fixed.", aiError.message);
-      // Fallback: check keywords manually if AI fails
-      classifications = tasks.map(title => 
-        movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()))
-      );
+      console.error("[classify-tasks] AI classification failed.", aiError.message);
+      classifications = tasks.map(title => {
+        const isLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
+        const isMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
+        return isMovable && !isLocked;
+      });
     }
 
     return new Response(JSON.stringify({ classifications }), { 

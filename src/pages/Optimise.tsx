@@ -76,9 +76,13 @@ const Optimise = () => {
     setIsProcessing(true);
     setStatusText('AI is learning your preferences...');
     try {
-      const { data: settings } = await supabase.from('user_settings').select('movable_keywords').single();
+      const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords').single();
       const { data, error } = await supabase.functions.invoke('classify-tasks', {
-        body: { tasks: events.map(e => e.title), movableKeywords: settings?.movable_keywords || [] }
+        body: { 
+          tasks: events.map(e => e.title), 
+          movableKeywords: settings?.movable_keywords || [],
+          lockedKeywords: settings?.locked_keywords || []
+        }
       });
       if (error) throw error;
       const updatedEvents = [...events];
