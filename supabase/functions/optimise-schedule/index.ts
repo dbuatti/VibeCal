@@ -49,7 +49,7 @@ serve(async (req) => {
     // 1. Categorize tasks using AI to match themes
     console.log("[optimise-schedule] Categorizing tasks against themes...");
     const genAI = new GoogleGenerativeAI(Deno.env.get('GEMINI_API_KEY'));
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
     const themeList = dayThemes.map(t => t.theme).filter(Boolean);
     const prompt = `
