@@ -4,22 +4,17 @@ import React, { useState, useEffect } from 'react';
 import Layout from '@/components/Layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Progress } from '@/components/ui/progress';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Badge } from '@/components/ui/badge';
-import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, ArrowRight, Zap, Apple, Globe, ChevronRight, Settings2, ListOrdered, BrainCircuit, AlignLeft, Check, LayoutList, LayoutGrid, ChevronLeft, Briefcase, CheckSquare, Square, Inbox, Brain } from 'lucide-react';
+import { Sparkles, RefreshCw, Calendar, Clock, Lock, Unlock, ChevronRight, ListOrdered, BrainCircuit, Inbox } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { format, nextSaturday } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { useNavigate } from 'react-router-dom';
 
-type Step = 'initial' | 'vetting' | 'requirements' | 'proposed' | 'applying';
+type Step = 'initial' | 'vetting' | 'requirements';
 
 const DAYS = [
   { label: 'Sun', value: 0 }, { label: 'Mon', value: 1 }, { label: 'Tue', value: 2 },
@@ -143,55 +138,97 @@ const Optimise = () => {
     <Layout>
       <div className="max-w-4xl mx-auto">
         <div className="mb-12">
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">Schedule Optimiser</h1>
-          <p className="text-lg text-gray-500">Align your movable tasks with your work window.</p>
-          <div className="flex items-center gap-4 mt-8">
+          <h1 className="text-4xl font-black text-gray-900 mb-2 tracking-tight">Schedule Optimiser</h1>
+          <p className="text-lg text-gray-500 font-medium">Align your movable tasks with your work window.</p>
+          <div className="flex items-center gap-4 mt-10">
             {['initial', 'vetting', 'requirements'].map((s, i) => (
               <React.Fragment key={s}>
-                <button onClick={() => setCurrentStep(s as Step)} disabled={isProcessing} className={cn("flex items-center gap-2 group transition-all", currentStep === s ? "opacity-100" : "opacity-40")}>
-                  <div className={cn("w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold", currentStep === s ? "bg-indigo-600 text-white ring-4 ring-indigo-100" : "bg-gray-100 text-gray-400")}>{i + 1}</div>
-                  <span className="text-sm font-bold">{s.charAt(0).toUpperCase() + s.slice(1)}</span>
-                </button>
-                {i < 2 && <div className="h-px w-8 bg-gray-100" />}
+                <div className={cn("flex items-center gap-3 transition-all duration-500", currentStep === s ? "opacity-100" : "opacity-30")}>
+                  <div className={cn(
+                    "w-10 h-10 rounded-2xl flex items-center justify-center text-sm font-black shadow-sm",
+                    currentStep === s ? "bg-indigo-600 text-white ring-4 ring-indigo-100" : "bg-gray-100 text-gray-400"
+                  )}>
+                    {i + 1}
+                  </div>
+                  <span className="text-xs font-black uppercase tracking-widest">{s}</span>
+                </div>
+                {i < 2 && <div className="h-px w-12 bg-gray-100" />}
               </React.Fragment>
             ))}
           </div>
         </div>
 
         {currentStep === 'initial' && !isProcessing && (
-          <Card className="border-none shadow-2xl shadow-indigo-100/50 rounded-[2.5rem] overflow-hidden bg-white">
-            <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-16 text-white text-center">
-              <div className="w-20 h-20 bg-white/20 rounded-3xl flex items-center justify-center mx-auto mb-8 backdrop-blur-md"><Calendar size={40} /></div>
-              <h2 className="text-3xl font-black mb-4">Ready to Analyse?</h2>
-              <Button onClick={runAnalysis} className="bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl px-12 py-8 text-xl font-black shadow-xl">Analyse Calendar</Button>
+          <Card className="border-none shadow-2xl shadow-indigo-100/50 rounded-[3rem] overflow-hidden bg-white">
+            <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-20 text-white text-center">
+              <div className="w-24 h-24 bg-white/20 rounded-[2rem] flex items-center justify-center mx-auto mb-10 backdrop-blur-md">
+                <Calendar size={48} />
+              </div>
+              <h2 className="text-4xl font-black mb-6 tracking-tight">Ready to Analyse?</h2>
+              <p className="text-indigo-100 mb-10 text-lg font-medium max-w-md mx-auto">We'll sync your calendars and identify which tasks can be moved to better align with your focus.</p>
+              <Button onClick={runAnalysis} className="bg-white text-indigo-600 hover:bg-indigo-50 rounded-[2rem] px-16 py-10 text-2xl font-black shadow-2xl transition-all hover:scale-[1.02] active:scale-[0.98]">
+                Analyse Calendar
+              </Button>
             </div>
           </Card>
         )}
 
         {isProcessing && (
-          <Card className="border-none shadow-sm rounded-[2.5rem] p-16 text-center bg-white">
-            <RefreshCw className="text-indigo-600 animate-spin w-24 h-24 mx-auto mb-10" />
-            <h2 className="text-3xl font-black text-gray-900 mb-4">{statusText}</h2>
+          <Card className="border-none shadow-sm rounded-[3rem] p-20 text-center bg-white">
+            <div className="relative w-32 h-32 mx-auto mb-12">
+              <div className="absolute inset-0 bg-indigo-100 rounded-full animate-ping opacity-20" />
+              <div className="relative bg-white rounded-full p-6 shadow-xl">
+                <RefreshCw className="text-indigo-600 animate-spin w-20 h-20" />
+              </div>
+            </div>
+            <h2 className="text-3xl font-black text-gray-900 mb-4 tracking-tight">{statusText}</h2>
+            <p className="text-gray-400 font-medium">This usually takes a few seconds...</p>
           </Card>
         )}
 
         {currentStep === 'vetting' && !isProcessing && (
-          <div className="space-y-8">
-            <div className="flex items-center justify-between bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm">
-              <div><h2 className="text-2xl font-bold text-gray-900">Vet Your Tasks</h2></div>
-              <div className="flex gap-3">
-                <Button variant="outline" onClick={runAIClassification} className="rounded-xl px-6 h-12 font-bold flex gap-2 border-indigo-100 text-indigo-600 hover:bg-indigo-50"><BrainCircuit size={20} />Ask AI to Vet</Button>
-                <Button onClick={() => setCurrentStep('requirements')} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-8 h-12 font-black flex gap-3 shadow-lg shadow-indigo-100">Next: Requirements <ChevronRight size={20} /></Button>
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <div className="flex items-center justify-between bg-white p-10 rounded-[2.5rem] border border-gray-100 shadow-sm">
+              <div>
+                <h2 className="text-2xl font-black text-gray-900">Vet Your Tasks</h2>
+                <p className="text-sm text-gray-400 font-medium mt-1">Toggle tasks that are movable.</p>
+              </div>
+              <div className="flex gap-4">
+                <Button variant="outline" onClick={runAIClassification} className="rounded-2xl px-8 h-14 font-black text-xs uppercase tracking-widest flex gap-3 border-indigo-100 text-indigo-600 hover:bg-indigo-50">
+                  <BrainCircuit size={20} /> Ask AI to Vet
+                </Button>
+                <Button onClick={() => setCurrentStep('requirements')} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl px-10 h-14 font-black text-xs uppercase tracking-widest flex gap-3 shadow-xl shadow-indigo-100">
+                  Next: Requirements <ChevronRight size={20} />
+                </Button>
               </div>
             </div>
             <div className="grid grid-cols-1 gap-4">
               {events.map((event, i) => (
-                <div key={i} className={cn("p-5 rounded-[1.5rem] border transition-all duration-300 flex items-center justify-between", event.is_locked ? "bg-white border-gray-100 opacity-80" : "bg-indigo-50/30 border-indigo-100 shadow-sm")}>
-                  <div className="flex items-center gap-5">
-                    <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center", event.is_locked ? "bg-gray-50 text-gray-400" : "bg-white text-indigo-600 shadow-sm")}>{event.is_locked ? <Lock size={20} /> : <Unlock size={20} />}</div>
-                    <div><h3 className="font-bold text-lg">{event.title}</h3></div>
+                <div key={i} className={cn(
+                  "p-6 rounded-[2rem] border transition-all duration-300 flex items-center justify-between group",
+                  event.is_locked 
+                    ? "bg-white border-gray-100 opacity-70" 
+                    : "bg-indigo-50/30 border-indigo-100 shadow-sm"
+                )}>
+                  <div className="flex items-center gap-6">
+                    <div className={cn(
+                      "w-14 h-14 rounded-2xl flex items-center justify-center transition-all",
+                      event.is_locked ? "bg-gray-50 text-gray-400" : "bg-white text-indigo-600 shadow-md"
+                    )}>
+                      {event.is_locked ? <Lock size={24} /> : <Unlock size={24} />}
+                    </div>
+                    <div>
+                      <h3 className="font-black text-xl text-gray-900">{event.title}</h3>
+                      <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mt-1">
+                        {event.is_locked ? 'Fixed Event' : 'Movable Task'}
+                      </p>
+                    </div>
                   </div>
-                  <Switch checked={!event.is_locked} onCheckedChange={() => toggleLock(event.event_id, event.is_locked)} className="data-[state=checked]:bg-indigo-600" />
+                  <Switch 
+                    checked={!event.is_locked} 
+                    onCheckedChange={() => toggleLock(event.event_id, event.is_locked)} 
+                    className="data-[state=checked]:bg-indigo-600 scale-125" 
+                  />
                 </div>
               ))}
             </div>
@@ -199,52 +236,103 @@ const Optimise = () => {
         )}
 
         {currentStep === 'requirements' && !isProcessing && (
-          <Card className="border-none shadow-sm rounded-[2rem] overflow-hidden bg-white">
-            <CardHeader className="p-10 border-b border-gray-50"><CardTitle className="text-2xl font-bold">Specify Requirements</CardTitle></CardHeader>
-            <CardContent className="p-10 space-y-10">
-              <div className="space-y-6">
-                <Label className="text-lg font-bold flex items-center gap-2"><Calendar className="text-indigo-600" size={20} />Allowed Days</Label>
-                <div className="flex flex-wrap gap-3">
+          <Card className="border-none shadow-sm rounded-[3rem] overflow-hidden bg-white animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <CardHeader className="p-12 border-b border-gray-50">
+              <CardTitle className="text-3xl font-black tracking-tight">Specify Requirements</CardTitle>
+            </CardHeader>
+            <CardContent className="p-12 space-y-12">
+              <div className="space-y-8">
+                <Label className="text-xl font-black flex items-center gap-3">
+                  <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
+                    <Calendar className="text-indigo-600" size={20} />
+                  </div>
+                  Allowed Days
+                </Label>
+                <div className="flex flex-wrap gap-4">
                   {DAYS.map((day) => (
-                    <button key={day.value} onClick={() => toggleDay(day.value)} className={cn("px-6 py-3 rounded-xl font-bold transition-all border-2", selectedDays.includes(day.value) ? "bg-indigo-600 border-indigo-600 text-white shadow-lg" : "bg-white border-gray-100 text-gray-400")}>{day.label}</button>
+                    <button 
+                      key={day.value} 
+                      onClick={() => toggleDay(day.value)} 
+                      className={cn(
+                        "px-8 py-4 rounded-2xl font-black text-sm uppercase tracking-widest transition-all border-2",
+                        selectedDays.includes(day.value) 
+                          ? "bg-indigo-600 border-indigo-600 text-white shadow-xl shadow-indigo-100" 
+                          : "bg-white border-gray-100 text-gray-400 hover:border-indigo-100"
+                      )}
+                    >
+                      {day.label}
+                    </button>
                   ))}
                 </div>
               </div>
 
-              <div className="space-y-6 p-6 bg-indigo-50/50 rounded-3xl border border-indigo-100">
-                <Label className="text-lg font-bold flex items-center gap-2"><Inbox className="text-indigo-600" size={20} />Surplus Handling</Label>
-                <div className="space-y-4">
-                  <p className="text-sm text-gray-500 font-medium">If tasks exceed your daily limit, where should they go?</p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label className="text-xs font-bold text-gray-400 uppercase">Placeholder Day</Label>
+              <div className="space-y-8 p-10 bg-indigo-50/50 rounded-[2.5rem] border border-indigo-100">
+                <Label className="text-xl font-black flex items-center gap-3">
+                  <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm">
+                    <Inbox className="text-indigo-600" size={20} />
+                  </div>
+                  Surplus Handling
+                </Label>
+                <div className="space-y-6">
+                  <p className="text-sm text-gray-500 font-bold leading-relaxed">If tasks exceed your daily limit, where should they go?</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <div className="space-y-3">
+                      <Label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Placeholder Day</Label>
                       <Input 
                         type="date" 
                         value={placeholderDate} 
                         onChange={(e) => setPlaceholderDate(e.target.value)}
-                        className="h-12 rounded-xl border-gray-200 font-bold"
+                        className="h-14 rounded-2xl border-gray-200 font-black text-lg px-6 focus:ring-indigo-500"
                       />
                     </div>
                     <div className="flex items-end">
-                      <p className="text-xs text-indigo-600 font-bold bg-white p-3 rounded-xl border border-indigo-100">
-                        Surplus tasks will be stacked on this day for future shuffling.
-                      </p>
+                      <div className="bg-white p-5 rounded-2xl border border-indigo-100 shadow-sm">
+                        <p className="text-xs text-indigo-600 font-black leading-relaxed">
+                          Surplus tasks will be stacked on this day for future shuffling.
+                        </p>
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
                 <div className="space-y-4">
-                  <Label className="text-lg font-bold flex items-center gap-2"><Clock className="text-indigo-600" size={20} />Max Work Hours/Day</Label>
-                  <Input type="number" value={maxHoursOverride} onChange={(e) => setMaxHoursOverride(parseInt(e.target.value))} className="h-14 rounded-2xl border-gray-200 font-bold text-lg" />
+                  <Label className="text-xl font-black flex items-center gap-3">
+                    <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
+                      <Clock className="text-indigo-600" size={20} />
+                    </div>
+                    Max Work Hours/Day
+                  </Label>
+                  <Input 
+                    type="number" 
+                    value={maxHoursOverride} 
+                    onChange={(e) => setMaxHoursOverride(parseInt(e.target.value))} 
+                    className="h-16 rounded-[1.5rem] border-gray-200 font-black text-2xl px-8 focus:ring-indigo-500" 
+                  />
                 </div>
                 <div className="space-y-4">
-                  <Label className="text-lg font-bold flex items-center gap-2"><ListOrdered className="text-indigo-600" size={20} />Max Tasks/Day</Label>
-                  <Input type="number" value={maxTasksOverride} onChange={(e) => setMaxTasksOverride(parseInt(e.target.value))} className="h-14 rounded-2xl border-gray-200 font-bold text-lg" />
+                  <Label className="text-xl font-black flex items-center gap-3">
+                    <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
+                      <ListOrdered className="text-indigo-600" size={20} />
+                    </div>
+                    Max Tasks/Day
+                  </Label>
+                  <Input 
+                    type="number" 
+                    value={maxTasksOverride} 
+                    onChange={(e) => setMaxTasksOverride(parseInt(e.target.value))} 
+                    className="h-16 rounded-[1.5rem] border-gray-200 font-black text-2xl px-8 focus:ring-indigo-500" 
+                  />
                 </div>
               </div>
-              <Button onClick={runOptimisation} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl h-14 font-black text-lg shadow-xl">Generate Proposed Schedule</Button>
+              
+              <Button 
+                onClick={runOptimisation} 
+                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded-[2rem] py-10 text-2xl font-black shadow-2xl shadow-indigo-100 transition-all hover:scale-[1.01] active:scale-[0.99]"
+              >
+                Generate Proposed Schedule
+              </Button>
             </CardContent>
           </Card>
         )}

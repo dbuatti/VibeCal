@@ -143,7 +143,6 @@ const Plan = () => {
         onApplyDay={handleApplyDay}
         maxHours={settings?.max_hours_per_day || 6}
         maxTasks={settings?.max_tasks_per_day || 5}
-        selectedDays={proposal.metadata?.selectedDays || [1,2,3,4,5]}
       />
     </Layout>
   );
