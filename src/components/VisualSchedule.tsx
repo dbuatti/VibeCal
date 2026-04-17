@@ -9,10 +9,10 @@ interface VisualScheduleProps {
   appliedChanges: string[];
 }
 
-const VisualSchedule = ({ events, changes, appliedChanges }: VisualScheduleProps) => {
+const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: VisualScheduleProps) => {
   // Combine locked events with proposed changes
   const allVisualEvents = [
-    ...events.filter(e => e.is_locked).map(e => ({ ...e, type: 'locked' })),
+    ...events.filter(e => e && e.is_locked).map(e => ({ ...e, type: 'locked' })),
     ...changes.map(c => ({
       ...c,
       start_time: c.new_start,
@@ -25,9 +25,14 @@ const VisualSchedule = ({ events, changes, appliedChanges }: VisualScheduleProps
 
   // Group by day
   const days = allVisualEvents.reduce((acc: any, event) => {
-    const dayKey = format(parseISO(event.start_time), 'yyyy-MM-dd');
-    if (!acc[dayKey]) acc[dayKey] = [];
-    acc[dayKey].push(event);
+    if (!event.start_time) return acc;
+    try {
+      const dayKey = format(parseISO(event.start_time), 'yyyy-MM-dd');
+      if (!acc[dayKey]) acc[dayKey] = [];
+      acc[dayKey].push(event);
+    } catch (e) {
+      console.error("Error parsing date for visual schedule:", event.start_time);
+    }
     return acc;
   }, {});
 
@@ -42,7 +47,7 @@ const VisualSchedule = ({ events, changes, appliedChanges }: VisualScheduleProps
   }
 
   // Helper to get icon based on title
-  const getEventIcon = (title: string) => {
+  const getEventIcon = (title: string = '') => {
     const t = title.toLowerCase();
     if (t.includes('lunch')) return <Utensils size={14} />;
     if (t.includes('dinner')) return <Utensils size={14} />;
@@ -54,7 +59,7 @@ const VisualSchedule = ({ events, changes, appliedChanges }: VisualScheduleProps
 
   // Helper to get color based on title or type
   const getEventStyles = (event: any) => {
-    const t = event.title.toLowerCase();
+    const t = (event.title || '').toLowerCase();
     if (event.type === 'locked') {
       if (t.includes('lunch') || t.includes('dinner')) return "bg-blue-50/50 border-blue-100 text-blue-700";
       return "bg-gray-50/50 border-gray-100 text-gray-500";

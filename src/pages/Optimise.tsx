@@ -109,7 +109,7 @@ const Optimise = () => {
           maxTasksOverride, 
           slotAlignment: parseInt(slotAlignment), 
           selectedDays,
-          placeholderDate // Pass the placeholder date to the edge function
+          placeholderDate
         }
       });
       if (error) throw error;
@@ -284,7 +284,7 @@ const Optimise = () => {
         )}
 
         {currentStep === 'proposed' && optimisationResult && (
-          <div className="space-y-8">
+          <Tabs defaultValue="list" className="w-full space-y-8">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-bold text-gray-900">Proposed Schedule</h2>
               <div className="flex gap-3">
@@ -310,56 +310,52 @@ const Optimise = () => {
                 </span>
               </div>
               
-              <Tabs defaultValue="list" className="w-auto">
-                <TabsList className="bg-gray-100 p-1 rounded-xl">
-                  <TabsTrigger value="list" className="rounded-lg px-4 py-1.5 data-[state=active]:bg-white flex gap-2 text-xs"><LayoutList size={14} />List</TabsTrigger>
-                  <TabsTrigger value="visual" className="rounded-lg px-4 py-1.5 data-[state=active]:bg-white flex gap-2 text-xs"><LayoutGrid size={14} />Visual</TabsTrigger>
-                </TabsList>
-              </Tabs>
+              <TabsList className="bg-gray-100 p-1 rounded-xl">
+                <TabsTrigger value="list" className="rounded-lg px-4 py-1.5 data-[state=active]:bg-white flex gap-2 text-xs"><LayoutList size={14} />List</TabsTrigger>
+                <TabsTrigger value="visual" className="rounded-lg px-4 py-1.5 data-[state=active]:bg-white flex gap-2 text-xs"><LayoutGrid size={14} />Visual</TabsTrigger>
+              </TabsList>
             </div>
 
-            <Tabs defaultValue="list" className="w-full">
-              <TabsContent value="list" className="space-y-4">
-                {optimisationResult.changes.map((change: any, i: number) => {
-                  const isApplied = appliedChanges.includes(change.event_id);
-                  const isSelected = selectedChanges.includes(change.event_id);
-                  const isSurplus = change.is_surplus;
+            <TabsContent value="list" className="space-y-4">
+              {optimisationResult.changes.map((change: any, i: number) => {
+                const isApplied = appliedChanges.includes(change.event_id);
+                const isSelected = selectedChanges.includes(change.event_id);
+                const isSurplus = change.is_surplus;
 
-                  return (
-                    <Card key={i} className={cn("border-none shadow-sm bg-white rounded-2xl overflow-hidden group transition-all", isApplied && "opacity-50 grayscale", isSurplus && "border-l-4 border-l-amber-400")}>
-                      <div className="flex flex-col md:flex-row">
-                        <div className="p-6 flex-1 flex items-center gap-4">
-                          <Checkbox checked={isSelected} onCheckedChange={() => toggleSelection(change.event_id)} disabled={isApplied} className="w-6 h-6 rounded-lg border-2 border-indigo-100 data-[state=checked]:bg-indigo-600" />
-                          <div className="flex-1">
-                            <div className="flex items-center gap-3 mb-2">
-                              <h3 className="font-bold text-gray-900 text-lg">{change.title}</h3>
-                              {change.is_work && <Badge variant="secondary" className="bg-amber-50 text-amber-700 border-amber-100 flex gap-1 items-center"><Briefcase size={10} /> Work</Badge>}
-                              {isSurplus && <Badge variant="secondary" className="bg-indigo-50 text-indigo-700 border-indigo-100 flex gap-1 items-center"><Inbox size={10} /> Surplus</Badge>}
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                              <div><p className="text-[10px] font-bold text-gray-400 uppercase">Current</p><p className="text-sm font-medium text-gray-500 line-through">{format(new Date(change.old_start), 'MMM d, HH:mm')}</p></div>
-                              <div><p className={cn("text-[10px] font-bold uppercase", isSurplus ? "text-amber-500" : "text-indigo-400")}>{isSurplus ? 'Placeholder' : 'Proposed'}</p><p className={cn("text-sm font-bold", isSurplus ? "text-amber-600" : "text-indigo-600")}>{format(new Date(change.new_start), 'MMM d, HH:mm')} → {format(new Date(change.new_end), 'HH:mm')}</p></div>
-                            </div>
+                return (
+                  <Card key={i} className={cn("border-none shadow-sm bg-white rounded-2xl overflow-hidden group transition-all", isApplied && "opacity-50 grayscale", isSurplus && "border-l-4 border-l-amber-400")}>
+                    <div className="flex flex-col md:flex-row">
+                      <div className="p-6 flex-1 flex items-center gap-4">
+                        <Checkbox checked={isSelected} onCheckedChange={() => toggleSelection(change.event_id)} disabled={isApplied} className="w-6 h-6 rounded-lg border-2 border-indigo-100 data-[state=checked]:bg-indigo-600" />
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <h3 className="font-bold text-gray-900 text-lg">{change.title}</h3>
+                            {change.is_work && <Badge variant="secondary" className="bg-amber-50 text-amber-700 border-amber-100 flex gap-1 items-center"><Briefcase size={10} /> Work</Badge>}
+                            {isSurplus && <Badge variant="secondary" className="bg-indigo-50 text-indigo-700 border-indigo-100 flex gap-1 items-center"><Inbox size={10} /> Surplus</Badge>}
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div><p className="text-[10px] font-bold text-gray-400 uppercase">Current</p><p className="text-sm font-medium text-gray-500 line-through">{format(new Date(change.old_start), 'MMM d, HH:mm')}</p></div>
+                            <div><p className={cn("text-[10px] font-bold uppercase", isSurplus ? "text-amber-500" : "text-indigo-400")}>{isSurplus ? 'Placeholder' : 'Proposed'}</p><p className={cn("text-sm font-bold", isSurplus ? "text-amber-600" : "text-indigo-600")}>{format(new Date(change.new_start), 'MMM d, HH:mm')} → {format(new Date(change.new_end), 'HH:mm')}</p></div>
                           </div>
                         </div>
-                        <div className="bg-indigo-50/50 px-6 py-4 md:w-48 flex flex-col justify-center items-center gap-3 border-t md:border-t-0 md:border-l border-indigo-100/50">
-                          <div className="flex items-center gap-2 text-indigo-600 font-bold text-sm"><Clock size={14} />{change.duration}m</div>
-                          {isApplied && <Badge className="bg-green-500 text-white border-none">Synced</Badge>}
-                        </div>
                       </div>
-                    </Card>
-                  );
-                })}
-              </TabsContent>
-              <TabsContent value="visual"><VisualSchedule events={events} changes={optimisationResult.changes} appliedChanges={appliedChanges} /></TabsContent>
-            </Tabs>
+                      <div className="bg-indigo-50/50 px-6 py-4 md:w-48 flex flex-col justify-center items-center gap-3 border-t md:border-t-0 md:border-l border-indigo-100/50">
+                        <div className="flex items-center gap-2 text-indigo-600 font-bold text-sm"><Clock size={14} />{change.duration}m</div>
+                        {isApplied && <Badge className="bg-green-500 text-white border-none">Synced</Badge>}
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })}
+            </TabsContent>
+            <TabsContent value="visual"><VisualSchedule events={events} changes={optimisationResult.changes} appliedChanges={appliedChanges} /></TabsContent>
             
             <div className="bg-indigo-600 p-10 rounded-[3rem] text-white shadow-2xl shadow-indigo-200 mt-10">
               <h3 className="text-3xl font-black mb-2">Ready to align?</h3>
               <p className="opacity-80 text-lg mb-8">{selectedChanges.filter(id => !appliedChanges.includes(id)).length} tasks selected for sync.</p>
               <Button onClick={applySelectedChanges} disabled={selectedChanges.filter(id => !appliedChanges.includes(id)).length === 0} className="w-full bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl py-8 text-xl font-black shadow-xl transition-all hover:scale-[1.01]">Sync Selected Changes</Button>
             </div>
-          </div>
+          </Tabs>
         )}
 
         {currentStep === 'applying' && (
