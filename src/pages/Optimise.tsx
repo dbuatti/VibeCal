@@ -7,11 +7,13 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, ArrowRight, Zap, Apple, Globe, ChevronRight, Settings2, ListOrdered, BrainCircuit, AlignLeft, Check } from 'lucide-react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, ArrowRight, Zap, Apple, Globe, ChevronRight, Settings2, ListOrdered, BrainCircuit, AlignLeft, Check, LayoutList, LayoutGrid } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
+import VisualSchedule from '@/components/VisualSchedule';
 
 type Step = 'initial' | 'vetting' | 'requirements' | 'proposed' | 'applying';
 
@@ -486,77 +488,98 @@ const Optimise = () => {
               </Button>
             </div>
 
-            <div className="space-y-4">
-              {optimisationResult.changes.map((change: any, i: number) => {
-                const isApplied = appliedChanges.includes(change.event_id);
-                return (
-                  <Card key={i} className={cn(
-                    "border-none shadow-sm bg-white rounded-2xl overflow-hidden group transition-all",
-                    isApplied && "opacity-50 grayscale"
-                  )}>
-                    <div className="flex flex-col md:flex-row">
-                      <div className="p-6 flex-1">
-                        <div className="flex items-center gap-3 mb-4">
-                          <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
-                            <Calendar className="text-indigo-600" size={20} />
+            <Tabs defaultValue="list" className="w-full">
+              <TabsList className="bg-gray-100 p-1 rounded-2xl mb-8">
+                <TabsTrigger value="list" className="rounded-xl px-6 py-2 data-[state=active]:bg-white data-[state=active]:shadow-sm flex gap-2">
+                  <LayoutList size={18} />
+                  List View
+                </TabsTrigger>
+                <TabsTrigger value="visual" className="rounded-xl px-6 py-2 data-[state=active]:bg-white data-[state=active]:shadow-sm flex gap-2">
+                  <LayoutGrid size={18} />
+                  Visual Timeline
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="list" className="space-y-4">
+                {optimisationResult.changes.map((change: any, i: number) => {
+                  const isApplied = appliedChanges.includes(change.event_id);
+                  return (
+                    <Card key={i} className={cn(
+                      "border-none shadow-sm bg-white rounded-2xl overflow-hidden group transition-all",
+                      isApplied && "opacity-50 grayscale"
+                    )}>
+                      <div className="flex flex-col md:flex-row">
+                        <div className="p-6 flex-1">
+                          <div className="flex items-center gap-3 mb-4">
+                            <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
+                              <Calendar className="text-indigo-600" size={20} />
+                            </div>
+                            <h3 className="font-bold text-gray-900 text-lg">{change.title}</h3>
                           </div>
-                          <h3 className="font-bold text-gray-900 text-lg">{change.title}</h3>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Current</p>
+                              <p className="text-sm font-medium text-gray-500 line-through">{format(new Date(change.old_start), 'MMM d, HH:mm')}</p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">Proposed</p>
+                              <p className="text-sm font-bold text-indigo-600">{format(new Date(change.new_start), 'MMM d, HH:mm')} → {format(new Date(change.new_end), 'HH:mm')}</p>
+                            </div>
+                          </div>
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                          <div>
-                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Current</p>
-                            <p className="text-sm font-medium text-gray-500 line-through">{format(new Date(change.old_start), 'MMM d, HH:mm')}</p>
+                        <div className="bg-indigo-50/50 px-6 py-4 md:w-64 flex flex-col justify-center items-center gap-3 border-t md:border-t-0 md:border-l border-indigo-100/50">
+                          <div className="flex items-center gap-2 text-indigo-600 font-bold text-sm">
+                            <Clock size={14} />
+                            {change.old_duration !== change.duration ? (
+                              <span className="flex items-center gap-1">
+                                <span className="line-through opacity-50">{change.old_duration}m</span>
+                                <ArrowRight size={10} />
+                                {change.duration}m
+                              </span>
+                            ) : (
+                              <span>{change.duration}m</span>
+                            )}
                           </div>
-                          <div>
-                            <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">Proposed</p>
-                            <p className="text-sm font-bold text-indigo-600">{format(new Date(change.new_start), 'MMM d, HH:mm')} → {format(new Date(change.new_end), 'HH:mm')}</p>
-                          </div>
+                          <Button 
+                            size="sm" 
+                            disabled={isApplied}
+                            onClick={() => applySingleChange(change)}
+                            className={cn(
+                              "w-full rounded-xl font-bold",
+                              isApplied ? "bg-green-500 text-white" : "bg-white text-indigo-600 border border-indigo-100 hover:bg-indigo-600 hover:text-white"
+                            )}
+                          >
+                            {isApplied ? <Check size={16} className="mr-2" /> : <Sparkles size={14} className="mr-2" />}
+                            {isApplied ? 'Applied' : 'Apply This'}
+                          </Button>
                         </div>
                       </div>
-                      <div className="bg-indigo-50/50 px-6 py-4 md:w-64 flex flex-col justify-center items-center gap-3 border-t md:border-t-0 md:border-l border-indigo-100/50">
-                        <div className="flex items-center gap-2 text-indigo-600 font-bold text-sm">
-                          <Clock size={14} />
-                          {change.old_duration !== change.duration ? (
-                            <span className="flex items-center gap-1">
-                              <span className="line-through opacity-50">{change.old_duration}m</span>
-                              <ArrowRight size={10} />
-                              {change.duration}m
-                            </span>
-                          ) : (
-                            <span>{change.duration}m</span>
-                          )}
-                        </div>
-                        <Button 
-                          size="sm" 
-                          disabled={isApplied}
-                          onClick={() => applySingleChange(change)}
-                          className={cn(
-                            "w-full rounded-xl font-bold",
-                            isApplied ? "bg-green-500 text-white" : "bg-white text-indigo-600 border border-indigo-100 hover:bg-indigo-600 hover:text-white"
-                          )}
-                        >
-                          {isApplied ? <Check size={16} className="mr-2" /> : <Sparkles size={14} className="mr-2" />}
-                          {isApplied ? 'Applied' : 'Apply This'}
-                        </Button>
-                      </div>
-                    </div>
-                  </Card>
-                );
-              })}
-              
-              <div className="bg-indigo-600 p-10 rounded-[3rem] text-white shadow-2xl shadow-indigo-200 mt-10">
-                <h3 className="text-3xl font-black mb-2">Ready to align?</h3>
-                <p className="opacity-80 text-lg mb-8">
-                  {optimisationResult.changes.length - appliedChanges.length} pending changes remaining.
-                </p>
-                <Button 
-                  onClick={applyAllChanges}
-                  disabled={optimisationResult.changes.length === appliedChanges.length}
-                  className="w-full bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl py-8 text-xl font-black shadow-xl transition-all hover:scale-[1.01]"
-                >
-                  Apply All Remaining Changes
-                </Button>
-              </div>
+                    </Card>
+                  );
+                })}
+              </TabsContent>
+
+              <TabsContent value="visual">
+                <VisualSchedule 
+                  events={events} 
+                  changes={optimisationResult.changes} 
+                  appliedChanges={appliedChanges}
+                />
+              </TabsContent>
+            </Tabs>
+            
+            <div className="bg-indigo-600 p-10 rounded-[3rem] text-white shadow-2xl shadow-indigo-200 mt-10">
+              <h3 className="text-3xl font-black mb-2">Ready to align?</h3>
+              <p className="opacity-80 text-lg mb-8">
+                {optimisationResult.changes.length - appliedChanges.length} pending changes remaining.
+              </p>
+              <Button 
+                onClick={applyAllChanges}
+                disabled={optimisationResult.changes.length === appliedChanges.length}
+                className="w-full bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl py-8 text-xl font-black shadow-xl transition-all hover:scale-[1.01]"
+              >
+                Apply All Remaining Changes
+              </Button>
             </div>
           </div>
         )}
