@@ -42,28 +42,43 @@ serve(async (req) => {
       return `${urlObj.origin}${path.startsWith('/') ? '' : '/'}${path}`;
     };
 
-    // 1. Discovery
+    // 1. Discovery - Principal
+    console.log("[sync-apple-calendar] Discovering Principal...");
     const principalRes = await fetch(initialBase, { 
       method: 'PROPFIND', 
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }, 
       body: `<?xml version="1.0" encoding="utf-8" ?><d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal /></d:prop></d:propfind>` 
     });
     const principalXml = await principalRes.text();
-    const principalPath = principalXml.match(/<href[^>]*>([^<]+)/i)?.[1];
-    if (!principalPath) throw new Error("Could not find Principal path.");
+    
+    // Robust regex to find href inside current-user-principal regardless of namespace
+    const principalPath = principalXml.match(/<[^>]*current-user-principal[^>]*>\s*<[^>]*href[^>]*>([^<]+)/i)?.[1];
+    
+    if (!principalPath) {
+      console.error("[sync-apple-calendar] Principal XML Response:", principalXml);
+      throw new Error("Could not find Principal path.");
+    }
     const principalUrl = getFullUrl(principalPath, principalRes.url);
 
+    // 2. Discovery - Home Set
+    console.log("[sync-apple-calendar] Discovering Home Set at:", principalUrl);
     const homeSetRes = await fetch(principalUrl, { 
       method: 'PROPFIND', 
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }, 
       body: `<?xml version="1.0" encoding="utf-8" ?><d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><c:calendar-home-set /></d:prop></d:propfind>` 
     });
     const homeSetXml = await homeSetRes.text();
-    const homeSetPath = homeSetXml.match(/<calendar-home-set[^>]*>\s*<href[^>]*>([^<]+)/i)?.[1];
-    if (!homeSetPath) throw new Error("Could not find Calendar Home Set.");
+    
+    // Robust regex to find href inside calendar-home-set regardless of namespace
+    const homeSetPath = homeSetXml.match(/<[^>]*calendar-home-set[^>]*>\s*<[^>]*href[^>]*>([^<]+)/i)?.[1];
+    
+    if (!homeSetPath) {
+      console.error("[sync-apple-calendar] Home Set XML Response:", homeSetXml);
+      throw new Error("Could not find Calendar Home Set.");
+    }
     const homeSetUrl = getFullUrl(homeSetPath, homeSetRes.url);
 
-    // 2. Get Enabled Calendars
+    // 3. Get Enabled Calendars from DB
     const { data: enabled } = await supabaseAdmin
       .from('user_calendars')
       .select('calendar_id, calendar_name')
@@ -73,14 +88,14 @@ serve(async (req) => {
 
     console.log(`[sync-apple-calendar] Found ${enabled?.length || 0} enabled Apple calendars.`);
 
-    // Clear Apple cache for this user
+    // Clear Apple cache for this user before re-syncing
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
 
     if (!enabled || enabled.length === 0) {
       return new Response(JSON.stringify({ count: 0, message: "No Apple calendars enabled." }), { headers: corsHeaders });
     }
 
-    // 3. Fetch Events with EXPANSION
+    // 4. Fetch Events with EXPANSION
     const now = new Date();
     const startStr = now.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endStr = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
