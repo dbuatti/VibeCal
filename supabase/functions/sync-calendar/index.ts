@@ -19,7 +19,7 @@ serve(async (req) => {
     const { googleAccessToken } = await req.json();
 
     if (!googleAccessToken) {
-      console.error("[sync-calendar] No Google Access Token provided in request body.");
+      console.error("[sync-calendar] No Google Access Token provided.");
       throw new Error("Missing Google Access Token");
     }
 
@@ -49,7 +49,7 @@ serve(async (req) => {
     }
 
     if (listData.items) {
-      console.log(`[sync-calendar] Found ${listData.items.length} calendars.`);
+      console.log(`[sync-calendar] Found ${listData.items.length} calendars in Google account.`);
       const discovered = listData.items.map(cal => ({
         user_id: user.id,
         calendar_id: cal.id,
@@ -57,10 +57,13 @@ serve(async (req) => {
         provider: 'google',
         color: cal.backgroundColor || '#6366f1'
       }))
-      await supabaseAdmin.from('user_calendars').upsert(discovered, { onConflict: 'user_id, calendar_id' })
+      
+      // Upsert discovered calendars
+      const { error: upsertError } = await supabaseAdmin.from('user_calendars').upsert(discovered, { onConflict: 'user_id, calendar_id' });
+      if (upsertError) console.error("[sync-calendar] Error upserting calendars:", upsertError);
     }
 
-    // 2. Get Enabled Calendars
+    // 2. Get Enabled Calendars from DB
     const { data: enabled } = await supabaseAdmin
       .from('user_calendars')
       .select('calendar_id, calendar_name')
@@ -69,11 +72,11 @@ serve(async (req) => {
       .eq('provider', 'google')
 
     if (!enabled || enabled.length === 0) {
-      console.log("[sync-calendar] No Google calendars are enabled for this user.");
+      console.log("[sync-calendar] No Google calendars are enabled in settings.");
       return new Response(JSON.stringify({ message: 'No Google calendars enabled', count: 0 }), { headers: corsHeaders })
     }
 
-    // Clear Google cache for this user
+    // Clear Google cache for this user before re-syncing
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google');
 
     // 3. Fetch Events
@@ -82,15 +85,22 @@ serve(async (req) => {
     const eventMap = new Map();
 
     for (const cal of enabled) {
-      console.log(`[sync-calendar] Fetching events for: ${cal.calendar_name} (${cal.calendar_id})`);
+      const encodedId = encodeURIComponent(cal.calendar_id);
+      console.log(`[sync-calendar] Fetching events for: ${cal.calendar_name} (ID: ${cal.calendar_id})`);
+      
       const res = await fetch(
-        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.calendar_id)}/events?timeMin=${now.toISOString()}&timeMax=${end.toISOString()}&singleEvents=true&orderBy=startTime`,
+        `https://www.googleapis.com/calendar/v3/calendars/${encodedId}/events?timeMin=${now.toISOString()}&timeMax=${end.toISOString()}&singleEvents=true&orderBy=startTime`,
         { headers: { Authorization: `Bearer ${googleAccessToken}` } }
       )
+      
       const data = await res.json()
       
       if (data.error) {
-        console.error(`[sync-calendar] Google API Error (Events for ${cal.calendar_name}):`, data.error);
+        if (data.code === 404) {
+          console.warn(`[sync-calendar] Calendar not found (404): ${cal.calendar_name}. Skipping.`);
+        } else {
+          console.error(`[sync-calendar] Google API Error (Events for ${cal.calendar_name}):`, data.error);
+        }
         continue;
       }
 
@@ -113,8 +123,6 @@ serve(async (req) => {
             last_synced_at: new Date().toISOString()
           });
         });
-      } else {
-        console.log(`[sync-calendar] No items field in response for ${cal.calendar_name}.`);
       }
     }
 
