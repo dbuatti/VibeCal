@@ -5,10 +5,12 @@ import Layout from '@/components/Layout';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import DayByDayPlanner from '@/components/DayByDayPlanner';
-import { Brain, RefreshCw, Trash2 } from 'lucide-react';
+import { Brain, RefreshCw, Trash2, Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Link, useNavigate } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 
 const Plan = () => {
   const navigate = useNavigate();
@@ -17,6 +19,7 @@ const Plan = () => {
   const [events, setEvents] = useState<any[]>([]);
   const [appliedChanges, setAppliedChanges] = useState<string[]>([]);
   const [settings, setSettings] = useState<any>(null);
+  const [deepFocus, setDeepFocus] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -138,13 +141,25 @@ const Plan = () => {
   }
 
   return (
-    <Layout>
+    <Layout hideSidebar={deepFocus}>
       <div className="flex justify-between items-start mb-10">
         <div>
           <div className="flex items-center gap-3 mb-2">
             <Badge className="bg-indigo-100 text-indigo-700 border-none px-3 py-1 rounded-lg font-bold flex gap-2">
               <Brain size={14} /> ADHD Focus Mode
             </Badge>
+            <div className="flex items-center gap-2 ml-4">
+              <Switch 
+                id="deep-focus" 
+                checked={deepFocus} 
+                onCheckedChange={setDeepFocus}
+                className="data-[state=checked]:bg-indigo-600"
+              />
+              <Label htmlFor="deep-focus" className="text-xs font-bold text-gray-400 flex items-center gap-1 cursor-pointer">
+                {deepFocus ? <EyeOff size={14} /> : <Eye size={14} />}
+                Deep Focus
+              </Label>
+            </div>
           </div>
           <h1 className="text-4xl font-black text-gray-900">Daily Plan</h1>
           <p className="text-gray-500 mt-2">Review and confirm your schedule one day at a time.</p>

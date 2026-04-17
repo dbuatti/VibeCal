@@ -19,7 +19,8 @@ import {
   RefreshCw,
   Zap,
   Trophy,
-  LayoutDashboard
+  LayoutDashboard,
+  Star
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import VisualSchedule from './VisualSchedule';
@@ -52,6 +53,7 @@ const DayByDayPlanner = ({
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
+  const [showXP, setShowXP] = useState(false);
   
   const currentDateStr = allDates[currentIndex];
   const currentDate = currentDateStr ? parseISO(currentDateStr) : new Date();
@@ -84,11 +86,26 @@ const DayByDayPlanner = ({
     setIsSyncing(true);
     try {
       await onApplyDay(dayChanges);
+      setShowXP(true);
+      setTimeout(() => setShowXP(false), 2000);
+      
       if (currentIndex === allDates.length - 1) {
         setTimeout(() => setIsFinished(true), 800);
       } else {
         setTimeout(() => setCurrentIndex(prev => prev + 1), 600);
       }
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleSyncAll = async () => {
+    if (!confirm("This will sync all remaining proposed changes to your calendar. Continue?")) return;
+    setIsSyncing(true);
+    try {
+      const remainingChanges = changes.filter(c => !appliedChanges.includes(c.event_id));
+      await onApplyDay(remainingChanges);
+      setIsFinished(true);
     } finally {
       setIsSyncing(false);
     }
@@ -147,7 +164,14 @@ const DayByDayPlanner = ({
           <ChevronLeft size={28} className="text-gray-400" />
         </Button>
         
-        <div className="text-center">
+        <div className="text-center relative">
+          {showXP && (
+            <div className="absolute -top-12 left-1/2 -translate-x-1/2 animate-bounce">
+              <Badge className="bg-yellow-400 text-yellow-900 border-none px-4 py-2 rounded-full font-black flex gap-2 shadow-lg">
+                <Star size={16} fill="currentColor" /> +50 XP
+              </Badge>
+            </div>
+          )}
           <h2 className="text-3xl font-black text-gray-900 tracking-tight">
             {format(currentDate, 'EEEE, MMMM do')}
           </h2>
@@ -295,15 +319,25 @@ const DayByDayPlanner = ({
               )}
             </Button>
             
-            {isDayVetted && currentIndex < allDates.length - 1 && (
+            <div className="flex gap-3">
+              {isDayVetted && currentIndex < allDates.length - 1 && (
+                <Button 
+                  variant="outline" 
+                  onClick={() => setCurrentIndex(prev => prev + 1)}
+                  className="flex-1 rounded-[1.5rem] py-6 border-gray-200 text-gray-600 font-black uppercase tracking-widest text-xs hover:bg-gray-50"
+                >
+                  Next Day <ArrowRight size={18} className="ml-2" />
+                </Button>
+              )}
               <Button 
-                variant="outline" 
-                onClick={() => setCurrentIndex(prev => prev + 1)}
-                className="w-full rounded-[1.5rem] py-6 border-gray-200 text-gray-600 font-black uppercase tracking-widest text-xs hover:bg-gray-50"
+                variant="ghost" 
+                onClick={handleSyncAll}
+                disabled={isSyncing}
+                className="rounded-[1.5rem] py-6 text-gray-400 hover:text-indigo-600 font-black uppercase tracking-widest text-[10px]"
               >
-                Next Day <ArrowRight size={18} className="ml-2" />
+                Sync All Remaining
               </Button>
-            )}
+            </div>
           </div>
         </div>
 

@@ -1,12 +1,24 @@
 import React from 'react';
 import Navigation from './Navigation';
+import { cn } from '@/lib/utils';
 
-const Layout = ({ children }: { children: React.ReactNode }) => {
+interface LayoutProps {
+  children: React.ReactNode;
+  hideSidebar?: boolean;
+}
+
+const Layout = ({ children, hideSidebar = false }: LayoutProps) => {
   return (
     <div className="min-h-screen bg-[#F8F9FC]">
-      <Navigation />
-      <main className="pl-64 min-h-screen">
-        <div className="max-w-6xl mx-auto p-8">
+      {!hideSidebar && <Navigation />}
+      <main className={cn(
+        "min-h-screen transition-all duration-500 ease-in-out",
+        hideSidebar ? "pl-0" : "pl-72"
+      )}>
+        <div className={cn(
+          "mx-auto p-8 transition-all duration-500",
+          hideSidebar ? "max-w-4xl" : "max-w-6xl"
+        )}>
           {children}
         </div>
       </main>
