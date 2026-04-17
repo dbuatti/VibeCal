@@ -79,7 +79,40 @@ serve(async (req) => {
     if (!homeSetPath) throw new Error("Could not find Calendar Home Set.");
     const homeSetUrl = getFullUrl(homeSetPath, discoveryRes.url);
 
-    // 2. Get Enabled Calendars
+    // 2. Discover all Apple Calendars
+    console.log("[sync-apple-calendar] Discovering individual calendars...");
+    const calListRes = await fetch(homeSetUrl, {
+      method: 'PROPFIND',
+      headers: { 'Authorization': `Basic ${auth}`, 'Depth': '1' },
+      body: `<?xml version="1.0" encoding="utf-8" ?>
+        <d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+          <d:prop>
+            <d:displayname />
+            <c:supported-calendar-component-set />
+          </d:prop>
+        </d:propfind>`
+    });
+    const calListXml = await calListRes.text();
+    
+    // Simple regex to find calendar paths and names
+    const calendarMatches = calListXml.matchAll(/<d:response>[\s\S]*?<d:href>([^<]+)<\/d:href>[\s\S]*?<d:displayname>([^<]+)<\/d:displayname>[\s\S]*?<\/d:response>/gi);
+    const discoveredApple = [];
+    for (const match of calendarMatches) {
+      discoveredApple.push({
+        user_id: user.id,
+        calendar_id: match[1],
+        calendar_name: match[2],
+        provider: 'apple',
+        color: '#6366f1'
+      });
+    }
+
+    if (discoveredApple.length > 0) {
+      console.log(`[sync-apple-calendar] Found ${discoveredApple.length} Apple calendars. Updating database...`);
+      await supabaseAdmin.from('user_calendars').upsert(discoveredApple, { onConflict: 'user_id, calendar_id' });
+    }
+
+    // 3. Get Enabled Apple Calendars
     const { data: enabled } = await supabaseAdmin
       .from('user_calendars')
       .select('calendar_id, calendar_name')
@@ -94,7 +127,7 @@ serve(async (req) => {
       return new Response(JSON.stringify({ count: 0, message: "No Apple calendars enabled." }), { headers: corsHeaders });
     }
 
-    // 3. Fetch Events
+    // 4. Fetch Events
     const now = new Date();
     const startStr = now.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endStr = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
@@ -130,9 +163,7 @@ serve(async (req) => {
       const eventBlocks = xml.split('BEGIN:VEVENT');
       
       for (let i = 1; i < eventBlocks.length; i++) {
-        // Handle line folding (lines starting with a space are continuations)
         const block = eventBlocks[i].replace(/\r?\n /g, '');
-        
         const summary = block.match(/^SUMMARY[^:]*:(.*)$/m)?.[1]?.trim() || 'Untitled';
         const dtStart = block.match(/^DTSTART[^:]*:(.*)$/m)?.[1]?.trim();
         const dtEnd = block.match(/^DTEND[^:]*:(.*)$/m)?.[1]?.trim();
@@ -142,9 +173,6 @@ serve(async (req) => {
         if (dtStart && dtEnd && uid) {
           const start = parseIcsDate(dtStart);
           const end = parseIcsDate(dtEnd);
-          
-          // Create a truly unique ID for recurring instances
-          // If it's a recurring instance, append the start time to the UID
           const uniqueId = recurrenceId ? `${uid}-${dtStart}` : uid;
           
           eventMap.set(uniqueId, {
@@ -164,19 +192,8 @@ serve(async (req) => {
     }
 
     const uniqueEvents = Array.from(eventMap.values());
-    console.log(`[sync-apple-calendar] Prepared ${uniqueEvents.length} unique events for database.`);
-
     if (uniqueEvents.length > 0) {
-      // Using upsert with onConflict to be safe, but since we deleted the cache, 
-      // this should effectively be a clean insert.
-      const { error: insertError } = await supabaseAdmin
-        .from('calendar_events_cache')
-        .upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
-        
-      if (insertError) {
-        console.error("[sync-apple-calendar] Database Error:", insertError);
-        throw insertError;
-      }
+      await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
     }
 
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders });
