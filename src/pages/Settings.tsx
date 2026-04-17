@@ -1,3 +1,5 @@
+"use client";
+
 import React, { useEffect, useState } from 'react';
 import Layout from '@/components/Layout';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -6,10 +8,9 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Slider } from '@/components/ui/slider';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
-import { Save, Clock, Shield, Target } from 'lucide-react';
+import { Save, Clock, Shield, Target, Apple, Mail, Lock } from 'lucide-react';
 
 const Settings = () => {
   const [loading, setLoading] = useState(true);
@@ -22,6 +23,11 @@ const Settings = () => {
     group_similar_tasks: true
   });
 
+  const [profile, setProfile] = useState<any>({
+    apple_id: '',
+    apple_app_password: ''
+  });
+
   const [themes, setThemes] = useState<any[]>([
     { day: 0, label: 'Sunday', theme: 'Rest' },
     { day: 1, label: 'Monday', theme: 'Music' },
@@ -32,16 +38,50 @@ const Settings = () => {
     { day: 6, label: 'Saturday', theme: 'Social' },
   ]);
 
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        const [settingsRes, profileRes] = await Promise.all([
+          supabase.from('user_settings').select('*').eq('user_id', user.id).single(),
+          supabase.from('profiles').select('apple_id, apple_app_password').eq('id', user.id).single()
+        ]);
+
+        if (settingsRes.data) setSettings(settingsRes.data);
+        if (profileRes.data) setProfile(profileRes.data);
+      } catch (err) {
+        console.error("Error fetching settings:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, []);
+
   const handleSave = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
-      const { error } = await supabase
+      const { error: settingsError } = await supabase
         .from('user_settings')
         .upsert({ user_id: user.id, ...settings });
 
-      if (error) throw error;
+      if (settingsError) throw settingsError;
+
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({ 
+          apple_id: profile.apple_id, 
+          apple_app_password: profile.apple_app_password 
+        })
+        .eq('id', user.id);
+
+      if (profileError) throw profileError;
+
       showSuccess('Settings saved successfully');
     } catch (err: any) {
       showError(err.message);
@@ -94,6 +134,51 @@ const Settings = () => {
                   value={settings.max_hours_per_day} 
                   onChange={(e) => setSettings({...settings, max_hours_per_day: parseInt(e.target.value)})}
                 />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-none shadow-sm rounded-2xl border-l-4 border-l-gray-900">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Apple className="text-gray-900" size={20} />
+                Apple Calendar (CalDAV)
+              </CardTitle>
+              <CardDescription>Connect your iCloud calendar for two-way sync.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <Label className="flex items-center gap-2">
+                    <Mail size={14} className="text-gray-400" />
+                    Apple ID Email
+                  </Label>
+                  <Input 
+                    placeholder="your@email.com"
+                    value={profile.apple_id || ''}
+                    onChange={(e) => setProfile({...profile, apple_id: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label className="flex items-center gap-2">
+                    <Lock size={14} className="text-gray-400" />
+                    App-Specific Password
+                  </Label>
+                  <Input 
+                    type="password"
+                    placeholder="xxxx-xxxx-xxxx-xxxx"
+                    value={profile.apple_app_password || ''}
+                    onChange={(e) => setProfile({...profile, apple_app_password: e.target.value})}
+                  />
+                </div>
+              </div>
+              <div className="bg-gray-50 p-4 rounded-xl text-xs text-gray-500 leading-relaxed">
+                <p className="font-bold text-gray-700 mb-1">How to get an App-Specific Password:</p>
+                <ol className="list-decimal ml-4 space-y-1">
+                  <li>Sign in to <a href="https://appleid.apple.com" target="_blank" className="text-indigo-600 underline">appleid.apple.com</a>.</li>
+                  <li>Go to <b>Sign-In and Security</b> {" > "} <b>App-Specific Passwords</b>.</li>
+                  <li>Select <b>Generate an app-specific password</b>.</li>
+                </ol>
               </div>
             </CardContent>
           </Card>

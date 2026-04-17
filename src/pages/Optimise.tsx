@@ -5,8 +5,8 @@ import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, Bug, ArrowRight, Zap } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
+import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, Bug, ArrowRight, Zap, Apple } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { format } from 'date-fns';
 
@@ -18,11 +18,10 @@ const Optimise = () => {
   const [optimisationResult, setOptimisationResult] = useState<any>(null);
   const [showDebug, setShowDebug] = useState(false);
 
-  const runSync = async () => {
+  const runGoogleSync = async () => {
     setIsOptimising(true);
     setProgress(0);
     setSyncReport(null);
-    setOptimisationResult(null);
     
     try {
       setStep('Authenticating with Google...');
@@ -45,33 +44,59 @@ const Optimise = () => {
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
 
-      setStep('Verifying database records...');
-      setProgress(80);
-
-      const { data: events, error: fetchError } = await supabase
-        .from('calendar_events_cache')
-        .select('*')
-        .order('start_time', { ascending: true });
-
-      if (fetchError) throw fetchError;
-
-      setSyncReport({
-        total: events?.length || 0,
-        range: {
-          start: events?.[0]?.start_time,
-          end: events?.[events.length - 1]?.start_time
-        },
-        samples: events?.slice(0, 5) || [],
-        lastSync: new Date().toISOString()
-      });
-      
-      setProgress(100);
-      showSuccess(`Successfully synced ${data.count} events!`);
+      await finalizeSync(data.count);
     } catch (err: any) {
       showError(err.message);
     } finally {
       setIsOptimising(false);
     }
+  };
+
+  const runAppleSync = async () => {
+    setIsOptimising(true);
+    setProgress(0);
+    setSyncReport(null);
+    
+    try {
+      setStep('Connecting to iCloud (CalDAV)...');
+      setProgress(20);
+
+      const { data, error } = await supabase.functions.invoke('sync-apple-calendar');
+      
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+
+      await finalizeSync(data.count);
+    } catch (err: any) {
+      showError(err.message);
+    } finally {
+      setIsOptimising(false);
+    }
+  };
+
+  const finalizeSync = async (count: number) => {
+    setStep('Verifying database records...');
+    setProgress(80);
+
+    const { data: events, error: fetchError } = await supabase
+      .from('calendar_events_cache')
+      .select('*')
+      .order('start_time', { ascending: true });
+
+    if (fetchError) throw fetchError;
+
+    setSyncReport({
+      total: events?.length || 0,
+      range: {
+        start: events?.[0]?.start_time,
+        end: events?.[events.length - 1]?.start_time
+      },
+      samples: events?.slice(0, 5) || [],
+      lastSync: new Date().toISOString()
+    });
+    
+    setProgress(100);
+    showSuccess(`Successfully synced ${count} events!`);
   };
 
   const runOptimisation = async () => {
@@ -114,20 +139,39 @@ const Optimise = () => {
         </div>
 
         {!isOptimising && !syncReport && !optimisationResult && (
-          <Card className="border-none shadow-xl shadow-indigo-100/50 rounded-3xl overflow-hidden">
-            <div className="bg-indigo-600 p-8 text-white">
-              <h2 className="text-xl font-bold mb-2">Step 1: Sync Calendar</h2>
-              <p className="opacity-90 text-sm">We need your latest schedule before we can optimise.</p>
-            </div>
-            <CardContent className="p-8">
-              <Button 
-                onClick={runSync}
-                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl py-8 text-lg font-bold shadow-lg shadow-indigo-200 transition-all hover:scale-[1.01]"
-              >
-                Sync Google Calendar
-              </Button>
-            </CardContent>
-          </Card>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <Card className="border-none shadow-xl shadow-indigo-100/50 rounded-3xl overflow-hidden">
+              <div className="bg-indigo-600 p-8 text-white">
+                <h2 className="text-xl font-bold mb-2">Google Calendar</h2>
+                <p className="opacity-90 text-sm">Sync using your Google account.</p>
+              </div>
+              <CardContent className="p-8">
+                <Button 
+                  onClick={runGoogleSync}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl py-8 text-lg font-bold shadow-lg shadow-indigo-200 transition-all hover:scale-[1.01]"
+                >
+                  Sync Google
+                </Button>
+              </CardContent>
+            </Card>
+
+            <Card className="border-none shadow-xl shadow-gray-100/50 rounded-3xl overflow-hidden">
+              <div className="bg-gray-900 p-8 text-white">
+                <h2 className="text-xl font-bold mb-2 flex items-center gap-2">
+                  <Apple size={20} /> Apple Calendar
+                </h2>
+                <p className="opacity-90 text-sm">Sync using CalDAV credentials.</p>
+              </div>
+              <CardContent className="p-8">
+                <Button 
+                  onClick={runAppleSync}
+                  className="w-full bg-gray-900 hover:bg-black text-white rounded-2xl py-8 text-lg font-bold shadow-lg shadow-gray-200 transition-all hover:scale-[1.01]"
+                >
+                  Sync Apple
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
         )}
 
         {isOptimising && (
@@ -171,7 +215,7 @@ const Optimise = () => {
           <div className="space-y-8">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-bold text-gray-900">Proposed Schedule Changes</h2>
-              <Button variant="outline" onClick={runSync} className="rounded-xl">
+              <Button variant="outline" onClick={() => { setSyncReport(null); setOptimisationResult(null); }} className="rounded-xl">
                 <RefreshCw size={16} className="mr-2" /> Reset & Re-sync
               </Button>
             </div>
@@ -221,14 +265,14 @@ const Optimise = () => {
                   <div className="flex items-center justify-between mb-6">
                     <div>
                       <h3 className="text-2xl font-bold">Ready to apply?</h3>
-                      <p className="opacity-80 text-sm mt-1">This will update {optimisationResult.changes.length} events in your Google Calendar.</p>
+                      <p className="opacity-80 text-sm mt-1">This will update {optimisationResult.changes.length} events in your Calendar.</p>
                     </div>
                     <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm">
                       <Zap size={28} />
                     </div>
                   </div>
                   <Button className="w-full bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl py-7 text-lg font-black shadow-lg">
-                    Apply Changes to Google Calendar
+                    Apply Changes to Calendar
                   </Button>
                 </div>
               </div>
@@ -238,7 +282,7 @@ const Optimise = () => {
                   <CheckCircle2 className="text-gray-300" size={40} />
                 </div>
                 <h3 className="text-xl font-bold text-gray-900 mb-2">No Movable Events</h3>
-                <p className="text-gray-500 max-w-xs mx-auto">All your events are currently locked or recurring. Create a single, non-recurring event in Google Calendar to test the optimiser.</p>
+                <p className="text-gray-500 max-w-xs mx-auto">All your events are currently locked or recurring. Create a single, non-recurring event to test the optimiser.</p>
               </Card>
             )}
           </div>
