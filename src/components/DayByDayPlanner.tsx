@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { format, parseISO, isBefore, isAfter } from 'date-fns';
+import { format, parseISO, isBefore, isAfter, startOfDay } from 'date-fns';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -50,11 +50,21 @@ const DayByDayPlanner = ({
 }: DayByDayPlannerProps) => {
   const allDates = useMemo(() => {
     const dates = new Set<string>();
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+
     changes.forEach(c => {
-      dates.add(format(parseISO(c.new_start), 'yyyy-MM-dd'));
-      dates.add(format(parseISO(c.old_start), 'yyyy-MM-dd'));
+      const newDate = format(parseISO(c.new_start), 'yyyy-MM-dd');
+      if (newDate >= todayStr) dates.add(newDate);
+      
+      const oldDate = format(parseISO(c.old_start), 'yyyy-MM-dd');
+      if (oldDate >= todayStr) dates.add(oldDate);
     });
-    events.filter(e => e.is_locked).forEach(e => dates.add(format(parseISO(e.start_time), 'yyyy-MM-dd')));
+
+    events.filter(e => e.is_locked).forEach(e => {
+      const date = format(parseISO(e.start_time), 'yyyy-MM-dd');
+      if (date >= todayStr) dates.add(date);
+    });
+
     return Array.from(dates).sort();
   }, [changes, events]);
 
@@ -92,14 +102,23 @@ const DayByDayPlanner = ({
 
   useEffect(() => {
     if (!hasAutoDefaulted && allDates.length > 0) {
+      const todayStr = format(new Date(), 'yyyy-MM-dd');
       const firstUnvettedIndex = allDates.findIndex(dateStr => {
+        if (dateStr < todayStr) return false;
         const dayChangesForDate = changes.filter(c => 
           format(parseISO(c.new_start), 'yyyy-MM-dd') === dateStr ||
           format(parseISO(c.old_start), 'yyyy-MM-dd') === dateStr
         );
         return dayChangesForDate.length > 0 && !dayChangesForDate.every(c => appliedChanges.includes(c.event_id));
       });
-      if (firstUnvettedIndex !== -1) setCurrentIndex(firstUnvettedIndex);
+      
+      if (firstUnvettedIndex !== -1) {
+        setCurrentIndex(firstUnvettedIndex);
+      } else {
+        // If everything is vetted, just start at today or the first available date
+        const todayIndex = allDates.findIndex(d => d >= todayStr);
+        if (todayIndex !== -1) setCurrentIndex(todayIndex);
+      }
       setHasAutoDefaulted(true);
     }
   }, [allDates, changes, appliedChanges, hasAutoDefaulted]);

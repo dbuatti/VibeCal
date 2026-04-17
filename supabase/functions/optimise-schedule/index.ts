@@ -23,7 +23,7 @@ serve(async (req) => {
       slotAlignment = 15, 
       selectedDays = [1, 2, 3, 4, 5], 
       placeholderDate,
-      vettedEventIds = [] // New: IDs that should be treated as locked
+      vettedEventIds = [] 
     } = await req.json();
     
     const supabaseClient = createClient(
@@ -54,9 +54,13 @@ serve(async (req) => {
     const dayThemes = themesRes.data || [];
     const workKeywords = settings.work_keywords || [];
 
-    // Treat vetted events as locked for this run
-    const fixedEvents = allEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
-    const movableEvents = allEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
+    // CRITICAL: Only process events from today onwards
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const currentEvents = allEvents.filter(e => new Date(e.start_time) >= now);
+
+    const fixedEvents = currentEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
+    const movableEvents = currentEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
 
     if (movableEvents.length === 0) {
       return new Response(JSON.stringify({ message: 'No movable events found.', changes: [] }), { headers: corsHeaders });
@@ -134,7 +138,7 @@ serve(async (req) => {
       for (let pass = 1; pass <= 2; pass++) {
         if (foundSlot) break;
         
-        let dayOffset = 1;
+        let dayOffset = 0; // Start from today
         while (!foundSlot && dayOffset <= 14) {
           let currentPointer = new Date();
           currentPointer.setDate(currentPointer.getDate() + dayOffset);
@@ -161,7 +165,10 @@ serve(async (req) => {
           if (!stats.lastPointer) {
             const dayStart = new Date(currentPointer);
             dayStart.setUTCHours(startH - offset, startM, 0, 0);
-            stats.lastPointer = alignTime(dayStart, slotAlignment);
+            // If today, don't schedule in the past
+            const nowInTz = new Date(new Date().toLocaleString('en-US', { timeZone: userTimezone }));
+            const effectiveStart = dayOffset === 0 && nowInTz > dayStart ? nowInTz : dayStart;
+            stats.lastPointer = alignTime(effectiveStart, slotAlignment);
           }
 
           let searchPointer = new Date(stats.lastPointer);
