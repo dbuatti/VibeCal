@@ -93,21 +93,32 @@ serve(async (req) => {
     });
 
     const listXml = await listRes.text();
-    // Extract all hrefs that are inside a response that contains a calendar resourcetype
+    // Log snippet for debugging if it fails
+    console.log("[sync-apple-calendar] List XML Snippet:", listXml.substring(0, 1000));
+
     const calendarPaths = [];
+    // Split by response tag to isolate each resource
     const responses = listXml.split(/<[^:]*:response>/i);
     
     for (const resp of responses) {
+      // Look for resourcetype containing 'calendar'
       if (resp.toLowerCase().includes('calendar') && resp.toLowerCase().includes('resourcetype')) {
-        const href = resp.match(/<[^:]*:href[^>]*>([^<]+)/i)?.[1];
-        if (href && href !== homeSetPath) {
+        // Extract href - handle both prefixed <D:href> and plain <href>
+        const hrefMatch = resp.match(/<[^>]*href[^>]*>([^<]+)/i);
+        const href = hrefMatch?.[1];
+        
+        // Only add if it's not the home set itself and not already added
+        if (href && href !== homeSetPath && !calendarPaths.includes(href)) {
           calendarPaths.push(href);
         }
       }
     }
 
+    console.log(`[sync-apple-calendar] Found ${calendarPaths.length} individual calendars.`);
+
     if (calendarPaths.length === 0) {
-      console.log("[sync-apple-calendar] No individual calendars found, trying home set directly as fallback.");
+      console.warn("[sync-apple-calendar] No individual calendars found. This usually causes a 403 on the next step.");
+      // Fallback to home set if nothing found, though likely to 403
       calendarPaths.push(homeSetPath);
     }
 
