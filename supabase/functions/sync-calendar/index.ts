@@ -13,8 +13,13 @@ serve(async (req) => {
   }
 
   try {
+    console.log("[sync-calendar] Request received");
+    
     const authHeader = req.headers.get('Authorization')
-    if (!authHeader) throw new Error('No authorization header')
+    if (!authHeader) {
+      console.error("[sync-calendar] No authorization header found");
+      throw new Error('No authorization header');
+    }
 
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -22,18 +27,27 @@ serve(async (req) => {
       { global: { headers: { Authorization: authHeader } } }
     )
 
-    // 1. Get the user and their session
+    // 1. Get the user
     const { data: { user }, error: userError } = await supabaseClient.auth.getUser()
-    if (userError || !user) throw userError || new Error('User not found')
+    if (userError || !user) {
+      console.error("[sync-calendar] User error:", userError);
+      throw userError || new Error('User not found');
+    }
+    console.log(`[sync-calendar] Authenticated user: ${user.id}`);
 
-    // 2. Get the provider token (access token) from the session
+    // 2. Get the session to find the provider token
     const { data: { session }, error: sessionError } = await supabaseClient.auth.getSession()
-    if (sessionError || !session) throw sessionError || new Error('Session not found')
+    if (sessionError || !session) {
+      console.error("[sync-calendar] Session error:", sessionError);
+      throw sessionError || new Error('Session not found');
+    }
     
     const providerToken = session.provider_token
-    if (!providerToken) throw new Error('No Google provider token found. Try logging out and back in.')
-
-    console.log(`[sync-calendar] Fetching events for user: ${user.id}`)
+    if (!providerToken) {
+      console.error("[sync-calendar] No Google provider token found in session");
+      throw new Error('No Google provider token found. Please sign out and sign back in to refresh your permissions.');
+    }
+    console.log("[sync-calendar] Provider token found, fetching from Google...");
 
     // 3. Fetch events from Google Calendar API
     const now = new Date().toISOString()
@@ -46,11 +60,13 @@ serve(async (req) => {
 
     if (!response.ok) {
       const errorData = await response.json()
+      console.error("[sync-calendar] Google API Error:", errorData);
       throw new Error(`Google API Error: ${errorData.error?.message || response.statusText}`)
     }
 
     const data = await response.json()
     const events = data.items || []
+    console.log(`[sync-calendar] Successfully fetched ${events.length} events from Google`);
 
     // 4. Cache events in the database
     const formattedEvents = events.map((event: any) => ({
@@ -65,11 +81,16 @@ serve(async (req) => {
     }))
 
     if (formattedEvents.length > 0) {
+      console.log(`[sync-calendar] Upserting ${formattedEvents.length} events to database...`);
       const { error: upsertError } = await supabaseClient
         .from('calendar_events_cache')
         .upsert(formattedEvents, { onConflict: 'user_id, event_id' })
       
-      if (upsertError) throw upsertError
+      if (upsertError) {
+        console.error("[sync-calendar] Database upsert error:", upsertError);
+        throw upsertError;
+      }
+      console.log("[sync-calendar] Database upsert successful");
     }
 
     return new Response(
@@ -80,7 +101,7 @@ serve(async (req) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (error) {
-    console.error("[sync-calendar] Error:", error.message)
+    console.error("[sync-calendar] Fatal error:", error.message)
     return new Response(
       JSON.stringify({ error: error.message }),
       { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

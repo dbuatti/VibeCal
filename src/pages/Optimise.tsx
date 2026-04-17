@@ -17,12 +17,26 @@ const Optimise = () => {
     setProgress(0);
     
     try {
+      console.log("Starting optimisation process...");
+      
       // Step 1: Sync Calendar
       setStep('Syncing Google Calendar...');
       setProgress(20);
       
+      console.log("Invoking sync-calendar edge function...");
       const { data, error } = await supabase.functions.invoke('sync-calendar');
-      if (error) throw error;
+      
+      if (error) {
+        console.error("Edge function error:", error);
+        throw error;
+      }
+
+      if (data?.error) {
+        console.error("Sync error returned from function:", data.error);
+        throw new Error(data.error);
+      }
+
+      console.log("Sync successful:", data);
 
       // Step 2: AI Processing (Simulated for now)
       setStep('Classifying tasks via Gemini...');
@@ -43,7 +57,8 @@ const Optimise = () => {
 
       showSuccess(`Successfully synced ${data.count} events!`);
     } catch (err: any) {
-      showError(err.message);
+      console.error("Optimisation failed:", err);
+      showError(err.message || "An unexpected error occurred during sync.");
     } finally {
       setIsOptimising(false);
     }
