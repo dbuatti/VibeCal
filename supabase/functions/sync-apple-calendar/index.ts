@@ -104,14 +104,20 @@ serve(async (req) => {
     
     for (const resp of calendarResponses) {
       const href = resp.match(/<d:href>([^<]+)<\/d:href>/i)?.[1];
-      const name = resp.match(/<d:displayname>([^<]+)<\/d:displayname>/i)?.[1];
-      const isCalendar = resp.includes('calendar') && !resp.includes('schedule-inbox') && !resp.includes('schedule-outbox');
+      // Try multiple ways to find the name as Apple sometimes uses different tags
+      const name = resp.match(/<d:displayname>([^<]+)<\/d:displayname>/i)?.[1] || 
+                   resp.match(/displayname>([^<]+)</i)?.[1];
+                   
+      const isCalendar = resp.includes('calendar') && 
+                         !resp.includes('schedule-inbox') && 
+                         !resp.includes('schedule-outbox') &&
+                         !resp.includes('notifications');
       
-      if (href && name && isCalendar) {
+      if (href && isCalendar) {
         discoveredCals.push({
           user_id: user.id,
           calendar_id: href,
-          calendar_name: name,
+          calendar_name: name || 'Unnamed Calendar',
           provider: 'apple'
         });
       }
