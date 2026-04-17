@@ -16,24 +16,27 @@ serve(async (req) => {
     console.log("[sync-apple-calendar] Starting Apple Sync...");
     
     const authHeader = req.headers.get('Authorization')
-    const supabaseClient = createClient(
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    )
+
+    const supabaseUser = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_ANON_KEY') ?? '',
       { global: { headers: { Authorization: authHeader } } }
     )
+    const { data: { user } } = await supabaseUser.auth.getUser()
+    if (!user) throw new Error("Unauthorized");
 
-    const { data: { user } } = await supabaseClient.auth.getUser()
-    const { data: profile } = await supabaseClient.from('profiles').select('apple_id, apple_app_password').eq('id', user.id).single();
-
+    const { data: profile } = await supabaseAdmin.from('profiles').select('apple_id, apple_app_password').eq('id', user.id).single();
     if (!profile?.apple_id || !profile?.apple_app_password) throw new Error('Apple credentials missing.');
 
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
-    
-    // 1. Discovery (Principal -> HomeSet -> Calendars)
-    // ... (Discovery logic remains same but with better logging)
     const initialBase = "https://caldav.icloud.com";
     const getFullUrl = (path, base) => path.startsWith('http') ? path : new URL(base).origin + (path.startsWith('/') ? '' : '/') + path;
 
+    // 1. Discovery
     const principalRes = await fetch(initialBase, { method: 'PROPFIND', headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }, body: `<?xml version="1.0" encoding="utf-8" ?><d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal /></d:prop></d:propfind>` });
     const principalXml = await principalRes.text();
     const principalPath = principalXml.match(/<href[^>]*>([^<]+)/i)?.[1];
@@ -45,7 +48,7 @@ serve(async (req) => {
     const homeSetUrl = getFullUrl(homeSetPath, homeSetRes.url);
 
     // 2. Get Enabled Calendars
-    const { data: enabled } = await supabaseClient
+    const { data: enabled } = await supabaseAdmin
       .from('user_calendars')
       .select('calendar_id, calendar_name')
       .eq('user_id', user.id)
@@ -55,7 +58,7 @@ serve(async (req) => {
     console.log(`[sync-apple-calendar] Found ${enabled?.length || 0} enabled Apple calendars.`);
 
     // Clear Apple cache
-    await supabaseClient.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
+    await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
 
     if (!enabled || enabled.length === 0) {
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
@@ -66,7 +69,6 @@ serve(async (req) => {
     const startStr = now.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endStr = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
-    // The <c:expand> tag is crucial for recurring events like "Resonance"
     const reportXml = `
       <c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
         <d:prop>
@@ -124,7 +126,8 @@ serve(async (req) => {
     }
 
     if (allEvents.length > 0) {
-      await supabaseClient.from('calendar_events_cache').upsert(allEvents, { onConflict: 'user_id, event_id' });
+      const { error: insertError } = await supabaseAdmin.from('calendar_events_cache').insert(allEvents);
+      if (insertError) throw insertError;
     }
 
     return new Response(JSON.stringify({ count: allEvents.length }), { headers: corsHeaders });

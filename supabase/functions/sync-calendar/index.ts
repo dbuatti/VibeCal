@@ -18,13 +18,20 @@ serve(async (req) => {
     const authHeader = req.headers.get('Authorization')
     const { googleAccessToken } = await req.json();
 
-    const supabaseClient = createClient(
+    // Use service role to ensure we can write to the cache regardless of RLS
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    )
+
+    // Still verify the user from the auth header
+    const supabaseUser = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_ANON_KEY') ?? '',
       { global: { headers: { Authorization: authHeader } } }
     )
-
-    const { data: { user } } = await supabaseClient.auth.getUser()
+    const { data: { user } } = await supabaseUser.auth.getUser()
+    if (!user) throw new Error("Unauthorized");
 
     // 1. Discover/Update Calendar List
     const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
@@ -40,11 +47,11 @@ serve(async (req) => {
         provider: 'google',
         color: cal.backgroundColor || '#6366f1'
       }))
-      await supabaseClient.from('user_calendars').upsert(discovered, { onConflict: 'user_id, calendar_id' })
+      await supabaseAdmin.from('user_calendars').upsert(discovered, { onConflict: 'user_id, calendar_id' })
     }
 
     // 2. Get Enabled Calendars
-    const { data: enabled } = await supabaseClient
+    const { data: enabled } = await supabaseAdmin
       .from('user_calendars')
       .select('calendar_id, calendar_name')
       .eq('user_id', user.id)
@@ -53,8 +60,8 @@ serve(async (req) => {
 
     console.log(`[sync-calendar] Found ${enabled?.length || 0} enabled Google calendars.`);
 
-    // Clear Google cache
-    await supabaseClient.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google');
+    // Clear Google cache for this user
+    await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google');
 
     if (!enabled || enabled.length === 0) {
       return new Response(JSON.stringify({ message: 'No Google calendars enabled', count: 0 }), { headers: corsHeaders })
@@ -94,7 +101,8 @@ serve(async (req) => {
     }
 
     if (allEvents.length > 0) {
-      await supabaseClient.from('calendar_events_cache').upsert(allEvents, { onConflict: 'user_id, event_id' })
+      const { error: insertError } = await supabaseAdmin.from('calendar_events_cache').insert(allEvents)
+      if (insertError) throw insertError;
     }
 
     return new Response(JSON.stringify({ count: allEvents.length }), { headers: corsHeaders })
