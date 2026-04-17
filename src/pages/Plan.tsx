@@ -105,13 +105,22 @@ const Plan = () => {
         
         if (session?.provider_token) {
           console.log("[Plan] Calling sync-calendar with token");
-          await supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: session.provider_token } });
+          const { data, error } = await supabase.functions.invoke('sync-calendar', { 
+            body: { googleAccessToken: session.provider_token } 
+          });
+          
+          if (error) {
+            console.error("[Plan] sync-calendar error:", error);
+            throw new Error(`Google Sync Failed: ${error.message || 'Unknown error'}`);
+          }
+          console.log("[Plan] sync-calendar success:", data);
         } else {
           console.warn("[Plan] No Google provider_token found. Skipping Google sync.");
           showError("Google session expired. Please sign out and back in to sync Google Calendar.");
         }
         
-        await supabase.functions.invoke('sync-apple-calendar');
+        const { error: appleError } = await supabase.functions.invoke('sync-apple-calendar');
+        if (appleError) console.warn("[Plan] Apple Sync Warning:", appleError);
       }
       
       const { data: fetchedEvents } = await supabase.from('calendar_events_cache').select('*').order('start_time', { ascending: true });
@@ -121,7 +130,10 @@ const Plan = () => {
       }
       setCurrentStep('vetting_tasks');
       showSuccess(skipSync ? 'Loaded from cache!' : 'Calendar synced!');
-    } catch (err: any) { showError(err.message); }
+    } catch (err: any) { 
+      console.error("[Plan] Analysis Error:", err);
+      showError(err.message); 
+    }
     finally { setIsProcessing(false); }
   };
 
@@ -214,7 +226,7 @@ const Plan = () => {
 
         const eventInCache = updatedEvents[eventIdx];
 
-        await supabase.functions.invoke('push-to-provider', {
+        const { error: pushError } = await supabase.functions.invoke('push-to-provider', {
           body: { 
             eventId: change.event_id, 
             provider: eventInCache.provider, 
@@ -224,6 +236,8 @@ const Plan = () => {
             googleAccessToken: session?.provider_token 
           }
         });
+
+        if (pushError) throw pushError;
 
         await supabase.from('calendar_events_cache')
           .update({ 
@@ -280,7 +294,7 @@ const Plan = () => {
         const oldEnd = addMinutes(parseISO(change.old_start), change.old_duration).toISOString();
 
         // Revert in provider
-        await supabase.functions.invoke('push-to-provider', {
+        const { error: pushError } = await supabase.functions.invoke('push-to-provider', {
           body: { 
             eventId: change.event_id, 
             provider: eventInCache.provider, 
@@ -290,6 +304,8 @@ const Plan = () => {
             googleAccessToken: session?.provider_token 
           }
         });
+
+        if (pushError) throw pushError;
 
         // Revert in cache
         await supabase.from('calendar_events_cache')

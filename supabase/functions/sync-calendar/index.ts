@@ -45,9 +45,17 @@ serve(async (req) => {
     const movableKeywords = settings?.movable_keywords || [];
     const lockedKeywords = settings?.locked_keywords || [];
 
+    // 1. Fetch Calendar List
     const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
       headers: { Authorization: `Bearer ${googleAccessToken}` }
     })
+    
+    if (!listRes.ok) {
+      const errorData = await listRes.json();
+      console.error("[sync-calendar] Google Calendar List Error:", errorData);
+      throw new Error(`Google API Error (List): ${errorData.error?.message || listRes.statusText}`);
+    }
+
     const listData = await listRes.json()
     
     if (listData.items) {
@@ -64,12 +72,13 @@ serve(async (req) => {
 
     const { data: enabled } = await supabaseAdmin.from('user_calendars').select('calendar_id, calendar_name').eq('user_id', user.id).eq('is_enabled', true).eq('provider', 'google')
     
-    await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google');
-
     if (!enabled || enabled.length === 0) {
       console.log("[sync-calendar] No enabled Google calendars found.");
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
+
+    // Only delete cache if we have enabled calendars to replace them with
+    await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google');
 
     const now = new Date()
     const end = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
@@ -82,33 +91,26 @@ serve(async (req) => {
       console.log(`[sync-calendar] Fetching events for: ${cal.calendar_name}`);
       const encodedId = encodeURIComponent(cal.calendar_id);
       const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodedId}/events?timeMin=${now.toISOString()}&timeMax=${end.toISOString()}&singleEvents=true&orderBy=startTime`, { headers: { Authorization: `Bearer ${googleAccessToken}` } })
+      
+      if (!res.ok) {
+        const errorData = await res.json();
+        console.error(`[sync-calendar] Google Events Error for ${cal.calendar_name}:`, errorData);
+        continue; // Skip this calendar but try others
+      }
+
       const data = await res.json()
       
       if (data.items) {
         data.items.forEach(event => {
           const title = event.summary || 'Untitled';
           
-          // Handle All-Day events or Tasks without specific times
           let start, end;
           if (event.start.date) {
-            // All-day event: Google sends "YYYY-MM-DD"
-            // We default to 9 AM in the user's local time (which is roughly 11 PM UTC previous day for AEST)
-            // But for now, let's just log it clearly.
             start = new Date(event.start.date + "T09:00:00"); 
             end = new Date(event.end.date + "T09:30:00");
           } else {
             start = new Date(event.start.dateTime);
             end = new Date(event.end.dateTime);
-          }
-
-          if (title.includes("Pay Fine") || title.includes("Fine")) {
-            console.log(`[sync-calendar] DEBUG EVENT: "${title}"`, {
-              id: event.id,
-              rawStart: event.start,
-              rawEnd: event.end,
-              parsedStart: start.toISOString(),
-              parsedEnd: end.toISOString()
-            });
           }
 
           const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
@@ -127,7 +129,7 @@ serve(async (req) => {
             title: title,
             start_time: start.toISOString(),
             end_time: end.toISOString(),
-            duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000) || 30, // Default to 30m if 0
+            duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000) || 30,
             is_locked: isLocked,
             provider: 'google',
             source_calendar: cal.calendar_name,
