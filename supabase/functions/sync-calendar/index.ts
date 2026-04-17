@@ -21,45 +21,39 @@ serve(async (req) => {
       throw new Error('No authorization header');
     }
 
+    // Get the provider token from the request body
+    const { googleAccessToken } = await req.json();
+    if (!googleAccessToken) {
+      console.error("[sync-calendar] No Google access token provided in body");
+      throw new Error('Google access token is required');
+    }
+
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_ANON_KEY') ?? '',
       { global: { headers: { Authorization: authHeader } } }
     )
 
-    // 1. Get the user
+    // 1. Get the user to ensure they are authenticated
     const { data: { user }, error: userError } = await supabaseClient.auth.getUser()
     if (userError || !user) {
       console.error("[sync-calendar] User error:", userError);
       throw userError || new Error('User not found');
     }
 
-    // 2. Get the session to find the provider token
-    const { data: { session }, error: sessionError } = await supabaseClient.auth.getSession()
-    if (sessionError || !session) {
-      console.error("[sync-calendar] Session error:", sessionError);
-      throw sessionError || new Error('Session not found');
-    }
-    
-    const providerToken = session.provider_token
-    if (!providerToken) {
-      console.error("[sync-calendar] No Google provider token found in session");
-      throw new Error('No Google provider token found. Please sign out and sign back in to refresh your permissions.');
-    }
-
-    // 3. Fetch events from Google Calendar API (Next 14 days)
+    // 2. Fetch events from Google Calendar API (Next 14 days)
     const now = new Date()
     const fourteenDaysLater = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
     
     const timeMin = now.toISOString()
     const timeMax = fourteenDaysLater.toISOString()
 
-    console.log(`[sync-calendar] Fetching events from ${timeMin} to ${timeMax}`);
+    console.log(`[sync-calendar] Fetching events for user ${user.id} from ${timeMin} to ${timeMax}`);
 
     const response = await fetch(
       `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`,
       {
-        headers: { Authorization: `Bearer ${providerToken}` }
+        headers: { Authorization: `Bearer ${googleAccessToken}` }
       }
     )
 
@@ -73,13 +67,11 @@ serve(async (req) => {
     const events = data.items || []
     console.log(`[sync-calendar] Successfully fetched ${events.length} events from Google`);
 
-    // 4. Cache events in the database with enhanced mapping
+    // 3. Cache events in the database
     const formattedEvents = events.map((event: any) => {
       const start = new Date(event.start.dateTime || event.start.date)
       const end = new Date(event.end.dateTime || event.end.date)
       const durationMinutes = Math.round((end.getTime() - start.getTime()) / 60000)
-      
-      // Detect if it's a recurring event (Google singleEvents=true expands them, but they have recurringEventId)
       const isRecurring = !!event.recurringEventId
       
       return {
@@ -91,14 +83,13 @@ serve(async (req) => {
         end_time: end.toISOString(),
         duration_minutes: durationMinutes,
         is_recurring: isRecurring,
-        is_locked: isRecurring, // Basic locked detection: recurring events are locked
+        is_locked: isRecurring,
         source_calendar: 'primary',
         last_synced_at: new Date().toISOString()
       }
     })
 
     if (formattedEvents.length > 0) {
-      console.log(`[sync-calendar] Upserting ${formattedEvents.length} events to database...`);
       const { error: upsertError } = await supabaseClient
         .from('calendar_events_cache')
         .upsert(formattedEvents, { onConflict: 'user_id, event_id' })
@@ -107,7 +98,6 @@ serve(async (req) => {
         console.error("[sync-calendar] Database upsert error:", upsertError);
         throw upsertError;
       }
-      console.log("[sync-calendar] Database upsert successful");
     }
 
     return new Response(

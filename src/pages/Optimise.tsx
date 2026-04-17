@@ -23,13 +23,29 @@ const Optimise = () => {
     setSyncReport(null);
     
     try {
+      setStep('Authenticating with Google...');
+      setProgress(10);
+
+      // Get the provider token from the current session
+      const { data: { session } } = await supabase.auth.getSession();
+      const providerToken = session?.provider_token;
+
+      if (!providerToken) {
+        throw new Error("Google access token not found. Please sign out and sign back in to refresh your permissions.");
+      }
+
       setStep('Syncing Google Calendar...');
-      setProgress(20);
+      setProgress(30);
       
-      const { data, error } = await supabase.functions.invoke('sync-calendar');
+      const { data, error } = await supabase.functions.invoke('sync-calendar', {
+        body: { googleAccessToken: providerToken }
+      });
       
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
+
+      setStep('Verifying database records...');
+      setProgress(80);
 
       const { data: events, error: fetchError } = await supabase
         .from('calendar_events_cache')
