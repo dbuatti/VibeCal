@@ -5,12 +5,13 @@ import Layout from '@/components/Layout';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import DayByDayPlanner from '@/components/DayByDayPlanner';
-import { Brain, RefreshCw, Trash2, Eye, EyeOff, Sparkles, Calendar, Clock, ListOrdered, ChevronRight, BrainCircuit, Inbox, Unlock, Lock, History, RotateCcw } from 'lucide-react';
+import { Brain, RefreshCw, Trash2, Eye, EyeOff, Sparkles, Calendar, Clock, ListOrdered, ChevronRight, BrainCircuit, Inbox, Unlock, Lock, History, RotateCcw, Settings2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { format, nextSaturday, formatDistanceToNow, parseISO } from 'date-fns';
 import { cn } from '@/lib/utils';
@@ -166,7 +167,7 @@ const Plan = () => {
         user_id: user.id,
         proposed_changes: data.changes,
         status: 'proposed',
-        metadata: { selectedDays, maxTasksOverride, maxHoursOverride }
+        metadata: { selectedDays, maxTasksOverride, maxHoursOverride, durationOverride }
       }).select().single();
 
       setProposal(newProposal);
@@ -304,6 +305,15 @@ const Plan = () => {
           </p>
         </div>
         <div className="flex gap-3">
+          {(currentStep === 'active_plan' || currentStep === 'vetting_tasks') && (
+            <Button 
+              variant="outline" 
+              onClick={() => setCurrentStep('requirements')}
+              className="bg-white border-gray-100 text-gray-500 hover:text-indigo-600 hover:border-indigo-100 rounded-2xl font-black text-[10px] uppercase tracking-widest h-12 px-6 shadow-sm transition-all"
+            >
+              <Settings2 size={16} className="mr-2" /> Requirements
+            </Button>
+          )}
           <Button 
             variant="outline" 
             onClick={() => runAnalysis(false)}
@@ -429,6 +439,49 @@ const Plan = () => {
                 <CardTitle className="text-4xl font-black tracking-tight">Specify Requirements</CardTitle>
               </CardHeader>
               <CardContent className="p-16 space-y-16">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-16">
+                  <div className="space-y-6">
+                    <Label className="text-2xl font-black flex items-center gap-4">
+                      <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center">
+                        <Clock className="text-indigo-600" size={24} />
+                      </div>
+                      Task Duration
+                    </Label>
+                    <Select value={durationOverride} onValueChange={setDurationOverride}>
+                      <SelectTrigger className="h-20 rounded-[2rem] border-gray-100 font-black text-2xl px-10 focus:ring-indigo-500 bg-gray-50/50">
+                        <SelectValue placeholder="Select duration" />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-2xl">
+                        <SelectItem value="original">Original Duration</SelectItem>
+                        <SelectItem value="15">15 Minutes</SelectItem>
+                        <SelectItem value="30">30 Minutes</SelectItem>
+                        <SelectItem value="45">45 Minutes</SelectItem>
+                        <SelectItem value="60">60 Minutes</SelectItem>
+                        <SelectItem value="90">90 Minutes</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-6">
+                    <Label className="text-2xl font-black flex items-center gap-4">
+                      <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center">
+                        <RefreshCw className="text-indigo-600" size={24} />
+                      </div>
+                      Slot Alignment
+                    </Label>
+                    <Select value={slotAlignment} onValueChange={setSlotAlignment}>
+                      <SelectTrigger className="h-20 rounded-[2rem] border-gray-100 font-black text-2xl px-10 focus:ring-indigo-500 bg-gray-50/50">
+                        <SelectValue placeholder="Select alignment" />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-2xl">
+                        <SelectItem value="5">5 Minutes</SelectItem>
+                        <SelectItem value="15">15 Minutes</SelectItem>
+                        <SelectItem value="30">30 Minutes</SelectItem>
+                        <SelectItem value="60">60 Minutes</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
                 <div className="space-y-10">
                   <Label className="text-2xl font-black flex items-center gap-4">
                     <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center">
