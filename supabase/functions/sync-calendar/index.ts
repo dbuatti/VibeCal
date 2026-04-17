@@ -18,6 +18,11 @@ serve(async (req) => {
     const authHeader = req.headers.get('Authorization')
     const { googleAccessToken } = await req.json();
 
+    if (!googleAccessToken) {
+      console.error("[sync-calendar] No Google Access Token provided in request body.");
+      throw new Error("Missing Google Access Token");
+    }
+
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
@@ -32,12 +37,19 @@ serve(async (req) => {
     if (!user) throw new Error("Unauthorized");
 
     // 1. Discover/Update Calendar List
+    console.log("[sync-calendar] Fetching calendar list...");
     const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
       headers: { Authorization: `Bearer ${googleAccessToken}` }
     })
     const listData = await listRes.json()
     
+    if (listData.error) {
+      console.error("[sync-calendar] Google API Error (Calendar List):", listData.error);
+      throw new Error(`Google API Error: ${listData.error.message}`);
+    }
+
     if (listData.items) {
+      console.log(`[sync-calendar] Found ${listData.items.length} calendars.`);
       const discovered = listData.items.map(cal => ({
         user_id: user.id,
         calendar_id: cal.id,
@@ -56,12 +68,13 @@ serve(async (req) => {
       .eq('is_enabled', true)
       .eq('provider', 'google')
 
-    // Clear Google cache for this user
-    await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google');
-
     if (!enabled || enabled.length === 0) {
+      console.log("[sync-calendar] No Google calendars are enabled for this user.");
       return new Response(JSON.stringify({ message: 'No Google calendars enabled', count: 0 }), { headers: corsHeaders })
     }
+
+    // Clear Google cache for this user
+    await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google');
 
     // 3. Fetch Events
     const now = new Date()
@@ -69,19 +82,24 @@ serve(async (req) => {
     const eventMap = new Map();
 
     for (const cal of enabled) {
-      console.log(`[sync-calendar] Fetching events for: ${cal.calendar_name}`);
+      console.log(`[sync-calendar] Fetching events for: ${cal.calendar_name} (${cal.calendar_id})`);
       const res = await fetch(
         `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.calendar_id)}/events?timeMin=${now.toISOString()}&timeMax=${end.toISOString()}&singleEvents=true&orderBy=startTime`,
         { headers: { Authorization: `Bearer ${googleAccessToken}` } }
       )
       const data = await res.json()
       
+      if (data.error) {
+        console.error(`[sync-calendar] Google API Error (Events for ${cal.calendar_name}):`, data.error);
+        continue;
+      }
+
       if (data.items) {
+        console.log(`[sync-calendar] Found ${data.items.length} events in ${cal.calendar_name}.`);
         data.items.forEach(event => {
           const start = new Date(event.start.dateTime || event.start.date)
           const end = new Date(event.end.dateTime || event.end.date)
           
-          // Use Map to ensure unique event_id per user
           eventMap.set(event.id, {
             user_id: user.id,
             event_id: event.id,
@@ -95,13 +113,20 @@ serve(async (req) => {
             last_synced_at: new Date().toISOString()
           });
         });
+      } else {
+        console.log(`[sync-calendar] No items field in response for ${cal.calendar_name}.`);
       }
     }
 
     const uniqueEvents = Array.from(eventMap.values());
+    console.log(`[sync-calendar] Total unique events to cache: ${uniqueEvents.length}`);
+
     if (uniqueEvents.length > 0) {
       const { error: insertError } = await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' })
-      if (insertError) throw insertError;
+      if (insertError) {
+        console.error("[sync-calendar] Database Error:", insertError);
+        throw insertError;
+      }
     }
 
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders })
