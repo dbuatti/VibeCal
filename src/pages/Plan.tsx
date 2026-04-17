@@ -13,7 +13,7 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { format, nextSaturday, formatDistanceToNow, parseISO } from 'date-fns';
+import { format, nextSaturday, formatDistanceToNow, parseISO, addMinutes } from 'date-fns';
 import { cn } from '@/lib/utils';
 
 type PlanStep = 'initial' | 'analysis' | 'vetting_tasks' | 'requirements' | 'active_plan';
@@ -200,10 +200,13 @@ const Plan = () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const newAppliedIds = [...appliedChanges];
+      const updatedEvents = [...events];
       
       for (const change of dateChanges) {
-        const eventInCache = events.find(e => e.event_id === change.event_id);
-        if (!eventInCache) continue;
+        const eventIdx = updatedEvents.findIndex(e => e.event_id === change.event_id);
+        if (eventIdx === -1) continue;
+
+        const eventInCache = updatedEvents[eventIdx];
 
         await supabase.functions.invoke('push-to-provider', {
           body: { 
@@ -225,7 +228,16 @@ const Plan = () => {
           })
           .eq('event_id', change.event_id);
         
-        newAppliedIds.push(change.event_id);
+        updatedEvents[eventIdx] = {
+          ...eventInCache,
+          start_time: change.new_start,
+          end_time: change.new_end,
+          duration_minutes: change.duration
+        };
+        
+        if (!newAppliedIds.includes(change.event_id)) {
+          newAppliedIds.push(change.event_id);
+        }
       }
 
       const updatedProposedChanges = proposal.proposed_changes.map((c: any) => ({
@@ -238,6 +250,7 @@ const Plan = () => {
         .update({ proposed_changes: updatedProposedChanges })
         .eq('id', proposal.id);
 
+      setEvents(updatedEvents);
       setAppliedChanges(newAppliedIds);
       setProposal({ ...proposal, proposed_changes: updatedProposedChanges });
     } catch (err: any) {
@@ -248,8 +261,47 @@ const Plan = () => {
 
   const handleUndoApplyDay = async (dateChanges: any[]) => {
     try {
+      const { data: { session } } = await supabase.auth.getSession();
       const changeIds = dateChanges.map(c => c.event_id);
       const newAppliedIds = appliedChanges.filter(id => !changeIds.includes(id));
+      const updatedEvents = [...events];
+
+      for (const change of dateChanges) {
+        const eventIdx = updatedEvents.findIndex(e => e.event_id === change.event_id);
+        if (eventIdx === -1) continue;
+
+        const eventInCache = updatedEvents[eventIdx];
+        const oldEnd = addMinutes(parseISO(change.old_start), change.old_duration).toISOString();
+
+        // Revert in provider
+        await supabase.functions.invoke('push-to-provider', {
+          body: { 
+            eventId: change.event_id, 
+            provider: eventInCache.provider, 
+            calendarId: eventInCache.source_calendar_id, 
+            startTime: change.old_start, 
+            endTime: oldEnd, 
+            googleAccessToken: session?.provider_token 
+          }
+        });
+
+        // Revert in cache
+        await supabase.from('calendar_events_cache')
+          .update({ 
+            start_time: change.old_start, 
+            end_time: oldEnd, 
+            duration_minutes: change.old_duration,
+            last_synced_at: new Date().toISOString() 
+          })
+          .eq('event_id', change.event_id);
+
+        updatedEvents[eventIdx] = {
+          ...eventInCache,
+          start_time: change.old_start,
+          end_time: oldEnd,
+          duration_minutes: change.old_duration
+        };
+      }
 
       const updatedProposedChanges = proposal.proposed_changes.map((c: any) => ({
         ...c,
@@ -261,11 +313,12 @@ const Plan = () => {
         .update({ proposed_changes: updatedProposedChanges })
         .eq('id', proposal.id);
 
+      setEvents(updatedEvents);
       setAppliedChanges(newAppliedIds);
       setProposal({ ...proposal, proposed_changes: updatedProposedChanges });
-      showSuccess("Day vetting reset. You can now re-sync if needed.");
+      showSuccess("Day vetting reset and calendar reverted.");
     } catch (err: any) {
-      showError("Failed to undo vetting");
+      showError("Failed to undo vetting: " + err.message);
     }
   };
 
