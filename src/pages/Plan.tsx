@@ -7,9 +7,9 @@ import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import DayByDayPlanner from '@/components/DayByDayPlanner';
 import RequirementsForm from '@/components/RequirementsForm';
-import PlanPageHeader from '@/components/plan/PlanPageHeader';
-import PlanInitialView from '@/components/plan/PlanInitialView';
-import PlanLoadingView from '@/components/plan/PlanLoadingView';
+import PlanPageHeader from '@/components/PlanPageHeader';
+import PlanInitialView from '@/components/PlanInitialView';
+import PlanLoadingView from '@/components/PlanLoadingView';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { format, nextSaturday, parseISO, addMinutes } from 'date-fns';
 
@@ -28,6 +28,7 @@ const Plan = () => {
   const [settings, setSettings] = useState<any>(null);
   const [deepFocus, setDeepFocus] = useState(false);
 
+  // Requirements state
   const [durationOverride, setDurationOverride] = useState<string>("original");
   const [maxTasksOverride, setMaxTasksOverride] = useState<number>(5);
   const [maxHoursOverride, setMaxHoursOverride] = useState<number>(6);
@@ -56,9 +57,16 @@ const Plan = () => {
       ]);
 
       if (settingsRes.data) {
-        setSettings(settingsRes.data);
-        setMaxHoursOverride(settingsRes.data.max_hours_per_day || 6);
-        setMaxTasksOverride(settingsRes.data.max_tasks_per_day || 5);
+        const s = settingsRes.data;
+        setSettings(s);
+        
+        // Load persisted requirements
+        setMaxHoursOverride(s.max_hours_per_day || 6);
+        setMaxTasksOverride(s.max_tasks_per_day || 5);
+        if (s.duration_override) setDurationOverride(s.duration_override);
+        if (s.slot_alignment) setSlotAlignment(s.slot_alignment);
+        if (s.selected_days) setSelectedDays(s.selected_days);
+        if (s.placeholder_date) setPlaceholderDate(s.placeholder_date);
       }
 
       if (eventsRes.data) setEvents(eventsRes.data);
@@ -83,6 +91,21 @@ const Plan = () => {
   useEffect(() => {
     fetchData();
   }, []);
+
+  const saveRequirements = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    await supabase.from('user_settings').upsert({
+      user_id: user.id,
+      max_hours_per_day: maxHoursOverride,
+      max_tasks_per_day: maxTasksOverride,
+      duration_override: durationOverride,
+      slot_alignment: slotAlignment,
+      selected_days: selectedDays,
+      placeholder_date: placeholderDate
+    }, { onConflict: 'user_id' });
+  };
 
   const runAnalysis = async (skipSync = false) => {
     setIsProcessing(true);
@@ -119,6 +142,9 @@ const Plan = () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+
+      // Save requirements to DB
+      await saveRequirements();
 
       const currentApplied = isResuggest ? appliedChanges : [];
 

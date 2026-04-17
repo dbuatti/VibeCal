@@ -1,9 +1,8 @@
--- Update movable_keywords column with broader defaults
-DO $$ 
-BEGIN 
-  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='user_settings' AND column_name='movable_keywords') THEN
-    ALTER TABLE public.user_settings ADD COLUMN movable_keywords TEXT[] DEFAULT ARRAY['arrangement', 'email', 'outreach', 'draft', 'exploration', 'tidy', 'vacuum', '🎹', '📣', '📬', '🧹'];
-  ELSE
-    -- If it exists, we don't overwrite user data, but this script ensures the column is ready.
-  END IF;
-END $$;
+-- Add missing columns to user_settings for persisting requirements
+ALTER TABLE public.user_settings 
+ADD COLUMN IF NOT EXISTS duration_override TEXT DEFAULT 'original',
+ADD COLUMN IF NOT EXISTS slot_alignment TEXT DEFAULT '15',
+ADD COLUMN IF NOT EXISTS selected_days INTEGER[] DEFAULT ARRAY[1, 2, 3, 4, 5],
+ADD COLUMN IF NOT EXISTS placeholder_date TEXT;
+
+-- Ensure RLS is still correct (it should be as we're just adding columns)
