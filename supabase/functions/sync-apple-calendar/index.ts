@@ -34,17 +34,33 @@ serve(async (req) => {
 
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
     const initialBase = "https://caldav.icloud.com";
-    const getFullUrl = (path, base) => path.startsWith('http') ? path : new URL(base).origin + (path.startsWith('/') ? '' : '/') + path;
+    
+    const getFullUrl = (path, base) => {
+      if (!path) return base;
+      if (path.startsWith('http')) return path;
+      const urlObj = new URL(base);
+      return `${urlObj.origin}${path.startsWith('/') ? '' : '/'}${path}`;
+    };
 
     // 1. Discovery
-    const principalRes = await fetch(initialBase, { method: 'PROPFIND', headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }, body: `<?xml version="1.0" encoding="utf-8" ?><d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal /></d:prop></d:propfind>` });
+    const principalRes = await fetch(initialBase, { 
+      method: 'PROPFIND', 
+      headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }, 
+      body: `<?xml version="1.0" encoding="utf-8" ?><d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal /></d:prop></d:propfind>` 
+    });
     const principalXml = await principalRes.text();
     const principalPath = principalXml.match(/<href[^>]*>([^<]+)/i)?.[1];
+    if (!principalPath) throw new Error("Could not find Principal path.");
     const principalUrl = getFullUrl(principalPath, principalRes.url);
 
-    const homeSetRes = await fetch(principalUrl, { method: 'PROPFIND', headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }, body: `<?xml version="1.0" encoding="utf-8" ?><d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><c:calendar-home-set /></d:prop></d:propfind>` });
+    const homeSetRes = await fetch(principalUrl, { 
+      method: 'PROPFIND', 
+      headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }, 
+      body: `<?xml version="1.0" encoding="utf-8" ?><d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><c:calendar-home-set /></d:prop></d:propfind>` 
+    });
     const homeSetXml = await homeSetRes.text();
     const homeSetPath = homeSetXml.match(/<calendar-home-set[^>]*>\s*<href[^>]*>([^<]+)/i)?.[1];
+    if (!homeSetPath) throw new Error("Could not find Calendar Home Set.");
     const homeSetUrl = getFullUrl(homeSetPath, homeSetRes.url);
 
     // 2. Get Enabled Calendars
@@ -57,11 +73,11 @@ serve(async (req) => {
 
     console.log(`[sync-apple-calendar] Found ${enabled?.length || 0} enabled Apple calendars.`);
 
-    // Clear Apple cache
+    // Clear Apple cache for this user
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
 
     if (!enabled || enabled.length === 0) {
-      return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
+      return new Response(JSON.stringify({ count: 0, message: "No Apple calendars enabled." }), { headers: corsHeaders });
     }
 
     // 3. Fetch Events with EXPANSION
@@ -126,7 +142,7 @@ serve(async (req) => {
     }
 
     if (allEvents.length > 0) {
-      const { error: insertError } = await supabaseAdmin.from('calendar_events_cache').insert(allEvents);
+      const { error: insertError } = await supabaseAdmin.from('calendar_events_cache').upsert(allEvents, { onConflict: 'user_id, event_id' });
       if (insertError) throw insertError;
     }
 

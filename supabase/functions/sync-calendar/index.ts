@@ -18,13 +18,11 @@ serve(async (req) => {
     const authHeader = req.headers.get('Authorization')
     const { googleAccessToken } = await req.json();
 
-    // Use service role to ensure we can write to the cache regardless of RLS
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     )
 
-    // Still verify the user from the auth header
     const supabaseUser = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_ANON_KEY') ?? '',
@@ -101,7 +99,7 @@ serve(async (req) => {
     }
 
     if (allEvents.length > 0) {
-      const { error: insertError } = await supabaseAdmin.from('calendar_events_cache').insert(allEvents)
+      const { error: insertError } = await supabaseAdmin.from('calendar_events_cache').upsert(allEvents, { onConflict: 'user_id, event_id' })
       if (insertError) throw insertError;
     }
 
