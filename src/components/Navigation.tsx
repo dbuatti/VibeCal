@@ -2,8 +2,9 @@
 
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Calendar, Settings, LayoutDashboard, Sparkles, History, User } from 'lucide-react';
+import { Calendar, Settings, LayoutDashboard, Sparkles, History, User, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { supabase } from '@/integrations/supabase/client';
 
 const Navigation = () => {
   const location = useLocation();
@@ -14,6 +15,10 @@ const Navigation = () => {
     { icon: History, label: 'History', path: '/history' },
     { icon: Settings, label: 'Settings', path: '/settings' },
   ];
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+  };
 
   return (
     <nav className="fixed left-0 top-0 h-screen w-72 bg-white border-r border-gray-100 p-8 flex flex-col gap-10 z-50">
@@ -55,14 +60,23 @@ const Navigation = () => {
           <p className="text-xs mt-3 opacity-90 leading-relaxed font-medium">Your schedule is 12% more aligned than last week.</p>
         </div>
 
-        <div className="flex items-center gap-4 p-2 hover:bg-gray-50 rounded-2xl transition-colors cursor-pointer group">
-          <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center group-hover:bg-indigo-100 transition-colors">
-            <User className="text-gray-400 group-hover:text-indigo-600" size={24} />
+        <div className="flex items-center justify-between p-2 hover:bg-gray-50 rounded-2xl transition-colors group">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center group-hover:bg-indigo-100 transition-colors">
+              <User className="text-gray-400 group-hover:text-indigo-600" size={24} />
+            </div>
+            <div className="flex-1">
+              <p className="font-bold text-gray-900">Alex Rivera</p>
+              <p className="text-xs text-gray-400 font-medium">Pro Plan</p>
+            </div>
           </div>
-          <div className="flex-1">
-            <p className="font-bold text-gray-900">Alex Rivera</p>
-            <p className="text-xs text-gray-400 font-medium">Pro Plan</p>
-          </div>
+          <button 
+            onClick={handleSignOut}
+            className="p-2 text-gray-400 hover:text-red-500 transition-colors"
+            title="Sign Out"
+          >
+            <LogOut size={20} />
+          </button>
         </div>
       </div>
     </nav>
