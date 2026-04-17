@@ -17,7 +17,8 @@ import {
   LayoutDashboard, 
   RotateCcw, 
   ArrowUpRight,
-  Calendar as CalendarIcon
+  Calendar as CalendarIcon,
+  Wand2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import VisualSchedule from './VisualSchedule';
@@ -29,6 +30,7 @@ interface DayByDayPlannerProps {
   appliedChanges: string[];
   onApplyDay: (dateChanges: any[]) => Promise<void>;
   onUndoApplyDay: (dateChanges: any[]) => Promise<void>;
+  onResuggestDay?: () => Promise<void>;
   maxHours: number;
   maxTasks: number;
   workKeywords?: string[];
@@ -40,6 +42,7 @@ const DayByDayPlanner = ({
   appliedChanges, 
   onApplyDay, 
   onUndoApplyDay,
+  onResuggestDay,
   maxHours, 
   maxTasks,
   workKeywords = ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt']
@@ -56,6 +59,7 @@ const DayByDayPlanner = ({
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isResuggesting, setIsResuggesting] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
   const [showXP, setShowXP] = useState(false);
   const [hasAutoDefaulted, setHasAutoDefaulted] = useState(false);
@@ -148,6 +152,16 @@ const DayByDayPlanner = ({
     finally { setIsSyncing(false); }
   };
 
+  const handleResuggest = async () => {
+    if (!onResuggestDay) return;
+    setIsResuggesting(true);
+    try {
+      await onResuggestDay();
+    } finally {
+      setIsResuggesting(false);
+    }
+  };
+
   if (isFinished) {
     return (
       <div className="max-w-md mx-auto text-center py-16 animate-in zoom-in-95 duration-500">
@@ -175,10 +189,22 @@ const DayByDayPlanner = ({
 
       <div className={cn("flex items-center justify-between p-6 rounded-[2rem] border transition-all shadow-lg", isDayVetted ? "bg-green-50/50 border-green-100" : "bg-white border-gray-100")}>
         <Button variant="ghost" size="icon" onClick={() => setCurrentIndex(prev => Math.max(0, prev - 1))} disabled={currentIndex === 0} className="rounded-xl h-12 w-12"><ChevronLeft size={24} /></Button>
-        <div className="text-center relative">
+        <div className="text-center relative flex flex-col items-center">
           {showXP && <div className="absolute -top-10 left-1/2 -translate-x-1/2 animate-bounce"><Badge className="bg-yellow-400 text-yellow-900 px-4 py-1 rounded-full font-black text-[9px]">+50 XP</Badge></div>}
           <h2 className="text-xl font-black text-gray-900 tracking-tight">{format(currentDate, 'EEEE, MMM do')}</h2>
-          <Badge className={cn("border-none px-3 py-0.5 rounded-full font-black text-[8px] uppercase tracking-widest mt-1", isDayVetted ? "bg-green-500 text-white" : "bg-indigo-100 text-indigo-600")}>{isDayVetted ? 'Vetted' : 'Vetting'}</Badge>
+          <div className="flex items-center gap-2 mt-1">
+            <Badge className={cn("border-none px-3 py-0.5 rounded-full font-black text-[8px] uppercase tracking-widest", isDayVetted ? "bg-green-500 text-white" : "bg-indigo-100 text-indigo-600")}>{isDayVetted ? 'Vetted' : 'Vetting'}</Badge>
+            {!isDayVetted && onResuggestDay && (
+              <button 
+                onClick={handleResuggest}
+                disabled={isResuggesting}
+                className="flex items-center gap-1.5 text-[8px] font-black uppercase tracking-widest text-indigo-400 hover:text-indigo-600 transition-colors disabled:opacity-50"
+              >
+                <Wand2 size={10} className={cn(isResuggesting && "animate-spin")} />
+                Resuggest
+              </button>
+            )}
+          </div>
         </div>
         <Button variant="ghost" size="icon" onClick={() => setCurrentIndex(prev => Math.min(allDates.length - 1, prev + 1))} disabled={currentIndex === allDates.length - 1} className="rounded-xl h-12 w-12"><ChevronRight size={24} /></Button>
       </div>

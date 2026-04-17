@@ -473,6 +473,7 @@ const Plan = () => {
               appliedChanges={appliedChanges}
               onApplyDay={handleApplyDay}
               onUndoApplyDay={handleUndoApplyDay}
+              onResuggestDay={runOptimisation}
               maxHours={maxHoursOverride}
               maxTasks={maxTasksOverride}
               workKeywords={settings?.work_keywords}
