@@ -59,6 +59,7 @@ serve(async (req) => {
     };
 
     // 1. Discovery
+    console.log(`[${functionName}] Discovering principal...`);
     const principalRes = await fetch(initialBase, {
       method: 'PROPFIND',
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' },
@@ -69,6 +70,7 @@ serve(async (req) => {
     let principalPath = principalXml.match(/current-user-principal[\s\S]*?href[^>]*>([^<]+)/i)?.[1];
     const discoveryUrl = principalPath ? getFullUrl(principalPath, initialBase) : initialBase;
 
+    console.log(`[${functionName}] Discovering home set...`);
     const discoveryRes = await fetch(discoveryUrl, { 
       method: 'PROPFIND', 
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }, 
@@ -83,6 +85,7 @@ serve(async (req) => {
     const homeSetUrl = getFullUrl(homeSetPath, discoveryRes.url);
 
     // 2. Discovery of all calendars
+    console.log(`[${functionName}] Fetching calendar list...`);
     const calendarsRes = await fetch(homeSetUrl, {
       method: 'PROPFIND',
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '1' },
@@ -126,6 +129,8 @@ serve(async (req) => {
       .eq('provider', 'apple');
 
     const enabledCalendars = (enabled || []).filter(c => c.is_enabled);
+    console.log(`[${functionName}] Found ${enabledCalendars.length} enabled Apple calendars.`);
+    
     if (enabledCalendars.length === 0) {
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
@@ -167,79 +172,152 @@ serve(async (req) => {
       const isUtc = dateStr.endsWith('Z');
       const clean = dateStr.replace(/[^0-9]/g, '');
       if (clean.length < 8) return null;
+      
       const year = parseInt(clean.substring(0, 4));
       const month = parseInt(clean.substring(4, 6)) - 1;
       const day = parseInt(clean.substring(6, 8));
       const hour = parseInt(clean.substring(8, 10) || 0);
       const min = parseInt(clean.substring(10, 12) || 0);
       const sec = parseInt(clean.substring(12, 14) || 0);
+      
       if (isUtc) return new Date(Date.UTC(year, month, day, hour, min, sec));
+      
       const targetTz = tzid || fallbackTz;
       try {
+        // Create a date object in UTC first
         const utcDate = new Date(Date.UTC(year, month, day, hour, min, sec));
-        const formatter = new Intl.DateTimeFormat('en-US', { timeZone: targetTz, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false });
+        // Use Intl to find the offset for the target timezone at that specific time
+        const formatter = new Intl.DateTimeFormat('en-US', { 
+          timeZone: targetTz, 
+          year: 'numeric', month: 'numeric', day: 'numeric', 
+          hour: 'numeric', minute: 'numeric', second: 'numeric', 
+          hour12: false 
+        });
         const parts = formatter.formatToParts(utcDate);
         const p = {};
         parts.forEach(part => p[part.type] = part.value);
-        const tzDate = new Date(Date.UTC(parseInt(p.year), parseInt(p.month) - 1, parseInt(p.day), parseInt(p.hour) === 24 ? 0 : parseInt(p.hour), parseInt(p.minute), parseInt(p.second)));
+        
+        const tzDate = new Date(Date.UTC(
+          parseInt(p.year), 
+          parseInt(p.month) - 1, 
+          parseInt(p.day), 
+          parseInt(p.hour) === 24 ? 0 : parseInt(p.hour), 
+          parseInt(p.minute), 
+          parseInt(p.second)
+        ));
+        
         const offset = tzDate.getTime() - utcDate.getTime();
         return new Date(utcDate.getTime() - offset);
-      } catch (e) { return new Date(Date.UTC(year, month, day, hour, min, sec)); }
+      } catch (e) { 
+        return new Date(Date.UTC(year, month, day, hour, min, sec)); 
+      }
     };
 
     for (const cal of enabledCalendars) {
+      console.log(`[${functionName}] Querying calendar: ${cal.calendar_name}`);
       const res = await fetch(getFullUrl(cal.calendar_id, homeSetUrl), {
         method: 'REPORT',
         headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/xml', 'Depth': '1' },
         body: reportXml
       });
-      if (!res.ok) continue;
+      
+      if (!res.ok) {
+        console.error(`[${functionName}] Failed to fetch events for ${cal.calendar_name}: ${res.status}`);
+        continue;
+      }
+      
       const xml = await res.text();
       const eventDataMatches = xml.matchAll(/<[^>]*calendar-data[^>]*>([\s\S]*?)<\/[^>]*calendar-data>/gi);
+      
       for (const match of eventDataMatches) {
-        let icsData = match[1].trim().replace(/</g, '<').replace(/>/g, '>').replace(/&/g, '&').replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+        let icsData = match[1].trim()
+          .replace(/</g, '<')
+          .replace(/>/g, '>')
+          .replace(/&/g, '&')
+          .replace(/&quot;/g, '"')
+          .replace(/&apos;/g, "'");
+          
+        // Handle line folding in ICS
+        icsData = icsData.replace(/\r\n /g, '').replace(/\n /g, '');
+        
         const veventMatches = icsData.matchAll(/BEGIN:VEVENT([\s\S]*?)END:VEVENT/gi);
         for (const veventMatch of veventMatches) {
           const content = veventMatch[1];
+          
           const summaryMatch = content.match(/SUMMARY:(.*)/i);
-          const dtstartMatch = content.match(/DTSTART(?:;VALUE=DATE)?(?:;TZID=([^:]+))?:(.*)/i);
-          const dtendMatch = content.match(/DTEND(?:;VALUE=DATE)?(?:;TZID=([^:]+))?:(.*)/i);
+          // Improved DTSTART regex to handle multiple parameters
+          const dtstartMatch = content.match(/DTSTART[^:]*:(.*)/i);
+          const tzidMatch = content.match(/DTSTART;TZID=([^:;]+)/i);
+          
+          const dtendMatch = content.match(/DTEND[^:]*:(.*)/i);
           const durationMatch = content.match(/DURATION:PT(\d+)([HMS])/i);
           const uidMatch = content.match(/UID:(.*)/i);
+          
           if (!dtstartMatch || !uidMatch) continue;
+          
           const summary = (summaryMatch?.[1] || 'Untitled').trim().replace(/\\,/g, ',').replace(/\\;/g, ';');
-          const start = parseIcsDate(dtstartMatch[2].trim(), dtstartMatch[1], userTimezone);
-          if (!start || start < syncStartTime) continue; // STRICT FILTER: No past events
-          let end = parseIcsDate(dtendMatch?.[2]?.trim(), dtendMatch?.[1], userTimezone);
+          const start = parseIcsDate(dtstartMatch[1].trim(), tzidMatch?.[1], userTimezone);
+          
+          if (!start) {
+            console.warn(`[${functionName}] Could not parse start date for: ${summary}`);
+            continue;
+          }
+          
+          if (start < syncStartTime) continue; // STRICT FILTER: No past events
+          
+          let end = parseIcsDate(dtendMatch?.[1]?.trim(), tzidMatch?.[1], userTimezone);
           if (!end) {
             if (durationMatch) {
               const val = parseInt(durationMatch[1]);
               const unit = durationMatch[2];
               const ms = unit === 'H' ? val * 3600000 : unit === 'M' ? val * 60000 : val * 1000;
               end = new Date(start.getTime() + ms);
-            } else { end = new Date(start.getTime() + 30 * 60000); }
+            } else { 
+              end = new Date(start.getTime() + 30 * 60000); 
+            }
           }
+          
           const uid = uidMatch[1].trim();
           const isExplicitlyMovable = movableKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
           const isExplicitlyLocked = lockedKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
           const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && (fixedKeywords.test(summary) || fixedPatterns.some(p => p.test(summary))));
           const isWork = workKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
+          
           const uniqueId = `${uid}-${start.getTime()}`;
+          
+          console.log(`[${functionName}] Found event: "${summary}" at ${start.toISOString()} (Locked: ${isLocked})`);
+          
           eventMap.set(uniqueId, {
-            user_id: user.id, event_id: uniqueId, title: summary, start_time: start.toISOString(), end_time: end.toISOString(),
-            duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000), is_locked: isLocked, is_work: isWork,
-            provider: 'apple', source_calendar: cal.calendar_name, source_calendar_id: cal.calendar_id, last_synced_at: syncTimestamp
+            user_id: user.id, 
+            event_id: uniqueId, 
+            title: summary, 
+            start_time: start.toISOString(), 
+            end_time: end.toISOString(),
+            duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000), 
+            is_locked: isLocked, 
+            is_work: isWork,
+            provider: 'apple', 
+            source_calendar: cal.calendar_name, 
+            source_calendar_id: cal.calendar_id, 
+            last_synced_at: syncTimestamp
           });
         }
       }
     }
 
     const uniqueEvents = Array.from(eventMap.values());
+    console.log(`[${functionName}] Total unique events to upsert: ${uniqueEvents.length}`);
+    
     if (uniqueEvents.length > 0) {
-      await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
+      const { error: upsertError } = await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
+      if (upsertError) {
+        console.error(`[${functionName}] Upsert Error:`, upsertError);
+        throw upsertError;
+      }
     }
     
     // PURGE ALL OLD EVENTS FROM CACHE
+    console.log(`[${functionName}] Purging old events before ${syncStartTime.toISOString()}`);
     await supabaseAdmin.from('calendar_events_cache')
       .delete()
       .eq('user_id', user.id)
