@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, Bug } from 'lucide-react';
+import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, Bug, ArrowRight, Zap } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { showSuccess, showError } from '@/utils/toast';
 import { format } from 'date-fns';
@@ -15,23 +15,24 @@ const Optimise = () => {
   const [progress, setProgress] = useState(0);
   const [step, setStep] = useState('');
   const [syncReport, setSyncReport] = useState<any>(null);
+  const [optimisationResult, setOptimisationResult] = useState<any>(null);
   const [showDebug, setShowDebug] = useState(false);
 
-  const runOptimisation = async () => {
+  const runSync = async () => {
     setIsOptimising(true);
     setProgress(0);
     setSyncReport(null);
+    setOptimisationResult(null);
     
     try {
       setStep('Authenticating with Google...');
       setProgress(10);
 
-      // Get the provider token from the current session
       const { data: { session } } = await supabase.auth.getSession();
       const providerToken = session?.provider_token;
 
       if (!providerToken) {
-        throw new Error("Google access token not found. Please sign out and sign back in to refresh your permissions.");
+        throw new Error("Google access token not found. Please sign out and sign back in.");
       }
 
       setStep('Syncing Google Calendar...');
@@ -54,22 +55,41 @@ const Optimise = () => {
 
       if (fetchError) throw fetchError;
 
-      const report = {
+      setSyncReport({
         total: events?.length || 0,
         range: {
           start: events?.[0]?.start_time,
           end: events?.[events.length - 1]?.start_time
         },
         samples: events?.slice(0, 5) || [],
-        allEvents: events || [],
         lastSync: new Date().toISOString()
-      };
-
-      setSyncReport(report);
+      });
+      
       setProgress(100);
       showSuccess(`Successfully synced ${data.count} events!`);
     } catch (err: any) {
-      showError(err.message || "An unexpected error occurred during sync.");
+      showError(err.message);
+    } finally {
+      setIsOptimising(false);
+    }
+  };
+
+  const runOptimisation = async () => {
+    setIsOptimising(true);
+    setProgress(0);
+    setStep('Calculating optimal slots...');
+    
+    try {
+      const { data, error } = await supabase.functions.invoke('optimise-schedule');
+      
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+
+      setOptimisationResult(data);
+      setProgress(100);
+      showSuccess(data.message);
+    } catch (err: any) {
+      showError(err.message);
     } finally {
       setIsOptimising(false);
     }
@@ -84,7 +104,7 @@ const Optimise = () => {
               <Sparkles className="text-indigo-600" size={32} />
             </div>
             <h1 className="text-4xl font-bold text-gray-900 mb-2">Schedule Optimiser</h1>
-            <p className="text-lg text-gray-500">Verify your calendar sync accuracy.</p>
+            <p className="text-lg text-gray-500">Align your movable tasks with your work window.</p>
           </div>
           <div className="flex items-center space-x-2 bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
             <Bug size={16} className="text-gray-400" />
@@ -93,18 +113,18 @@ const Optimise = () => {
           </div>
         </div>
 
-        {!isOptimising && !syncReport && (
+        {!isOptimising && !syncReport && !optimisationResult && (
           <Card className="border-none shadow-xl shadow-indigo-100/50 rounded-3xl overflow-hidden">
             <div className="bg-indigo-600 p-8 text-white">
-              <h2 className="text-xl font-bold mb-2">Ready to Sync?</h2>
-              <p className="opacity-90 text-sm">We'll pull the next 14 days of events to verify accuracy.</p>
+              <h2 className="text-xl font-bold mb-2">Step 1: Sync Calendar</h2>
+              <p className="opacity-90 text-sm">We need your latest schedule before we can optimise.</p>
             </div>
             <CardContent className="p-8">
               <Button 
-                onClick={runOptimisation}
+                onClick={runSync}
                 className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl py-8 text-lg font-bold shadow-lg shadow-indigo-200 transition-all hover:scale-[1.01]"
               >
-                Run Sync Verification
+                Sync Google Calendar
               </Button>
             </CardContent>
           </Card>
@@ -119,86 +139,108 @@ const Optimise = () => {
           </Card>
         )}
 
-        {syncReport && (
+        {syncReport && !optimisationResult && (
           <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-2xl font-bold text-gray-900">Sync Verification Report</h2>
-              <Button variant="outline" onClick={runOptimisation} className="rounded-xl">
-                <RefreshCw size={16} className="mr-2" /> Re-run Sync
+            <div className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">Calendar Synced</h2>
+                <p className="text-gray-500 text-sm mt-1">{syncReport.total} events found in the next 14 days.</p>
+              </div>
+              <Button onClick={runOptimisation} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-8 py-6 h-auto font-bold flex gap-2">
+                <Zap size={18} />
+                Run Optimisation
               </Button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Card className="border-none shadow-sm bg-white rounded-2xl p-6">
-                <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Total Events</p>
-                <p className="text-3xl font-black text-indigo-600">{syncReport.total}</p>
-              </Card>
-              <Card className="border-none shadow-sm bg-white rounded-2xl p-6 md:col-span-2">
-                <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Date Range</p>
-                <p className="text-lg font-bold text-gray-700">
-                  {syncReport.range.start ? format(new Date(syncReport.range.start), 'MMM d') : '--'} 
-                  <span className="mx-2 text-gray-300">→</span>
-                  {syncReport.range.end ? format(new Date(syncReport.range.end), 'MMM d') : '--'}
-                </p>
-              </Card>
             </div>
 
             {showDebug && (
               <Card className="border-none shadow-sm bg-slate-900 rounded-3xl overflow-hidden">
                 <CardHeader className="border-b border-slate-800 px-8 py-4">
-                  <CardTitle className="text-sm font-mono text-slate-400">Raw Database Records (First 5)</CardTitle>
+                  <CardTitle className="text-sm font-mono text-slate-400">Sync Debug Info</CardTitle>
                 </CardHeader>
                 <CardContent className="p-6">
                   <pre className="text-[10px] text-emerald-400 font-mono overflow-auto max-h-64">
-                    {JSON.stringify(syncReport.samples, null, 2)}
+                    {JSON.stringify(syncReport, null, 2)}
                   </pre>
                 </CardContent>
               </Card>
             )}
+          </div>
+        )}
 
-            <Card className="border-none shadow-sm bg-white rounded-3xl overflow-hidden">
-              <CardHeader className="border-b border-gray-50 px-8 py-6">
-                <CardTitle className="text-lg font-bold">Sample Event Mapping</CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                <div className="divide-y divide-gray-50">
-                  {syncReport.samples.map((event: any, i: number) => (
-                    <div key={i} className="p-6 flex items-center justify-between hover:bg-gray-50 transition-colors">
-                      <div className="flex items-center gap-4">
-                        <div className="w-10 h-10 bg-gray-50 rounded-xl flex items-center justify-center">
-                          <Calendar className="text-gray-400" size={20} />
+        {optimisationResult && (
+          <div className="space-y-8">
+            <div className="flex items-center justify-between">
+              <h2 className="text-2xl font-bold text-gray-900">Proposed Schedule Changes</h2>
+              <Button variant="outline" onClick={runSync} className="rounded-xl">
+                <RefreshCw size={16} className="mr-2" /> Reset & Re-sync
+              </Button>
+            </div>
+
+            {optimisationResult.changes.length > 0 ? (
+              <div className="space-y-4">
+                {optimisationResult.changes.map((change: any, i: number) => (
+                  <Card key={i} className="border-none shadow-sm bg-white rounded-2xl overflow-hidden group hover:shadow-md transition-all">
+                    <div className="flex flex-col md:flex-row">
+                      <div className="p-6 flex-1">
+                        <div className="flex items-center gap-3 mb-4">
+                          <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
+                            <Calendar className="text-indigo-600" size={20} />
+                          </div>
+                          <h3 className="font-bold text-gray-900 text-lg">{change.title}</h3>
                         </div>
-                        <div>
-                          <h3 className="font-bold text-gray-900">{event.title}</h3>
-                          <div className="flex items-center gap-2 text-xs text-gray-500 mt-1">
-                            <Clock size={12} />
-                            {format(new Date(event.start_time), 'HH:mm')} - {format(new Date(event.end_time), 'HH:mm')}
-                            <span className="mx-1">•</span>
-                            {event.duration_minutes} mins
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
+                          <div className="space-y-1">
+                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Current Time</p>
+                            <p className="text-sm font-medium text-gray-500 line-through">
+                              {format(new Date(change.old_start), 'MMM d, HH:mm')}
+                            </p>
+                          </div>
+                          <div className="space-y-1">
+                            <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">Suggested Time</p>
+                            <p className="text-sm font-bold text-indigo-600 flex items-center gap-2">
+                              {format(new Date(change.new_start), 'MMM d, HH:mm')}
+                              <ArrowRight size={14} />
+                              {format(new Date(change.new_end), 'HH:mm')}
+                            </p>
                           </div>
                         </div>
                       </div>
-                      <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider ${event.is_locked ? 'bg-amber-50 text-amber-600' : 'bg-green-50 text-green-600'}`}>
-                        {event.is_locked ? <Lock size={12} /> : <Unlock size={12} />}
-                        {event.is_locked ? 'Locked' : 'Movable'}
+                      <div className="bg-indigo-50/50 px-6 py-4 md:w-48 flex flex-col justify-center border-t md:border-t-0 md:border-l border-indigo-100/50">
+                        <div className="flex items-center gap-2 text-indigo-600 font-bold text-sm">
+                          <Clock size={14} />
+                          {change.duration} mins
+                        </div>
+                        <p className="text-[10px] text-indigo-400 font-bold uppercase mt-1">Duration</p>
                       </div>
                     </div>
-                  ))}
+                  </Card>
+                ))}
+                
+                <div className="bg-indigo-600 p-8 rounded-[2.5rem] text-white shadow-xl shadow-indigo-100 mt-10">
+                  <div className="flex items-center justify-between mb-6">
+                    <div>
+                      <h3 className="text-2xl font-bold">Ready to apply?</h3>
+                      <p className="opacity-80 text-sm mt-1">This will update {optimisationResult.changes.length} events in your Google Calendar.</p>
+                    </div>
+                    <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm">
+                      <Zap size={28} />
+                    </div>
+                  </div>
+                  <Button className="w-full bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl py-7 text-lg font-black shadow-lg">
+                    Apply Changes to Google Calendar
+                  </Button>
                 </div>
-              </CardContent>
-            </Card>
-
-            <div className="bg-green-50 border border-green-100 p-6 rounded-3xl flex items-start gap-4">
-              <CheckCircle2 className="text-green-600 shrink-0 mt-1" size={24} />
-              <div>
-                <p className="font-bold text-green-900">Verification Passed</p>
-                <ul className="text-sm text-green-700 mt-2 space-y-1 list-disc list-inside">
-                  <li>Duplicates prevented via <code>event_id</code> upsert logic</li>
-                  <li>Locked detection: Recurring events correctly identified</li>
-                  <li>Last sync: {format(new Date(syncReport.lastSync), 'HH:mm:ss')}</li>
-                </ul>
               </div>
-            </div>
+            ) : (
+              <Card className="border-none shadow-sm bg-white rounded-3xl p-12 text-center">
+                <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <CheckCircle2 className="text-gray-300" size={40} />
+                </div>
+                <h3 className="text-xl font-bold text-gray-900 mb-2">No Movable Events</h3>
+                <p className="text-gray-500 max-w-xs mx-auto">All your events are currently locked or recurring. Create a single, non-recurring event in Google Calendar to test the optimiser.</p>
+              </Card>
+            )}
           </div>
         )}
       </div>
