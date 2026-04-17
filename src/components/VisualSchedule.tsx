@@ -11,6 +11,8 @@ interface VisualScheduleProps {
 }
 
 const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: VisualScheduleProps) => {
+  console.log("[VisualSchedule] Rendering with:", { events: events.length, changes: changes.length });
+
   const allVisualEvents = [
     ...events.filter(e => e && e.is_locked).map(e => ({ ...e, type: 'locked' })),
     ...changes.map(c => ({
@@ -30,7 +32,7 @@ const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: Visu
       if (!acc[dayKey]) acc[dayKey] = [];
       acc[dayKey].push(event);
     } catch (e) {
-      console.error("Error parsing date for visual schedule:", event.start_time);
+      console.error("[VisualSchedule] Error parsing date:", event.start_time);
     }
     return acc;
   }, {});
@@ -81,7 +83,7 @@ const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: Visu
           const isDayToday = isToday(parseISO(dayKey));
           return (
             <div key={`col-${dayKey}`} className={cn(
-              "flex flex-col min-h-[800px] transition-colors",
+              "flex flex-col min-h-full transition-colors",
               isDayToday ? "bg-indigo-50/30" : "bg-[#F8F9FC]"
             )}>
               <div className={cn(
@@ -99,7 +101,7 @@ const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: Visu
                 </p>
               </div>
 
-              <div className="p-3 space-y-3 relative flex-1">
+              <div className="p-3 space-y-3 relative flex-1 min-h-[600px]">
                 <div className="absolute inset-0 pointer-events-none">
                   {[...Array(12)].map((_, i) => (
                     <div key={i} className="h-20 border-b border-gray-50/50 w-full" />

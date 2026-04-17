@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { format, parseISO } from 'date-fns';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -47,7 +47,9 @@ const DayByDayPlanner = ({
     const dates = new Set<string>();
     changes.forEach(c => dates.add(format(parseISO(c.new_start), 'yyyy-MM-dd')));
     events.filter(e => e.is_locked).forEach(e => dates.add(format(parseISO(e.start_time), 'yyyy-MM-dd')));
-    return Array.from(dates).sort();
+    const sorted = Array.from(dates).sort();
+    console.log("[DayByDayPlanner] Calculated all dates in plan:", sorted.length);
+    return sorted;
   }, [changes, events]);
 
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -58,20 +60,24 @@ const DayByDayPlanner = ({
   const currentDateStr = allDates[currentIndex];
   const currentDate = currentDateStr ? parseISO(currentDateStr) : new Date();
 
-  const dayChanges = useMemo(() => 
-    changes.filter(c => format(parseISO(c.new_start), 'yyyy-MM-dd') === currentDateStr),
-    [changes, currentDateStr]
-  );
+  const dayChanges = useMemo(() => {
+    const filtered = changes.filter(c => format(parseISO(c.new_start), 'yyyy-MM-dd') === currentDateStr);
+    console.log(`[DayByDayPlanner] Changes for ${currentDateStr}:`, filtered.length);
+    return filtered;
+  }, [changes, currentDateStr]);
 
-  const dayLockedEvents = useMemo(() => 
-    events.filter(e => e.is_locked && format(parseISO(e.start_time), 'yyyy-MM-dd') === currentDateStr),
-    [events, currentDateStr]
-  );
+  const dayLockedEvents = useMemo(() => {
+    const filtered = events.filter(e => e.is_locked && format(parseISO(e.start_time), 'yyyy-MM-dd') === currentDateStr);
+    console.log(`[DayByDayPlanner] Locked events for ${currentDateStr}:`, filtered.length);
+    return filtered;
+  }, [events, currentDateStr]);
 
   const stats = useMemo(() => {
     const totalTasks = dayChanges.length + dayLockedEvents.filter(e => !e.title.toLowerCase().includes('break')).length;
     const totalMinutes = [...dayChanges, ...dayLockedEvents].reduce((acc, e) => acc + (e.duration || e.duration_minutes || 0), 0);
     const totalHours = totalMinutes / 60;
+    
+    console.log(`[DayByDayPlanner] Stats for ${currentDateStr}:`, { totalTasks, totalHours, maxTasks, maxHours });
     
     return {
       tasks: totalTasks,
@@ -80,9 +86,10 @@ const DayByDayPlanner = ({
       isOverHours: totalHours > maxHours,
       isFull: totalTasks >= maxTasks || totalHours >= maxHours
     };
-  }, [dayChanges, dayLockedEvents, maxTasks, maxHours]);
+  }, [dayChanges, dayLockedEvents, maxTasks, maxHours, currentDateStr]);
 
   const handleSyncDay = async () => {
+    console.log(`[DayByDayPlanner] Syncing day: ${currentDateStr}`);
     setIsSyncing(true);
     try {
       await onApplyDay(dayChanges);
@@ -100,6 +107,7 @@ const DayByDayPlanner = ({
   };
 
   const handleSyncAll = async () => {
+    console.log("[DayByDayPlanner] Syncing all remaining changes...");
     if (!confirm("This will sync all remaining proposed changes to your calendar. Continue?")) return;
     setIsSyncing(true);
     try {
@@ -257,7 +265,7 @@ const DayByDayPlanner = ({
             <CardHeader>
               <CardTitle className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Proposed for Today</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-3 max-h-[400px] overflow-y-auto pr-2 scrollbar-thin">
               {dayChanges.length > 0 ? (
                 dayChanges.map((change, i) => (
                   <div key={i} className={cn(
@@ -359,8 +367,8 @@ const DayByDayPlanner = ({
                 </Badge>
               </div>
             </CardHeader>
-            <CardContent className="p-0 flex-1">
-              <div className="max-h-[700px] overflow-y-auto scrollbar-hide">
+            <CardContent className="p-0 flex-1 overflow-hidden">
+              <div className="h-[700px] overflow-y-auto scrollbar-hide">
                 <VisualSchedule 
                   events={events.filter(e => format(parseISO(e.start_time), 'yyyy-MM-dd') === currentDateStr)} 
                   changes={dayChanges} 
