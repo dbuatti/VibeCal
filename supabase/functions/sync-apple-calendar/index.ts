@@ -135,14 +135,16 @@ serve(async (req) => {
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
 
-    // 4. Fetch Events
+    // 4. Fetch Events - EXTENDED RANGE FOR 2026
     const syncStartTime = new Date();
-    syncStartTime.setDate(syncStartTime.getDate() - 7);
+    syncStartTime.setDate(syncStartTime.getDate() - 30); // Look back 30 days
     const syncEndTime = new Date();
-    syncEndTime.setDate(syncEndTime.getDate() + 365);
+    syncEndTime.setDate(syncEndTime.getDate() + 730); // Look ahead 2 years (730 days)
     
     const startStr = syncStartTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endStr = syncEndTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+
+    console.log(`[${functionName}] Sync Range: ${startStr} to ${endStr}`);
 
     const reportXml = `
       <c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
@@ -183,9 +185,19 @@ serve(async (req) => {
       }
 
       const xml = await res.text();
+      
+      // DEEP INSPECTION: Log a snippet of the XML if no events found yet
+      if (xml.length < 500) {
+        console.log(`[${functionName}] Raw XML Response (Short):`, xml);
+      } else {
+        console.log(`[${functionName}] XML Response received. Length: ${xml.length}`);
+      }
+
       const eventDataMatches = xml.matchAll(/<c:calendar-data>([\s\S]*?)<\/c:calendar-data>/gi);
+      let matchCount = 0;
       
       for (const match of eventDataMatches) {
+        matchCount++;
         const icsData = match[1].replace(/</g, '<').replace(/>/g, '>').replace(/&/g, '&');
         
         try {
@@ -225,6 +237,7 @@ serve(async (req) => {
           console.error(`[${functionName}] ICAL Parse Error:`, parseErr.message);
         }
       }
+      console.log(`[${functionName}] Found ${matchCount} calendar-data blocks in "${cal.calendar_name}"`);
     }
 
     const uniqueEvents = Array.from(eventMap.values());
