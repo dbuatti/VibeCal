@@ -19,15 +19,15 @@ import {
   SortDesc,
   Eye,
   EyeOff,
-  Trash2,
-  CheckSquare,
-  Square
+  Clock,
+  Layers,
+  Zap,
+  MoreHorizontal
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { Card } from '@/components/ui/card';
 import { 
   DropdownMenu, 
   DropdownMenuContent, 
@@ -50,7 +50,6 @@ const Vet = () => {
   const [events, setEvents] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   
-  // Advanced Filtering & Sorting State
   const [showLocked, setShowLocked] = useState(true);
   const [showUnlocked, setShowUnlocked] = useState(true);
   const [sortBy, setSortBy] = useState<SortField>('date');
@@ -167,62 +166,92 @@ const Vet = () => {
       });
   }, [events, searchQuery, showLocked, showUnlocked, sortBy, sortOrder, selectedProvider]);
 
+  const stats = useMemo(() => {
+    const total = events.length;
+    const locked = events.filter(e => e.is_locked).length;
+    const movable = total - locked;
+    return { total, locked, movable };
+  }, [events]);
+
   const providers = Array.from(new Set(events.map(e => e.provider)));
 
   return (
     <Layout>
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-5xl mx-auto">
+        {/* Header Section */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-6">
-          <div>
+          <div className="space-y-1">
             <button 
               onClick={() => navigate('/plan')}
-              className="flex items-center gap-2 text-gray-400 hover:text-indigo-600 font-black text-[10px] uppercase tracking-widest mb-4 transition-colors"
+              className="group flex items-center gap-2 text-gray-400 hover:text-indigo-600 font-black text-[10px] uppercase tracking-widest mb-4 transition-all"
             >
-              <ChevronLeft size={16} /> Back to Plan
+              <div className="w-6 h-6 rounded-full bg-gray-50 flex items-center justify-center group-hover:bg-indigo-50 transition-colors">
+                <ChevronLeft size={14} />
+              </div>
+              Back to Plan
             </button>
-            <h1 className="text-4xl font-black text-gray-900 tracking-tight">Vet Tasks</h1>
-            <p className="text-gray-500 font-medium mt-1">Decide which events are fixed and which can be moved.</p>
+            <h1 className="text-4xl font-black text-gray-900 tracking-tight">Vet Your Tasks</h1>
+            <p className="text-gray-500 font-medium">Decide which events are fixed and which can be moved by the AI.</p>
           </div>
           
-          <div className="flex gap-3">
+          <div className="flex gap-3 w-full md:w-auto">
             <Button 
               variant="outline" 
               onClick={runAIClassification} 
               disabled={isProcessing}
-              className="rounded-2xl h-14 px-8 font-black text-xs uppercase tracking-widest border-indigo-100 text-indigo-600 hover:bg-indigo-50 shadow-sm"
+              className="flex-1 md:flex-none rounded-2xl h-14 px-8 font-black text-xs uppercase tracking-widest border-indigo-100 text-indigo-600 hover:bg-indigo-50 shadow-sm transition-all hover:scale-[1.02] active:scale-[0.98]"
             >
               {isProcessing ? <RefreshCw className="animate-spin mr-2" size={18} /> : <BrainCircuit className="mr-2" size={18} />}
               AI Auto-Vet
             </Button>
             <Button 
               onClick={() => navigate('/plan')}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl h-14 px-10 font-black text-xs uppercase tracking-widest shadow-xl shadow-indigo-100"
+              className="flex-1 md:flex-none bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl h-14 px-10 font-black text-xs uppercase tracking-widest shadow-xl shadow-indigo-100 transition-all hover:scale-[1.02] active:scale-[0.98]"
             >
-              <CheckCircle2 className="mr-2" size={18} /> Done Vetting
+              <CheckCircle2 className="mr-2" size={18} /> Done
             </Button>
           </div>
         </div>
 
+        {/* Stats Pulse Bar */}
+        <div className="grid grid-cols-3 gap-4 mb-10">
+          {[
+            { label: 'Total Tasks', value: stats.total, icon: Layers, color: 'bg-gray-100 text-gray-600' },
+            { label: 'Locked', value: stats.locked, icon: Lock, color: 'bg-red-50 text-red-600' },
+            { label: 'Movable', value: stats.movable, icon: Unlock, color: 'bg-green-50 text-green-600' },
+          ].map((stat, i) => (
+            <div key={i} className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm flex items-center gap-4">
+              <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center", stat.color)}>
+                <stat.icon size={20} />
+              </div>
+              <div>
+                <div className="text-2xl font-black text-gray-900">{stat.value}</div>
+                <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{stat.label}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Filter & Search Bar */}
         <div className="bg-white rounded-[2.5rem] border border-gray-100 shadow-sm overflow-hidden mb-8">
-          <div className="p-8 border-b border-gray-50 flex flex-col lg:flex-row gap-6 justify-between items-center">
+          <div className="p-6 border-b border-gray-50 flex flex-col lg:flex-row gap-4 justify-between items-center">
             <div className="relative w-full lg:w-96">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
               <Input 
                 placeholder="Search tasks..." 
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-12 h-12 rounded-2xl border-gray-100 bg-gray-50/50 font-bold text-sm focus:ring-indigo-500"
+                className="pl-12 h-12 rounded-2xl border-gray-100 bg-gray-50/50 font-bold text-sm focus:ring-indigo-500 transition-all"
               />
             </div>
             
             <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-center lg:justify-end">
-              {/* Visibility Toggles */}
               <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-100">
                 <button 
                   onClick={() => setShowLocked(!showLocked)}
                   className={cn(
-                    "p-2 rounded-lg transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest",
-                    showLocked ? "bg-white text-red-500 shadow-sm" : "text-gray-400"
+                    "px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest",
+                    showLocked ? "bg-white text-red-500 shadow-sm" : "text-gray-400 hover:text-gray-600"
                   )}
                 >
                   {showLocked ? <Eye size={14} /> : <EyeOff size={14} />} Locked
@@ -230,18 +259,17 @@ const Vet = () => {
                 <button 
                   onClick={() => setShowUnlocked(!showUnlocked)}
                   className={cn(
-                    "p-2 rounded-lg transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest",
-                    showUnlocked ? "bg-white text-green-500 shadow-sm" : "text-gray-400"
+                    "px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest",
+                    showUnlocked ? "bg-white text-green-500 shadow-sm" : "text-gray-400 hover:text-gray-600"
                   )}
                 >
                   {showUnlocked ? <Eye size={14} /> : <EyeOff size={14} />} Movable
                 </button>
               </div>
 
-              {/* Sort & Filter Dropdown */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="rounded-xl h-10 px-4 font-black text-[10px] uppercase tracking-widest border-gray-100">
+                  <Button variant="outline" className="rounded-xl h-10 px-4 font-black text-[10px] uppercase tracking-widest border-gray-100 hover:bg-gray-50">
                     <Filter size={14} className="mr-2" /> Sort & Filter
                   </Button>
                 </DropdownMenuTrigger>
@@ -286,11 +314,10 @@ const Vet = () => {
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              {/* Bulk Actions */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="rounded-xl h-10 px-4 font-black text-[10px] uppercase tracking-widest border-gray-100">
-                    Bulk Actions
+                  <Button variant="outline" className="rounded-xl h-10 px-4 font-black text-[10px] uppercase tracking-widest border-gray-100 hover:bg-gray-50">
+                    <Zap size={14} className="mr-2" /> Bulk
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent className="w-48 rounded-2xl p-2" align="end">
@@ -305,6 +332,7 @@ const Vet = () => {
             </div>
           </div>
 
+          {/* Task List */}
           <div className="divide-y divide-gray-50">
             {loading ? (
               <div className="p-20 text-center">
@@ -312,48 +340,68 @@ const Vet = () => {
                 <p className="text-gray-400 font-bold">Loading your schedule...</p>
               </div>
             ) : filteredEvents.length > 0 ? (
-              filteredEvents.map((event) => (
-                <div key={event.event_id} className={cn(
-                  "p-6 flex items-center justify-between transition-all group hover:bg-gray-50/50",
-                  event.is_locked ? "bg-red-50/5" : "bg-indigo-50/10"
-                )}>
-                  <div className="flex items-center gap-6">
-                    <div className={cn(
-                      "w-14 h-14 rounded-2xl flex items-center justify-center transition-all",
-                      event.is_locked ? "bg-red-50 text-red-400" : "bg-white text-indigo-600 shadow-md"
-                    )}>
-                      {event.is_locked ? <Lock size={24} /> : <Unlock size={24} />}
-                    </div>
-                    <div>
-                      <h3 className="font-black text-lg text-gray-900 tracking-tight">{event.title}</h3>
-                      <div className="flex items-center gap-3 mt-1">
-                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                          {format(parseISO(event.start_time), 'EEEE, MMM do')} • {format(parseISO(event.start_time), 'HH:mm')}
-                        </p>
-                        <Badge variant="outline" className="text-[8px] font-black border-gray-100 text-gray-400 px-2 py-0 h-4 uppercase tracking-tighter">
-                          {event.provider}
-                        </Badge>
+              <div className="grid grid-cols-1 gap-0">
+                {filteredEvents.map((event) => (
+                  <div key={event.event_id} className={cn(
+                    "p-6 flex items-center justify-between transition-all group hover:bg-gray-50/80",
+                    event.is_locked ? "bg-white" : "bg-indigo-50/5"
+                  )}>
+                    <div className="flex items-center gap-6 flex-1 min-w-0">
+                      <div className={cn(
+                        "w-14 h-14 rounded-2xl flex items-center justify-center shrink-0 transition-all duration-500 group-hover:scale-110",
+                        event.is_locked ? "bg-red-50 text-red-400" : "bg-indigo-50 text-indigo-600"
+                      )}>
+                        {event.is_locked ? <Lock size={24} /> : <Unlock size={24} />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-3 mb-1">
+                          <h3 className="font-black text-lg text-gray-900 tracking-tight truncate">{event.title}</h3>
+                          <Badge variant="outline" className="text-[8px] font-black border-gray-100 text-gray-400 px-2 py-0 h-4 uppercase tracking-tighter shrink-0">
+                            {event.provider}
+                          </Badge>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                          <div className="flex items-center gap-1.5 text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                            <Calendar size={12} className="text-indigo-400" />
+                            {format(parseISO(event.start_time), 'EEEE, MMM do')}
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                            <Clock size={12} className="text-indigo-400" />
+                            {format(parseISO(event.start_time), 'HH:mm')}
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                            <Zap size={12} className="text-indigo-400" />
+                            {event.duration_minutes}m
+                          </div>
+                        </div>
                       </div>
                     </div>
+                    
+                    <div className="flex items-center gap-6 ml-4">
+                      <div className="hidden sm:flex flex-col items-end">
+                        <span className={cn(
+                          "text-[10px] font-black uppercase tracking-widest",
+                          event.is_locked ? "text-red-400" : "text-indigo-600"
+                        )}>
+                          {event.is_locked ? 'Fixed' : 'Movable'}
+                        </span>
+                        <span className="text-[8px] font-bold text-gray-300 uppercase tracking-tighter">Status</span>
+                      </div>
+                      <Switch 
+                        checked={!event.is_locked} 
+                        onCheckedChange={() => toggleLock(event.event_id, event.is_locked)} 
+                        className="data-[state=checked]:bg-indigo-600 scale-125" 
+                      />
+                    </div>
                   </div>
-                  <div className="flex items-center gap-4">
-                    <span className={cn(
-                      "text-[10px] font-black uppercase tracking-widest",
-                      event.is_locked ? "text-red-400" : "text-indigo-600"
-                    )}>
-                      {event.is_locked ? 'Locked' : 'Movable'}
-                    </span>
-                    <Switch 
-                      checked={!event.is_locked} 
-                      onCheckedChange={() => toggleLock(event.event_id, event.is_locked)} 
-                      className="data-[state=checked]:bg-indigo-600 scale-125" 
-                    />
-                  </div>
-                </div>
-              ))
+                ))}
+              </div>
             ) : (
               <div className="p-20 text-center">
-                <p className="text-gray-400 font-bold">No tasks found matching your filters.</p>
+                <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <Search className="text-gray-300" size={32} />
+                </div>
+                <p className="text-gray-400 font-bold text-lg">No tasks found matching your filters.</p>
                 <Button variant="link" onClick={() => {
                   setSearchQuery('');
                   setShowLocked(true);
