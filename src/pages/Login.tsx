@@ -27,7 +27,6 @@ const Login = () => {
             queryParams={{
               access_type: 'offline',
               prompt: 'consent',
-              hd: 'domain.com', // Optional: restrict to a domain
             }}
             onlyThirdPartyProviders={true}
             appearance={{
@@ -39,8 +38,8 @@ const Login = () => {
                     brandAccent: '#4338ca',
                   },
                   radii: {
-                    buttonRadius: '12px',
-                    inputRadius: '12px',
+                    borderRadiusButton: '12px',
+                    inputBorderRadius: '12px',
                   }
                 }
               }
