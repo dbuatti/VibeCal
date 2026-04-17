@@ -57,7 +57,6 @@ serve(async (req) => {
       .like('calendar_id', '%@import.calendar.google.com%');
 
     if (listData.items) {
-      // STRICT FILTER: Ignore anything that is an import or contains 'icloud'
       const filteredItems = listData.items.filter(cal => 
         !cal.id.includes('@import.calendar.google.com') && 
         !cal.id.toLowerCase().includes('icloud')
@@ -74,7 +73,7 @@ serve(async (req) => {
       }))
       
       if (discovered.length > 0) {
-        await supabaseAdmin.from('user_calendars').upsert(discovered, { onConflict: 'user_id, calendar_id' });
+        await supabaseAdmin.from('user_calendars').upsert(discovered, { onConflict: 'user_id, event_id' });
       }
     }
 
@@ -98,17 +97,16 @@ serve(async (req) => {
     const end = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
     const eventMap = new Map();
 
-    // Robust heuristic for "Fixed" events
-    const fixedKeywords = /appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|gig|work session|check in|grocery|lecture/i;
+    // Added 'choir' to fixed keywords
+    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|gig|work session|check in|grocery|lecture/i;
     const fixedPatterns = [
-      /\$\d+/, // Price like $50
-      /\d+\s*min/i, // Duration like 45 minutes
-      /between|with/i, // "between X and Y" or "with Z"
-      /[\u{1F300}-\u{1F9FF}]/u // Any emoji often indicates a specific manual entry
+      /\$\d+/, 
+      /\d+\s*min/i, 
+      /between|with/i, 
+      /[\u{1F300}-\u{1F9FF}]/u 
     ];
 
     for (const cal of enabled) {
-      // Double check we aren't fetching an import that snuck into the DB
       if (cal.calendar_id.includes('@import.calendar.google.com')) continue;
 
       const encodedId = encodeURIComponent(cal.calendar_id);
@@ -124,7 +122,6 @@ serve(async (req) => {
           const start = new Date(event.start.dateTime || event.start.date)
           const end = new Date(event.end.dateTime || event.end.date)
           
-          // Determine if locked based on multiple signals
           const isLocked = !!event.recurringEventId || 
                            (event.attendees?.length > 1) ||
                            fixedKeywords.test(title) ||

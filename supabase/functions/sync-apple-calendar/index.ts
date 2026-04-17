@@ -42,8 +42,23 @@ serve(async (req) => {
       return `${urlObj.origin}${path.startsWith('/') ? '' : '/'}${path}`;
     };
 
-    // 1. Discovery
-    const discoveryRes = await fetch(initialBase, { 
+    // 1. Discovery - Step A: Get Principal
+    console.log("[sync-apple-calendar] Discovering principal...");
+    const principalRes = await fetch(initialBase, {
+      method: 'PROPFIND',
+      headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' },
+      body: `<?xml version="1.0" encoding="utf-8" ?><d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal/></d:prop></d:propfind>`
+    });
+    
+    const principalXml = await principalRes.text();
+    let principalPath = principalXml.match(/current-user-principal[\s\S]*?href[^>]*>([^<]+)/i)?.[1];
+    
+    // If principal discovery fails, try the home-set directly on the root (fallback)
+    const discoveryUrl = principalPath ? getFullUrl(principalPath, initialBase) : initialBase;
+
+    // 1. Discovery - Step B: Get Home Set
+    console.log("[sync-apple-calendar] Discovering home set from:", discoveryUrl);
+    const discoveryRes = await fetch(discoveryUrl, { 
       method: 'PROPFIND', 
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }, 
       body: `<?xml version="1.0" encoding="utf-8" ?>
@@ -53,8 +68,14 @@ serve(async (req) => {
     });
     const discoveryXml = await discoveryRes.text();
     let homeSetPath = discoveryXml.match(/calendar-home-set[\s\S]*?href[^>]*>([^<]+)/i)?.[1];
-    if (!homeSetPath) throw new Error("Could not find Calendar Home Set.");
+    
+    if (!homeSetPath) {
+      console.error("[sync-apple-calendar] XML Response:", discoveryXml);
+      throw new Error("Could not find Calendar Home Set. Please verify your App-Specific Password.");
+    }
+    
     const homeSetUrl = getFullUrl(homeSetPath, discoveryRes.url);
+    console.log("[sync-apple-calendar] Home set found:", homeSetUrl);
 
     // 2. Get Enabled Apple Calendars
     const { data: enabled } = await supabaseAdmin
@@ -68,6 +89,7 @@ serve(async (req) => {
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
 
     if (!enabled || enabled.length === 0) {
+      console.log("[sync-apple-calendar] No enabled Apple calendars found in DB.");
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
 
@@ -94,11 +116,13 @@ serve(async (req) => {
       </c:calendar-query>
     `;
 
-    const fixedKeywords = /appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|ceremony|work session|gig|rehearsal/i;
+    // Added 'choir' to fixed keywords
+    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|ceremony|work session|gig|rehearsal/i;
     const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i, /[\u{1F300}-\u{1F9FF}]/u];
 
     const eventMap = new Map();
     for (const cal of enabled) {
+      console.log(`[sync-apple-calendar] Fetching events for: ${cal.calendar_name}`);
       const res = await fetch(getFullUrl(cal.calendar_id, homeSetUrl), {
         method: 'REPORT',
         headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/xml', 'Depth': '1' },
@@ -142,6 +166,7 @@ serve(async (req) => {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
     }
 
+    console.log(`[sync-apple-calendar] Sync complete. Found ${uniqueEvents.length} events.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders });
   } catch (error) {
     console.error("[sync-apple-calendar] Error:", error.message);
