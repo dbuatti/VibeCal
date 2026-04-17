@@ -640,6 +640,7 @@ const Plan = () => {
               onUndoApplyDay={handleUndoApplyDay}
               maxHours={maxHoursOverride}
               maxTasks={maxTasksOverride}
+              workKeywords={settings?.work_keywords}
             />
           )}
         </>

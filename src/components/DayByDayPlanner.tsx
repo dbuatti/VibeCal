@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { format, parseISO, isBefore, isAfter, startOfDay, endOfDay } from 'date-fns';
+import { format, parseISO, isBefore, isAfter } from 'date-fns';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -35,6 +35,7 @@ interface DayByDayPlannerProps {
   onUndoApplyDay: (dateChanges: any[]) => Promise<void>;
   maxHours: number;
   maxTasks: number;
+  workKeywords?: string[];
 }
 
 const DayByDayPlanner = ({ 
@@ -44,7 +45,8 @@ const DayByDayPlanner = ({
   onApplyDay, 
   onUndoApplyDay,
   maxHours, 
-  maxTasks
+  maxTasks,
+  workKeywords = ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition']
 }: DayByDayPlannerProps) => {
   const allDates = useMemo(() => {
     const dates = new Set<string>();
@@ -72,10 +74,27 @@ const DayByDayPlanner = ({
   }, [events, currentDateStr]);
 
   const isDayVetted = useMemo(() => {
-    // A day is vetted if all proposed changes for that day have been applied
     if (dayChanges.length === 0) return true;
     return dayChanges.every(c => appliedChanges.includes(c.event_id));
   }, [dayChanges, appliedChanges]);
+
+  // Helper to identify routine/non-task events
+  const isRoutineEvent = (title: string) => {
+    const t = title.toLowerCase();
+    return t.includes('lunch') || 
+           t.includes('dinner') || 
+           t.includes('breakfast') || 
+           t.includes('affirmation') || 
+           t.includes('break') ||
+           t.includes('coffee');
+  };
+
+  // Helper to identify work events
+  const isWorkEvent = (event: any) => {
+    if (event.is_work === true) return true;
+    const title = (event.title || '').toLowerCase();
+    return workKeywords.some(kw => title.includes(kw.toLowerCase()));
+  };
 
   useEffect(() => {
     if (!hasAutoDefaulted && allDates.length > 0) {
@@ -95,9 +114,9 @@ const DayByDayPlanner = ({
     const activeChanges = dayChanges.filter(c => !c.is_surplus);
     const surplusCount = dayChanges.filter(c => c.is_surplus).length;
     
-    // Calculate non-overlapping work hours
+    // 1. Calculate Work Hours (using non-overlapping logic)
     const workEvents = [...activeChanges, ...dayLockedEvents]
-      .filter(e => e.is_work || e.title.toLowerCase().includes('work') || e.title.toLowerCase().includes('session'))
+      .filter(e => isWorkEvent(e))
       .sort((a, b) => parseISO(a.start_time || a.new_start).getTime() - parseISO(b.start_time || b.new_start).getTime());
 
     let totalWorkMinutes = 0;
@@ -114,7 +133,11 @@ const DayByDayPlanner = ({
       }
     });
 
-    const totalTasks = activeChanges.length + dayLockedEvents.filter(e => !e.title.toLowerCase().includes('break') && !e.title.toLowerCase().includes('lunch') && !e.title.toLowerCase().includes('dinner')).length;
+    // 2. Calculate Task Count (excluding routine events)
+    const taskEvents = [...activeChanges, ...dayLockedEvents]
+      .filter(e => !isRoutineEvent(e.title || ''));
+
+    const totalTasks = taskEvents.length;
     const totalHours = totalWorkMinutes / 60;
     
     return {
@@ -125,7 +148,7 @@ const DayByDayPlanner = ({
       isOverHours: totalHours > maxHours,
       isFull: totalTasks >= maxTasks || totalHours >= maxHours
     };
-  }, [dayChanges, dayLockedEvents, maxTasks, maxHours, currentDateStr]);
+  }, [dayChanges, dayLockedEvents, maxTasks, maxHours, currentDateStr, workKeywords]);
 
   const handleSyncDay = async () => {
     setIsSyncing(true);
