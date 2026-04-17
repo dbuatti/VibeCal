@@ -8,9 +8,10 @@ interface VisualScheduleProps {
   events: any[];
   changes: any[];
   appliedChanges: string[];
+  isVetted?: boolean;
 }
 
-const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: VisualScheduleProps) => {
+const VisualSchedule = ({ events = [], changes = [], appliedChanges = [], isVetted = false }: VisualScheduleProps) => {
   const allVisualEvents = [
     ...events.filter(e => e && e.is_locked).map(e => ({ ...e, type: 'locked' })),
     ...changes.map(c => ({
@@ -75,7 +76,10 @@ const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: Visu
   };
 
   return (
-    <div className="w-full overflow-x-auto pb-8 scrollbar-hide">
+    <div className={cn(
+      "w-full overflow-x-auto pb-8 scrollbar-hide transition-all duration-500",
+      isVetted && "grayscale-[0.5] opacity-80"
+    )}>
       <div className="inline-grid grid-flow-col auto-cols-[320px] gap-4">
         {sortedDayKeys.map(dayKey => {
           const isDayToday = isToday(parseISO(dayKey));
@@ -96,7 +100,7 @@ const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: Visu
                         className={cn(
                           "p-3 rounded-2xl border transition-all duration-300 group relative",
                           styles,
-                          isApplied && "opacity-40 grayscale",
+                          (isApplied || isVetted) && "opacity-40 grayscale",
                           event.is_surplus && "scale-[0.98] hover:scale-100"
                         )}
                       >
@@ -133,7 +137,7 @@ const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: Visu
                           </div>
                         </div>
 
-                        {event.type === 'proposed' && !isApplied && !event.is_surplus && (
+                        {event.type === 'proposed' && !isApplied && !isVetted && !event.is_surplus && (
                           <div className="absolute -right-1 -top-1">
                             <div className="w-2 h-2 bg-indigo-500 rounded-full border-2 border-white shadow-sm animate-pulse" />
                           </div>

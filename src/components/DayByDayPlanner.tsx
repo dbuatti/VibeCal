@@ -55,6 +55,7 @@ const DayByDayPlanner = ({
   const [isSyncing, setIsSyncing] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
   const [showXP, setShowXP] = useState(false);
+  const [hasAutoDefaulted, setHasAutoDefaulted] = useState(false);
   
   const currentDateStr = allDates[currentIndex];
   const currentDate = currentDateStr ? parseISO(currentDateStr) : new Date();
@@ -66,6 +67,25 @@ const DayByDayPlanner = ({
   const dayLockedEvents = useMemo(() => {
     return events.filter(e => e.is_locked && format(parseISO(e.start_time), 'yyyy-MM-dd') === currentDateStr);
   }, [events, currentDateStr]);
+
+  const isDayVetted = useMemo(() => {
+    return dayChanges.length === 0 || dayChanges.every(c => appliedChanges.includes(c.event_id));
+  }, [dayChanges, appliedChanges]);
+
+  // Auto-default to the first unvetted day
+  useEffect(() => {
+    if (!hasAutoDefaulted && allDates.length > 0) {
+      const firstUnvettedIndex = allDates.findIndex(dateStr => {
+        const dayChangesForDate = changes.filter(c => format(parseISO(c.new_start), 'yyyy-MM-dd') === dateStr);
+        return dayChangesForDate.length > 0 && !dayChangesForDate.every(c => appliedChanges.includes(c.event_id));
+      });
+
+      if (firstUnvettedIndex !== -1) {
+        setCurrentIndex(firstUnvettedIndex);
+      }
+      setHasAutoDefaulted(true);
+    }
+  }, [allDates, changes, appliedChanges, hasAutoDefaulted]);
 
   const stats = useMemo(() => {
     const activeChanges = dayChanges.filter(c => !c.is_surplus);
@@ -114,7 +134,6 @@ const DayByDayPlanner = ({
     }
   };
 
-  const isDayVetted = dayChanges.length === 0 || dayChanges.every(c => appliedChanges.includes(c.event_id));
   const sessionProgress = ((currentIndex + 1) / allDates.length) * 100;
 
   if (isFinished) {
@@ -156,7 +175,10 @@ const DayByDayPlanner = ({
         </div>
       </div>
 
-      <div className="flex items-center justify-between bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm">
+      <div className={cn(
+        "flex items-center justify-between p-8 rounded-[2.5rem] border transition-all duration-500 shadow-sm",
+        isDayVetted ? "bg-green-50 border-green-100" : "bg-white border-gray-100"
+      )}>
         <Button 
           variant="ghost" 
           size="icon" 
@@ -179,10 +201,18 @@ const DayByDayPlanner = ({
             {format(currentDate, 'EEEE, MMMM do')}
           </h2>
           <div className="flex items-center justify-center gap-2 mt-1">
-            <CalendarIcon size={14} className="text-indigo-400" />
-            <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">
-              Vetting Phase
-            </p>
+            {isDayVetted ? (
+              <Badge className="bg-green-500 text-white border-none px-3 py-0.5 rounded-full font-black text-[10px] uppercase tracking-widest">
+                Vetted
+              </Badge>
+            ) : (
+              <>
+                <CalendarIcon size={14} className="text-indigo-400" />
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">
+                  Vetting Phase
+                </p>
+              </>
+            )}
           </div>
         </div>
 
@@ -197,9 +227,15 @@ const DayByDayPlanner = ({
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className={cn(
+        "grid grid-cols-1 lg:grid-cols-3 gap-8 transition-all duration-500",
+        isDayVetted && "opacity-90"
+      )}>
         <div className="space-y-6">
-          <Card className="border-none shadow-sm rounded-[2rem] bg-white overflow-hidden">
+          <Card className={cn(
+            "border-none shadow-sm rounded-[2rem] overflow-hidden transition-colors duration-500",
+            isDayVetted ? "bg-green-50/50" : "bg-white"
+          )}>
             <CardHeader className="pb-2">
               <CardTitle className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Day Capacity</CardTitle>
             </CardHeader>
@@ -248,7 +284,16 @@ const DayByDayPlanner = ({
                 </div>
               )}
 
-              {stats.isFull ? (
+              {isDayVetted ? (
+                <div className="p-5 bg-green-500 rounded-[1.5rem] border border-green-600 flex gap-4 shadow-lg shadow-green-100">
+                  <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center shrink-0">
+                    <CheckCircle2 className="text-white" size={20} />
+                  </div>
+                  <p className="text-xs text-white font-black uppercase tracking-widest leading-relaxed flex items-center">
+                    Day Fully Vetted
+                  </p>
+                </div>
+              ) : stats.isFull ? (
                 <div className="p-5 bg-amber-50 rounded-[1.5rem] border border-amber-100 flex gap-4">
                   <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center shrink-0">
                     <AlertCircle className="text-amber-600" size={20} />
@@ -270,7 +315,10 @@ const DayByDayPlanner = ({
             </CardContent>
           </Card>
 
-          <Card className="border-none shadow-sm rounded-[2rem] bg-white">
+          <Card className={cn(
+            "border-none shadow-sm rounded-[2rem] overflow-hidden transition-colors duration-500",
+            isDayVetted ? "bg-green-50/50" : "bg-white"
+          )}>
             <CardHeader>
               <CardTitle className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Proposed for Today</CardTitle>
             </CardHeader>
@@ -381,6 +429,7 @@ const DayByDayPlanner = ({
                 events={events.filter(e => format(parseISO(e.start_time), 'yyyy-MM-dd') === currentDateStr)} 
                 changes={dayChanges} 
                 appliedChanges={appliedChanges} 
+                isVetted={isDayVetted}
               />
             </div>
           </div>
