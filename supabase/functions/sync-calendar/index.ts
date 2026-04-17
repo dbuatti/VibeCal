@@ -13,7 +13,7 @@ serve(async (req) => {
   }
 
   try {
-    console.log("[sync-calendar] HEARTBEAT - Function Invoked");
+    console.log("[sync-calendar] START - Google Sync Process");
     
     const authHeader = req.headers.get('Authorization')
     const { googleAccessToken } = await req.json();
@@ -46,7 +46,7 @@ serve(async (req) => {
     const lockedKeywords = settings?.locked_keywords || [];
 
     // 1. Fetch Calendar List
-    console.log("[sync-calendar] Fetching calendar list...");
+    console.log("[sync-calendar] Fetching Google calendar list...");
     const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
       headers: { Authorization: `Bearer ${googleAccessToken}` }
     })
@@ -59,6 +59,7 @@ serve(async (req) => {
 
     const listData = await listRes.json()
     if (listData.items) {
+      console.log(`[sync-calendar] Discovered ${listData.items.length} Google calendars.`);
       const filteredItems = listData.items.filter(cal => 
         !cal.id.includes('@import.calendar.google.com') && 
         !cal.id.toLowerCase().includes('icloud')
@@ -80,60 +81,40 @@ serve(async (req) => {
     // 2. Get Enabled Calendars
     const { data: enabled } = await supabaseAdmin
       .from('user_calendars')
-      .select('calendar_id, calendar_name')
+      .select('calendar_id, calendar_name, is_enabled')
       .eq('user_id', user.id)
-      .eq('is_enabled', true)
       .eq('provider', 'google');
     
-    if (!enabled || enabled.length === 0) {
-      console.log("[sync-calendar] No enabled Google calendars found.");
+    const enabledCalendars = (enabled || []).filter(c => c.is_enabled);
+    console.log(`[sync-calendar] ${enabledCalendars.length} Google calendars are enabled.`);
+
+    if (enabledCalendars.length === 0) {
+      console.log("[sync-calendar] No enabled Google calendars found. Please check your settings.");
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
 
-    // 3. Fetch Events
+    // Clear existing cache for this provider
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google');
 
+    // 3. Fetch Events
     const now = new Date()
     const end = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
     const eventMap = new Map();
 
     const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly/i;
-    const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i]; // Removed emoji pattern to be less aggressive
+    const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i];
 
-    for (const cal of enabled) {
+    for (const cal of enabledCalendars) {
       let calId = cal.calendar_id;
-      console.log(`[sync-calendar] Fetching events for: "${cal.calendar_name}" (ID: ${calId})`);
+      console.log(`[sync-calendar] Fetching events for: "${cal.calendar_name}"`);
       
       let res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?timeMin=${now.toISOString()}&timeMax=${end.toISOString()}&singleEvents=true&orderBy=startTime`, { 
         headers: { Authorization: `Bearer ${googleAccessToken}` } 
       });
       
-      // Fallback logic
-      if (res.status === 404 && (cal.calendar_name.toLowerCase().includes('personal') || cal.calendar_name.toLowerCase().includes('main'))) {
-        console.warn(`[sync-calendar] 404 for "${cal.calendar_name}". Trying 'primary' fallback...`);
-        const fallbackId = 'primary';
-        const fallbackRes = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${now.toISOString()}&timeMax=${end.toISOString()}&singleEvents=true&orderBy=startTime`, { 
-          headers: { Authorization: `Bearer ${googleAccessToken}` } 
-        });
-
-        if (fallbackRes.ok) {
-          console.log(`[sync-calendar] Fallback successful. Updating DB ID from ${calId} to ${fallbackId}`);
-          await supabaseAdmin.from('user_calendars')
-            .update({ calendar_id: fallbackId })
-            .eq('user_id', user.id)
-            .eq('calendar_id', calId);
-          
-          calId = fallbackId;
-          res = fallbackRes;
-        }
-      }
-
       if (!res.ok) {
         const errorData = await res.json();
         console.error(`[sync-calendar] Google Events Error for "${cal.calendar_name}":`, errorData);
-        if (res.status === 404) {
-          await supabaseAdmin.from('user_calendars').update({ is_enabled: false }).eq('user_id', user.id).eq('calendar_id', cal.calendar_id);
-        }
         continue;
       }
 
@@ -155,7 +136,6 @@ serve(async (req) => {
           const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
           const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
           
-          // Smarter locking: Only lock recurring events if they match fixed keywords or have multiple attendees
           const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && (
             (event.attendees?.length > 1) ||
             fixedKeywords.test(title) ||
@@ -184,7 +164,7 @@ serve(async (req) => {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
     }
 
-    console.log(`[sync-calendar] FINISHED - Cached ${uniqueEvents.length} unique events`);
+    console.log(`[sync-calendar] FINISHED - Cached ${uniqueEvents.length} unique events from Google.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders })
   } catch (error) {
     console.error("[sync-calendar] FATAL ERROR:", error.message);

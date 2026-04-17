@@ -13,7 +13,7 @@ serve(async (req) => {
   }
 
   try {
-    console.log("[sync-apple-calendar] START - Apple Sync");
+    console.log("[sync-apple-calendar] START - Apple Sync Process");
     
     const authHeader = req.headers.get('Authorization')
     const supabaseAdmin = createClient(
@@ -40,7 +40,7 @@ serve(async (req) => {
 
     const { data: profile } = await supabaseAdmin.from('profiles').select('apple_id, apple_app_password, timezone').eq('id', user.id).single();
     if (!profile?.apple_id || !profile?.apple_app_password) {
-      console.log("[sync-apple-calendar] Apple credentials missing. Skipping.");
+      console.log("[sync-apple-calendar] Apple credentials missing in profile. Skipping sync.");
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
 
@@ -56,6 +56,7 @@ serve(async (req) => {
     };
 
     // 1. Discovery
+    console.log("[sync-apple-calendar] Discovering principal...");
     const principalRes = await fetch(initialBase, {
       method: 'PROPFIND',
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' },
@@ -66,6 +67,7 @@ serve(async (req) => {
     let principalPath = principalXml.match(/current-user-principal[\s\S]*?href[^>]*>([^<]+)/i)?.[1];
     const discoveryUrl = principalPath ? getFullUrl(principalPath, initialBase) : initialBase;
 
+    console.log("[sync-apple-calendar] Discovering home set...");
     const discoveryRes = await fetch(discoveryUrl, { 
       method: 'PROPFIND', 
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }, 
@@ -83,17 +85,20 @@ serve(async (req) => {
     // 2. Get Enabled Calendars
     const { data: enabled } = await supabaseAdmin
       .from('user_calendars')
-      .select('calendar_id, calendar_name')
+      .select('calendar_id, calendar_name, is_enabled')
       .eq('user_id', user.id)
-      .eq('is_enabled', true)
       .eq('provider', 'apple');
 
-    await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
+    const enabledCalendars = (enabled || []).filter(c => c.is_enabled);
+    console.log(`[sync-apple-calendar] Found ${enabled?.length || 0} Apple calendars. ${enabledCalendars.length} are enabled.`);
 
-    if (!enabled || enabled.length === 0) {
-      console.log("[sync-apple-calendar] No enabled Apple calendars found.");
+    if (enabledCalendars.length === 0) {
+      console.log("[sync-apple-calendar] No enabled Apple calendars found. Please check your settings.");
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
+
+    // Clear existing cache for this provider
+    await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
 
     // 3. Fetch Events
     const now = new Date();
@@ -108,11 +113,11 @@ serve(async (req) => {
     `;
 
     const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly/i;
-    const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i]; // Removed emoji pattern
+    const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i];
 
     const eventMap = new Map();
-    for (const cal of enabled) {
-      console.log(`[sync-apple-calendar] Fetching events for: ${cal.calendar_name}`);
+    for (const cal of enabledCalendars) {
+      console.log(`[sync-apple-calendar] Fetching events for: "${cal.calendar_name}"`);
       const res = await fetch(getFullUrl(cal.calendar_id, homeSetUrl), {
         method: 'REPORT',
         headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/xml', 'Depth': '1' },
@@ -120,10 +125,14 @@ serve(async (req) => {
       });
       
       const xml = await res.text();
+      // Improved splitting and cleaning of ICS data
       const eventBlocks = xml.split('BEGIN:VEVENT');
+      console.log(`[sync-apple-calendar] Raw response for "${cal.calendar_name}" contains ${eventBlocks.length - 1} VEVENT blocks.`);
       
       for (let i = 1; i < eventBlocks.length; i++) {
-        const block = eventBlocks[i].replace(/\r?\n /g, '');
+        // Handle line folding (CRLF followed by space or tab)
+        const block = eventBlocks[i].replace(/\r?\n[ \t]/g, '');
+        
         const summary = block.match(/^SUMMARY[^:]*:(.*)$/m)?.[1]?.trim() || 'Untitled';
         const dtStart = block.match(/^DTSTART[^:]*:(.*)$/m)?.[1]?.trim();
         const dtEnd = block.match(/^DTEND[^:]*:(.*)$/m)?.[1]?.trim();
@@ -140,8 +149,6 @@ serve(async (req) => {
                            fixedKeywords.test(summary) || 
                            fixedPatterns.some(p => p.test(summary))));
           
-          console.log(`[sync-apple-calendar] Event: "${summary}" | Locked: ${isLocked}`);
-
           eventMap.set(uid, {
             user_id: user.id,
             event_id: uid,
@@ -152,8 +159,11 @@ serve(async (req) => {
             is_locked: isLocked,
             provider: 'apple',
             source_calendar: cal.calendar_name,
+            source_calendar_id: cal.calendar_id,
             last_synced_at: new Date().toISOString()
           });
+        } else {
+          console.warn(`[sync-apple-calendar] Skipping event "${summary}" due to missing fields: ${!dtStart ? 'DTSTART ' : ''}${!dtEnd ? 'DTEND ' : ''}${!uid ? 'UID' : ''}`);
         }
       }
     }
@@ -163,7 +173,7 @@ serve(async (req) => {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
     }
 
-    console.log(`[sync-apple-calendar] FINISHED - Cached ${uniqueEvents.length} unique events`);
+    console.log(`[sync-apple-calendar] FINISHED - Cached ${uniqueEvents.length} unique events from Apple.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders });
   } catch (error) {
     console.error("[sync-apple-calendar] FATAL ERROR:", error.message);
