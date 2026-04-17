@@ -10,6 +10,7 @@ import Optimise from "./pages/Optimise";
 import Settings from "./pages/Settings";
 import History from "./pages/History";
 import Login from "./pages/Login";
+import Plan from "./pages/Plan";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -53,6 +54,10 @@ const App = () => {
             <Route 
               path="/optimise" 
               element={session ? <Optimise /> : <Navigate to="/login" replace />} 
+            />
+            <Route 
+              path="/plan" 
+              element={session ? <Plan /> : <Navigate to="/login" replace />} 
             />
             <Route 
               path="/history" 

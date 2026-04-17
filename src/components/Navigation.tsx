@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Calendar, Settings, LayoutDashboard, Sparkles, History, User, LogOut } from 'lucide-react';
+import { Calendar, Settings, LayoutDashboard, Sparkles, History, User, LogOut, Brain } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -52,6 +52,7 @@ const Navigation = () => {
   const navItems = [
     { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
     { icon: Sparkles, label: 'Optimiser', path: '/optimise' },
+    { icon: Brain, label: 'Daily Plan', path: '/plan' },
     { icon: History, label: 'History', path: '/history' },
     { icon: Settings, label: 'Settings', path: '/settings' },
   ];
