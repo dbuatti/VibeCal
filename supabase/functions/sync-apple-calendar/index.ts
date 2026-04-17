@@ -78,7 +78,7 @@ serve(async (req) => {
     
     const homeSetUrl = getFullUrl(homeSetPath, homeSetRes.url);
 
-    // 3. Find individual calendars
+    // 3. Find individual calendars and their names
     const listRes = await fetch(homeSetUrl, {
       method: 'PROPFIND',
       headers: {
@@ -86,30 +86,60 @@ serve(async (req) => {
         'Content-Type': 'application/xml; charset=utf-8',
         'Depth': '1'
       },
-      body: `<?xml version="1.0" encoding="utf-8" ?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype /></d:prop></d:propfind>`
+      body: `<?xml version="1.0" encoding="utf-8" ?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype /><d:displayname /></d:prop></d:propfind>`
     });
 
     const listXml = await listRes.text();
-    const calendarPaths = [];
+    const discoveredCalendars = [];
     const responses = listXml.split(/<(?:[^:>]*:)?response[^>]*>/i);
     const normHomePath = homeSetPath.replace(/\/$/, '');
 
     for (const resp of responses) {
       if (resp.includes('<calendar') || resp.includes(':calendar')) {
         const hrefMatch = resp.match(/<(?:[^:>]*:)?href[^>]*>([^<]+)/i);
+        const nameMatch = resp.match(/<(?:[^:>]*:)?displayname[^>]*>([^<]+)/i);
         const href = hrefMatch?.[1];
+        const name = nameMatch?.[1] || href?.split('/').filter(Boolean).pop() || 'Unnamed Calendar';
+        
         if (href) {
           const normHref = href.replace(/\/$/, '');
-          if (normHref !== normHomePath && !calendarPaths.includes(href)) {
-            calendarPaths.push(href);
+          if (normHref !== normHomePath) {
+            discoveredCalendars.push({
+              user_id: user.id,
+              calendar_id: href,
+              calendar_name: name,
+              provider: 'apple'
+            });
           }
         }
       }
     }
 
-    console.log(`[sync-apple-calendar] Found ${calendarPaths.length} individual calendars.`);
+    // Upsert discovered calendars so user can see them in settings
+    if (discoveredCalendars.length > 0) {
+      await supabaseClient
+        .from('user_calendars')
+        .upsert(discoveredCalendars, { onConflict: 'user_id, calendar_id' });
+    }
 
-    // 4. Fetch events in parallel
+    // Fetch user's enabled calendars
+    const { data: enabledCalendars } = await supabaseClient
+      .from('user_calendars')
+      .select('calendar_id')
+      .eq('user_id', user.id)
+      .eq('is_enabled', true)
+      .eq('provider', 'apple');
+
+    const enabledPaths = enabledCalendars?.map(c => c.calendar_id) || [];
+
+    if (enabledPaths.length === 0) {
+      return new Response(
+        JSON.stringify({ message: 'Discovery complete. No calendars enabled for sync.', count: 0 }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // 4. Fetch events only for enabled calendars
     const now = new Date();
     const start = now.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const end = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
@@ -127,7 +157,7 @@ serve(async (req) => {
       </c:calendar-query>
     `;
 
-    const fetchPromises = calendarPaths.map(async (path) => {
+    const fetchPromises = enabledPaths.map(async (path) => {
       const calUrl = getFullUrl(path, homeSetUrl);
       try {
         const response = await fetch(calUrl, {
@@ -169,7 +199,7 @@ serve(async (req) => {
                 duration_minutes: Math.round((endDate.getTime() - startDate.getTime()) / 60000),
                 is_locked: true,
                 provider: 'apple',
-                source_calendar: path.split('/').filter(Boolean).pop(),
+                source_calendar: path,
                 last_synced_at: new Date().toISOString()
               });
             } catch (e) {
@@ -193,13 +223,11 @@ serve(async (req) => {
         .upsert(allEvents, { onConflict: 'user_id, event_id' });
     }
 
-    console.log(`[sync-apple-calendar] Sync complete. Total events: ${allEvents.length}`);
-
     return new Response(
       JSON.stringify({ 
         message: 'Apple Sync successful', 
         count: allEvents.length,
-        events: allEvents // Returning events for debugging
+        events: allEvents
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )

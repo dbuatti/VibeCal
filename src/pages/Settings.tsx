@@ -10,12 +10,13 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
-import { Save, Clock, Shield, Target, Apple, Mail, Lock, Eye, EyeOff, RefreshCw, CheckCircle2, ListOrdered } from 'lucide-react';
+import { Save, Clock, Shield, Target, Apple, Mail, Lock, Eye, EyeOff, RefreshCw, CheckCircle2, ListOrdered, Calendar } from 'lucide-react';
 
 const Settings = () => {
   const [loading, setLoading] = useState(true);
   const [isTesting, setIsTesting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [calendars, setCalendars] = useState<any[]>([]);
   const [settings, setSettings] = useState<any>({
     day_start_time: '09:00',
     day_end_time: '17:00',
@@ -47,13 +48,15 @@ const Settings = () => {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
 
-        const [settingsRes, profileRes] = await Promise.all([
+        const [settingsRes, profileRes, calendarsRes] = await Promise.all([
           supabase.from('user_settings').select('*').eq('user_id', user.id).single(),
-          supabase.from('profiles').select('apple_id, apple_app_password').eq('id', user.id).single()
+          supabase.from('profiles').select('apple_id, apple_app_password').eq('id', user.id).single(),
+          supabase.from('user_calendars').select('*').eq('user_id', user.id).eq('provider', 'apple')
         ]);
 
         if (settingsRes.data) setSettings(settingsRes.data);
         if (profileRes.data) setProfile(profileRes.data);
+        if (calendarsRes.data) setCalendars(calendarsRes.data);
       } catch (err) {
         console.error("Error fetching settings:", err);
       } finally {
@@ -91,12 +94,29 @@ const Settings = () => {
     }
   };
 
-  const testAppleConnection = async () => {
+  const toggleCalendar = async (id: string, enabled: boolean) => {
+    try {
+      const { error } = await supabase
+        .from('user_calendars')
+        .update({ is_enabled: enabled })
+        .eq('id', id);
+      
+      if (error) throw error;
+      
+      setCalendars(calendars.map(c => c.id === id ? { ...c, is_enabled: enabled } : c));
+      showSuccess(`Calendar ${enabled ? 'enabled' : 'disabled'}`);
+    } catch (err: any) {
+      showError(err.message);
+    }
+  };
+
+  const discoverCalendars = async () => {
     setIsTesting(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
+      // First save credentials
       await supabase
         .from('profiles')
         .update({ 
@@ -108,11 +128,18 @@ const Settings = () => {
       const { data, error } = await supabase.functions.invoke('sync-apple-calendar');
       
       if (error) throw error;
-      if (data?.error) throw new Error(data.error);
-
-      showSuccess(`Connection successful! Found ${data.count} events.`);
+      
+      // Refresh calendar list
+      const { data: newCals } = await supabase
+        .from('user_calendars')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('provider', 'apple');
+      
+      if (newCals) setCalendars(newCals);
+      showSuccess('Calendar list refreshed!');
     } catch (err: any) {
-      showError(`Connection failed: ${err.message}`);
+      showError(`Discovery failed: ${err.message}`);
     } finally {
       setIsTesting(false);
     }
@@ -197,16 +224,16 @@ const Settings = () => {
               <Button 
                 variant="outline" 
                 size="sm" 
-                onClick={testAppleConnection}
+                onClick={discoverCalendars}
                 disabled={isTesting || !profile.apple_id || !profile.apple_app_password}
                 className="rounded-xl border-gray-200 hover:bg-gray-50"
               >
                 {isTesting ? (
                   <RefreshCw size={14} className="mr-2 animate-spin" />
                 ) : (
-                  <CheckCircle2 size={14} className="mr-2 text-green-600" />
+                  <RefreshCw size={14} className="mr-2" />
                 )}
-                Test Connection
+                Refresh Calendar List
               </Button>
             </CardHeader>
             <CardContent className="space-y-6">
@@ -245,6 +272,27 @@ const Settings = () => {
                   </div>
                 </div>
               </div>
+
+              {calendars.length > 0 && (
+                <div className="space-y-4 pt-4 border-t border-gray-100">
+                  <Label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Sync Preferences</Label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {calendars.map((cal) => (
+                      <div key={cal.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
+                        <div className="flex items-center gap-3 overflow-hidden">
+                          <Calendar size={16} className="text-indigo-400 shrink-0" />
+                          <span className="text-sm font-bold text-gray-700 truncate">{cal.calendar_name}</span>
+                        </div>
+                        <Switch 
+                          checked={cal.is_enabled} 
+                          onCheckedChange={(val) => toggleCalendar(cal.id, val)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="bg-gray-50 p-4 rounded-xl text-xs text-gray-500 leading-relaxed">
                 <p className="font-bold text-gray-700 mb-1">How to get an App-Specific Password:</p>
                 <ol className="list-decimal ml-4 space-y-1">
