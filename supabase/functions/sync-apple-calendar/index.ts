@@ -46,6 +46,7 @@ serve(async (req) => {
       return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
     }
 
+    const userTimezone = profile.timezone || 'UTC';
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
     const initialBase = "https://caldav.icloud.com";
     
@@ -161,27 +162,54 @@ serve(async (req) => {
     const eventMap = new Map();
     const syncTimestamp = new Date().toISOString();
 
-    const parseIcsDate = (dateStr) => {
+    const parseIcsDate = (dateStr, tzid, fallbackTz = 'UTC') => {
       if (!dateStr) return null;
-      // Handle formats like 20260418T090000Z or 20260418T090000
-      const clean = dateStr.replace(/[^0-9TZ]/g, '');
-      const year = clean.substring(0, 4);
-      const month = clean.substring(4, 6);
-      const day = clean.substring(6, 8);
-      const hour = clean.substring(9, 11);
-      const min = clean.substring(11, 13);
-      const sec = clean.substring(13, 15);
       
-      const date = new Date(Date.UTC(
-        parseInt(year), 
-        parseInt(month) - 1, 
-        parseInt(day), 
-        parseInt(hour || 0), 
-        parseInt(min || 0), 
-        parseInt(sec || 0)
-      ));
+      const isUtc = dateStr.endsWith('Z');
+      const clean = dateStr.replace(/[^0-9]/g, '');
+      if (clean.length < 8) return null;
+
+      const year = parseInt(clean.substring(0, 4));
+      const month = parseInt(clean.substring(4, 6)) - 1;
+      const day = parseInt(clean.substring(6, 8));
+      const hour = parseInt(clean.substring(8, 10) || 0);
+      const min = parseInt(clean.substring(10, 12) || 0);
+      const sec = parseInt(clean.substring(12, 14) || 0);
       
-      return isNaN(date.getTime()) ? null : date;
+      if (isUtc) {
+        return new Date(Date.UTC(year, month, day, hour, min, sec));
+      }
+
+      // For local times, we need to find the offset for the target timezone
+      const targetTz = tzid || fallbackTz;
+      try {
+        const utcDate = new Date(Date.UTC(year, month, day, hour, min, sec));
+        const formatter = new Intl.DateTimeFormat('en-US', {
+          timeZone: targetTz,
+          year: 'numeric', month: 'numeric', day: 'numeric',
+          hour: 'numeric', minute: 'numeric', second: 'numeric',
+          hour12: false
+        });
+        
+        const parts = formatter.formatToParts(utcDate);
+        const p = {};
+        parts.forEach(part => p[part.type] = part.value);
+        
+        const tzDate = new Date(Date.UTC(
+          parseInt(p.year),
+          parseInt(p.month) - 1,
+          parseInt(p.day),
+          parseInt(p.hour) === 24 ? 0 : parseInt(p.hour),
+          parseInt(p.minute),
+          parseInt(p.second)
+        ));
+        
+        const offset = tzDate.getTime() - utcDate.getTime();
+        return new Date(utcDate.getTime() - offset);
+      } catch (e) {
+        console.warn(`[${functionName}] Timezone parsing failed for ${targetTz}, falling back to UTC.`);
+        return new Date(Date.UTC(year, month, day, hour, min, sec));
+      }
     };
 
     for (const cal of enabledCalendars) {
@@ -196,34 +224,30 @@ serve(async (req) => {
 
       const xml = await res.text();
       const eventDataMatches = xml.matchAll(/<[^>]*calendar-data[^>]*>([\s\S]*?)<\/[^>]*calendar-data>/gi);
-      let matchCount = 0;
-      let eventCount = 0;
       
       for (const match of eventDataMatches) {
-        matchCount++;
         let icsData = match[1].trim()
           .replace(/</g, '<').replace(/>/g, '>').replace(/&/g, '&')
           .replace(/&quot;/g, '"').replace(/&apos;/g, "'");
 
-        // Resilient Regex-based parsing
         const veventMatches = icsData.matchAll(/BEGIN:VEVENT([\s\S]*?)END:VEVENT/gi);
         
         for (const veventMatch of veventMatches) {
           const content = veventMatch[1];
           
           const summaryMatch = content.match(/SUMMARY:(.*)/i);
-          const dtstartMatch = content.match(/DTSTART(?:;VALUE=DATE|;TZID=[^:]+)?:(.*)/i);
-          const dtendMatch = content.match(/DTEND(?:;VALUE=DATE|;TZID=[^:]+)?:(.*)/i);
+          const dtstartMatch = content.match(/DTSTART(?:;VALUE=DATE)?(?:;TZID=([^:]+))?:(.*)/i);
+          const dtendMatch = content.match(/DTEND(?:;VALUE=DATE)?(?:;TZID=([^:]+))?:(.*)/i);
           const durationMatch = content.match(/DURATION:PT(\d+)([HMS])/i);
           const uidMatch = content.match(/UID:(.*)/i);
 
           if (!dtstartMatch || !uidMatch) continue;
 
           const summary = (summaryMatch?.[1] || 'Untitled').trim();
-          const start = parseIcsDate(dtstartMatch[1].trim());
+          const start = parseIcsDate(dtstartMatch[2].trim(), dtstartMatch[1], userTimezone);
           if (!start) continue;
 
-          let end = parseIcsDate(dtendMatch?.[1]?.trim());
+          let end = parseIcsDate(dtendMatch?.[2]?.trim(), dtendMatch?.[1], userTimezone);
           if (!end) {
             if (durationMatch) {
               const val = parseInt(durationMatch[1]);
@@ -231,7 +255,7 @@ serve(async (req) => {
               const ms = unit === 'H' ? val * 3600000 : unit === 'M' ? val * 60000 : val * 1000;
               end = new Date(start.getTime() + ms);
             } else {
-              end = new Date(start.getTime() + 30 * 60000); // Default 30m
+              end = new Date(start.getTime() + 30 * 60000);
             }
           }
 
@@ -254,15 +278,11 @@ serve(async (req) => {
             source_calendar_id: cal.calendar_id,
             last_synced_at: syncTimestamp
           });
-          eventCount++;
         }
       }
-      console.log(`[${functionName}] Processed ${matchCount} resources, found ${eventCount} events in "${cal.calendar_name}"`);
     }
 
     const uniqueEvents = Array.from(eventMap.values());
-    console.log(`[${functionName}] Total unique events found: ${uniqueEvents.length}`);
-
     if (uniqueEvents.length > 0) {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
       await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple').lt('last_synced_at', syncTimestamp);
