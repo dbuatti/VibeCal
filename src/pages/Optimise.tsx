@@ -1,3 +1,5 @@
+"use client";
+
 import React, { useState, useEffect } from 'react';
 import Layout from '@/components/Layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -180,7 +182,17 @@ const Optimise = () => {
 
   // Step 4: Apply Single Change
   const applySingleChange = async (change: any) => {
-    console.log("[Optimise] Attempting to apply single change:", change);
+    const payload = {
+      start_time: change.new_start,
+      end_time: change.new_end,
+      duration_minutes: change.duration,
+      last_synced_at: new Date().toISOString()
+    };
+
+    console.log("[Optimise] Attempting to apply single change for:", change.title);
+    console.log("[Optimise] Event ID:", change.event_id);
+    console.log("[Optimise] Update Payload:", payload);
+
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
@@ -188,15 +200,9 @@ const Optimise = () => {
         throw new Error("User not found");
       }
 
-      console.log("[Optimise] Updating calendar_events_cache for event_id:", change.event_id);
       const { data, error } = await supabase
         .from('calendar_events_cache')
-        .update({
-          start_time: change.new_start,
-          end_time: change.new_end,
-          duration_minutes: change.duration,
-          last_synced_at: new Date().toISOString()
-        })
+        .update(payload)
         .eq('event_id', change.event_id)
         .eq('user_id', user.id)
         .select();
@@ -206,7 +212,11 @@ const Optimise = () => {
         throw error;
       }
 
-      console.log("[Optimise] Supabase update successful. Response data:", data);
+      console.log("[Optimise] Supabase update successful. Returned data:", data);
+
+      if (!data || data.length === 0) {
+        console.warn("[Optimise] No rows were updated. Check if the event_id exists in the cache for this user.");
+      }
 
       setAppliedChanges(prev => [...prev, change.event_id]);
       showSuccess(`Updated: ${change.title}`);
@@ -230,15 +240,19 @@ const Optimise = () => {
       console.log("[Optimise] Pending changes to apply:", pendingChanges.length);
 
       for (const change of pendingChanges) {
-        console.log("[Optimise] Applying change for:", change.title, "ID:", change.event_id);
+        const payload = {
+          start_time: change.new_start,
+          end_time: change.new_end,
+          duration_minutes: change.duration,
+          last_synced_at: new Date().toISOString()
+        };
+        
+        console.log(`[Optimise] Applying change for: ${change.title} (ID: ${change.event_id})`);
+        console.log(`[Optimise] Payload:`, payload);
+
         const { error } = await supabase
           .from('calendar_events_cache')
-          .update({
-            start_time: change.new_start,
-            end_time: change.new_end,
-            duration_minutes: change.duration,
-            last_synced_at: new Date().toISOString()
-          })
+          .update(payload)
           .eq('event_id', change.event_id)
           .eq('user_id', user.id);
         
