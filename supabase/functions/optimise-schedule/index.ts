@@ -17,7 +17,7 @@ serve(async (req) => {
     console.log("[optimise-schedule] Starting theme-aware redistribution...");
     
     const authHeader = req.headers.get('Authorization')
-    const { durationOverride, maxTasksOverride, slotAlignment = 15 } = await req.json();
+    const { durationOverride, maxTasksOverride, slotAlignment = 15, selectedDays = [1, 2, 3, 4, 5] } = await req.json();
     
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -78,7 +78,6 @@ serve(async (req) => {
       }
     } catch (aiError) {
       console.warn("[optimise-schedule] AI service unavailable or failed. Falling back to General themes.", aiError.message);
-      // categories remains as "General" for all tasks
     }
 
     const proposedChanges = [];
@@ -121,6 +120,12 @@ serve(async (req) => {
         const dayOfWeek = currentPointer.getDay();
         const dayKey = currentPointer.toISOString().split('T')[0];
         
+        // SKIP if day is not in user-selected allowed days
+        if (!selectedDays.includes(dayOfWeek)) {
+          dayOffset++;
+          continue;
+        }
+
         // Skip if this day doesn't match the theme (unless we've searched a full week and found nothing)
         if (preferredDays.length > 0 && !preferredDays.includes(dayOfWeek) && dayOffset < 8) {
           dayOffset++;
@@ -137,7 +142,6 @@ serve(async (req) => {
         
         const stats = dailyStats.get(dayKey);
         
-        // Initialize pointer for the day if first time
         if (!stats.lastPointer) {
           const dayStart = new Date(currentPointer);
           dayStart.setUTCHours(startH - offset, startM, 0, 0);
@@ -148,18 +152,15 @@ serve(async (req) => {
         const dayEnd = new Date(currentPointer);
         dayEnd.setUTCHours(endH - offset, endM, 0, 0);
 
-        // Try to find a gap in this day
         while (searchPointer < dayEnd && !foundSlot) {
           const potentialEnd = new Date(searchPointer.getTime() + durationMs);
           
-          // Check limits
           const pastWorkday = potentialEnd > dayEnd;
           const pastHoursLimit = (stats.hours + (effectiveDuration / 60)) > (settings.max_hours_per_day || 24);
           const pastTasksLimit = stats.tasks >= maxTasks;
 
           if (pastWorkday || pastHoursLimit || pastTasksLimit) break;
 
-          // Collision detection
           const collision = fixedEvents.find(f => {
             const fStart = new Date(f.start_time);
             const fEnd = new Date(f.end_time);
