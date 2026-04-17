@@ -118,7 +118,7 @@ serve(async (req) => {
     }
 
     if (discoveredCals.length > 0) {
-      console.log(`[${functionName}] Discovered ${discoveredCals.length} calendars.`);
+      console.log(`[${functionName}] Discovered ${discoveredCals.length} calendars: ${discoveredCals.map(c => c.calendar_name).join(', ')}`);
       await supabaseAdmin.from('user_calendars').upsert(discoveredCals, { onConflict: 'user_id, calendar_id' });
     }
 
