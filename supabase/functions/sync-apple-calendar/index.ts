@@ -29,6 +29,15 @@ serve(async (req) => {
     const { data: { user } } = await supabaseUser.auth.getUser()
     if (!user) throw new Error("Unauthorized");
 
+    // Fetch user settings for movable keywords
+    const { data: settings } = await supabaseAdmin
+      .from('user_settings')
+      .select('movable_keywords')
+      .eq('user_id', user.id)
+      .single();
+    
+    const movableKeywords = settings?.movable_keywords || [];
+
     const { data: profile } = await supabaseAdmin.from('profiles').select('apple_id, apple_app_password, timezone').eq('id', user.id).single();
     if (!profile?.apple_id || !profile?.apple_app_password) throw new Error('Apple credentials missing.');
 
@@ -118,7 +127,12 @@ serve(async (req) => {
           const start = parseIcsDate(dtStart, userTimezone);
           const end = parseIcsDate(dtEnd, userTimezone);
           
-          const isLocked = fixedKeywords.test(summary) || fixedPatterns.some(p => p.test(summary));
+          // Check if title contains any user-defined movable keywords
+          const isExplicitlyMovable = movableKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
+          
+          const isLocked = !isExplicitlyMovable && (
+                           fixedKeywords.test(summary) || 
+                           fixedPatterns.some(p => p.test(summary)));
           
           eventMap.set(uid, {
             user_id: user.id,
