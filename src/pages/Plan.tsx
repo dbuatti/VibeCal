@@ -167,12 +167,11 @@ const Plan = () => {
           slotAlignment: parseInt(slotAlignment), 
           selectedDays,
           placeholderDate,
-          vettedEventIds: isResuggest ? appliedChanges : [] // Pass vetted IDs to treat as locked
+          vettedEventIds: isResuggest ? appliedChanges : [] 
         }
       });
       if (error) throw error;
 
-      // Merge new changes with existing vetted changes if resuggesting
       let finalChanges = data.changes;
       if (isResuggest && proposal) {
         const vettedChanges = proposal.proposed_changes.filter((c: any) => appliedChanges.includes(c.event_id));
@@ -184,11 +183,10 @@ const Plan = () => {
         user_id: user.id,
         proposed_changes: finalChanges.map((c: any) => ({ ...c, applied: appliedChanges.includes(c.event_id) })),
         status: 'proposed',
-        metadata: { selectedDays, maxTasksOverride, maxHoursOverride, durationOverride, isResuggest }
+        metadata: { selectedDays, maxTasksOverride, maxHoursOverride, durationOverride, isResuggest, placeholderDate }
       }).select().single();
 
       setProposal(newProposal);
-      // Keep appliedChanges as they are
       setCurrentStep('active_plan');
       showSuccess(isResuggest ? "Day resuggested!" : "Optimisation complete!");
     } catch (err: any) { showError(err.message); }
@@ -358,6 +356,21 @@ const Plan = () => {
           <Input type="number" value={maxTasksOverride} onChange={(e) => setMaxTasksOverride(parseInt(e.target.value))} className="h-10 rounded-xl border-gray-100 font-bold text-sm px-3 bg-gray-50/50" />
         </div>
       </div>
+
+      <div className="space-y-2 p-4 bg-amber-50/50 rounded-2xl border border-amber-100">
+        <Label className="text-[10px] font-black uppercase tracking-widest text-amber-600 flex items-center gap-2">
+          <Inbox size={12} /> Surplus Handling
+        </Label>
+        <div className="space-y-2">
+          <p className="text-[9px] text-amber-700 font-bold leading-tight">Overflow tasks will be moved to:</p>
+          <Input 
+            type="date" 
+            value={placeholderDate} 
+            onChange={(e) => setPlaceholderDate(e.target.value)}
+            className="h-9 rounded-xl border-amber-100 font-bold text-xs px-3 bg-white focus:ring-amber-500"
+          />
+        </div>
+      </div>
       
       <Button onClick={() => runOptimisation(false)} className="w-full bg-indigo-600 text-white rounded-xl py-6 text-xs font-black uppercase tracking-widest shadow-lg shadow-indigo-100">
         <Wand2 size={14} className="mr-2" /> Re-Generate Plan
@@ -501,7 +514,7 @@ const Plan = () => {
               appliedChanges={appliedChanges}
               onApplyDay={handleApplyDay}
               onUndoApplyDay={handleUndoApplyDay}
-              onResuggestDay={() => runOptimisation(true)} // Pass true for isResuggest
+              onResuggestDay={() => runOptimisation(true)} 
               maxHours={maxHoursOverride}
               maxTasks={maxTasksOverride}
               workKeywords={settings?.work_keywords}
