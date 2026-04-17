@@ -125,22 +125,37 @@ serve(async (req) => {
       });
       
       const xml = await res.text();
-      // Improved splitting and cleaning of ICS data
       const eventBlocks = xml.split('BEGIN:VEVENT');
-      console.log(`[sync-apple-calendar] Raw response for "${cal.calendar_name}" contains ${eventBlocks.length - 1} VEVENT blocks.`);
       
       for (let i = 1; i < eventBlocks.length; i++) {
-        // Handle line folding (CRLF followed by space or tab)
         const block = eventBlocks[i].replace(/\r?\n[ \t]/g, '');
         
-        const summary = block.match(/^SUMMARY[^:]*:(.*)$/m)?.[1]?.trim() || 'Untitled';
-        const dtStart = block.match(/^DTSTART[^:]*:(.*)$/m)?.[1]?.trim();
-        const dtEnd = block.match(/^DTEND[^:]*:(.*)$/m)?.[1]?.trim();
-        const uid = block.match(/^UID[^:]*:(.*)$/m)?.[1]?.trim();
+        const getProp = (prop) => {
+          const re = new RegExp(`${prop}[^:]*:(.*)`, 'i');
+          return block.match(re)?.[1]?.trim();
+        };
 
-        if (dtStart && dtEnd && uid) {
+        const summary = getProp('SUMMARY') || 'Untitled';
+        const dtStart = getProp('DTSTART');
+        const dtEnd = getProp('DTEND');
+        const duration = getProp('DURATION');
+        const uid = getProp('UID');
+
+        if (dtStart && uid) {
           const start = parseIcsDate(dtStart, userTimezone);
-          const end = parseIcsDate(dtEnd, userTimezone);
+          let end;
+
+          if (dtEnd) {
+            end = parseIcsDate(dtEnd, userTimezone);
+          } else if (duration) {
+            // Simple duration parsing (e.g., PT1H15M)
+            const hours = parseInt(duration.match(/(\d+)H/)?.[1] || '0');
+            const mins = parseInt(duration.match(/(\d+)M/)?.[1] || '0');
+            end = new Date(start.getTime() + (hours * 3600 + mins * 60) * 1000);
+          } else {
+            // Fallback to 60 minutes if no end or duration
+            end = new Date(start.getTime() + 60 * 60 * 1000);
+          }
           
           const isExplicitlyMovable = movableKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
           const isExplicitlyLocked = lockedKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
@@ -162,8 +177,6 @@ serve(async (req) => {
             source_calendar_id: cal.calendar_id,
             last_synced_at: new Date().toISOString()
           });
-        } else {
-          console.warn(`[sync-apple-calendar] Skipping event "${summary}" due to missing fields: ${!dtStart ? 'DTSTART ' : ''}${!dtEnd ? 'DTEND ' : ''}${!uid ? 'UID' : ''}`);
         }
       }
     }
