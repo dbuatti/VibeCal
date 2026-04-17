@@ -162,6 +162,18 @@ const DayByDayPlanner = ({
     }
   };
 
+  const handleUndoAndResuggest = async () => {
+    setIsSyncing(true);
+    try {
+      await onUndoApplyDay(dayChanges);
+      if (onResuggestDay) {
+        await onResuggestDay();
+      }
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const getDayStatus = () => {
     if (dayChanges.length === 0) return "No Changes";
     if (isDayVetted) return "Vetted";
@@ -269,9 +281,16 @@ const DayByDayPlanner = ({
                 No Sync Required
               </Button>
             ) : isDayVetted ? (
-              <Button onClick={handleUndoDay} disabled={isSyncing} variant="outline" className="w-full rounded-2xl py-8 text-lg font-black border-gray-100 text-gray-400">
-                {isSyncing ? <RefreshCw className="animate-spin mr-2" size={20} /> : <><RotateCcw className="mr-2" size={20} /> Undo</>}
-              </Button>
+              <div className="space-y-3">
+                <Button onClick={handleUndoDay} disabled={isSyncing} variant="outline" className="w-full rounded-2xl py-8 text-lg font-black border-gray-100 text-gray-400">
+                  {isSyncing ? <RefreshCw className="animate-spin mr-2" size={20} /> : <><RotateCcw className="mr-2" size={20} /> Undo</>}
+                </Button>
+                {onResuggestDay && (
+                  <Button onClick={handleUndoAndResuggest} disabled={isSyncing} variant="ghost" className="w-full rounded-2xl py-4 text-xs font-black uppercase tracking-widest text-indigo-600 hover:bg-indigo-50">
+                    {isSyncing ? <RefreshCw className="animate-spin mr-2" size={14} /> : <><Wand2 className="mr-2" size={14} /> Undo & Resuggest</>}
+                  </Button>
+                )}
+              </div>
             ) : (
               <Button onClick={handleSyncDay} disabled={isSyncing} className="w-full bg-indigo-600 text-white rounded-2xl py-8 text-lg font-black shadow-xl">
                 {isSyncing ? <RefreshCw className="animate-spin mr-2" size={20} /> : <><Zap className="mr-2" size={20} /> Sync Day</>}
