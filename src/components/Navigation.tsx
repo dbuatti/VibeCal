@@ -1,14 +1,22 @@
 "use client";
 
-import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Calendar, Settings, LayoutDashboard, Sparkles, History, User, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 
 const Navigation = () => {
   const location = useLocation();
+  const navigate = useNavigate();
+  const [user, setUser] = useState<any>(null);
   
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      setUser(user);
+    });
+  }, []);
+
   const navItems = [
     { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
     { icon: Sparkles, label: 'Optimiser', path: '/optimise' },
@@ -18,6 +26,7 @@ const Navigation = () => {
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
+    navigate('/login');
   };
 
   return (
@@ -60,22 +69,25 @@ const Navigation = () => {
           <p className="text-xs mt-3 opacity-90 leading-relaxed font-medium">Your schedule is 12% more aligned than last week.</p>
         </div>
 
-        <div className="flex items-center justify-between p-2 hover:bg-gray-50 rounded-2xl transition-colors group">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center group-hover:bg-indigo-100 transition-colors">
-              <User className="text-gray-400 group-hover:text-indigo-600" size={24} />
+        <div className="space-y-2">
+          <div className="flex items-center gap-4 p-2">
+            <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center">
+              <User className="text-gray-400" size={24} />
             </div>
-            <div className="flex-1">
-              <p className="font-bold text-gray-900">Alex Rivera</p>
+            <div className="flex-1 overflow-hidden">
+              <p className="font-bold text-gray-900 truncate">
+                {user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'User'}
+              </p>
               <p className="text-xs text-gray-400 font-medium">Pro Plan</p>
             </div>
           </div>
+          
           <button 
             onClick={handleSignOut}
-            className="p-2 text-gray-400 hover:text-red-500 transition-colors"
-            title="Sign Out"
+            className="w-full flex items-center gap-3 px-5 py-3 rounded-xl text-gray-500 hover:text-red-600 hover:bg-red-50 transition-all duration-200 font-bold text-sm"
           >
-            <LogOut size={20} />
+            <LogOut size={18} />
+            Sign Out
           </button>
         </div>
       </div>
