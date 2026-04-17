@@ -11,13 +11,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { cn } from '@/lib/utils';
-import { Save, Clock, Shield, Target, Apple, Mail, Lock, Eye, EyeOff, RefreshCw, ListOrdered, Calendar, Globe, Square } from 'lucide-react';
+import { Save, Clock, Shield, Target, Apple, Mail, Lock, Eye, EyeOff, RefreshCw, ListOrdered, Calendar, Globe, Square, Plus, X, Sparkles } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 
 const Settings = () => {
   const [loading, setLoading] = useState(true);
   const [isTesting, setIsTesting] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
   const [calendars, setCalendars] = useState<any[]>([]);
+  const [newKeyword, setNewKeyword] = useState('');
   const [settings, setSettings] = useState<any>({
     day_start_time: '09:00',
     day_end_time: '17:00',
@@ -25,7 +26,8 @@ const Settings = () => {
     max_tasks_per_day: 5,
     optimisation_aggressiveness: 'balanced',
     preview_mode_enabled: true,
-    group_similar_tasks: true
+    group_similar_tasks: true,
+    movable_keywords: ['arrangement', 'email', 'outreach', 'draft', 'exploration']
   });
 
   const [profile, setProfile] = useState<any>({
@@ -56,7 +58,12 @@ const Settings = () => {
           supabase.from('day_themes').select('*').eq('user_id', user.id)
         ]);
 
-        if (settingsRes.data) setSettings(settingsRes.data);
+        if (settingsRes.data) {
+          setSettings({
+            ...settingsRes.data,
+            movable_keywords: settingsRes.data.movable_keywords || ['arrangement', 'email', 'outreach', 'draft', 'exploration']
+          });
+        }
         if (profileRes.data) setProfile(profileRes.data);
         if (calendarsRes.data) setCalendars(calendarsRes.data);
         
@@ -82,14 +89,12 @@ const Settings = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
-      // Save Settings
       const { error: settingsError } = await supabase
         .from('user_settings')
         .upsert({ user_id: user.id, ...settings });
 
       if (settingsError) throw settingsError;
 
-      // Save Profile
       const { error: profileError } = await supabase
         .from('profiles')
         .update({ 
@@ -100,7 +105,6 @@ const Settings = () => {
 
       if (profileError) throw profileError;
 
-      // Save Themes
       const themePayload = themes.map(t => ({
         user_id: user.id,
         day_of_week: t.day_of_week,
@@ -117,6 +121,26 @@ const Settings = () => {
     } catch (err: any) {
       showError(err.message);
     }
+  };
+
+  const addKeyword = () => {
+    if (!newKeyword.trim()) return;
+    if (settings.movable_keywords.includes(newKeyword.trim().toLowerCase())) {
+      setNewKeyword('');
+      return;
+    }
+    setSettings({
+      ...settings,
+      movable_keywords: [...settings.movable_keywords, newKeyword.trim().toLowerCase()]
+    });
+    setNewKeyword('');
+  };
+
+  const removeKeyword = (kw: string) => {
+    setSettings({
+      ...settings,
+      movable_keywords: settings.movable_keywords.filter((k: string) => k !== kw)
+    });
   };
 
   const toggleCalendar = async (id: string, enabled: boolean) => {
@@ -233,6 +257,43 @@ const Settings = () => {
                   onChange={(e) => setSettings({...settings, max_tasks_per_day: parseInt(e.target.value)})}
                 />
               </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-none shadow-sm rounded-2xl">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Sparkles className="text-indigo-600" size={20} />
+                Movable Task Detection
+              </CardTitle>
+              <CardDescription>Teach the app which tasks are movable. Keywords here override the "Locked" default.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="flex gap-2">
+                <Input 
+                  placeholder="Add keyword or emoji (e.g. 🎹, outreach, draft)" 
+                  value={newKeyword}
+                  onChange={(e) => setNewKeyword(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addKeyword()}
+                  className="rounded-xl"
+                />
+                <Button onClick={addKeyword} variant="secondary" className="rounded-xl">
+                  <Plus size={18} />
+                </Button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {settings.movable_keywords.map((kw: string) => (
+                  <Badge key={kw} variant="secondary" className="px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 border-indigo-100 flex items-center gap-2">
+                    {kw}
+                    <button onClick={() => removeKeyword(kw)} className="hover:text-indigo-900">
+                      <X size={14} />
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+              <p className="text-xs text-gray-400 italic">
+                Tip: Add emojis like 🎹 or 📣 to ensure tasks with those icons are treated as movable.
+              </p>
             </CardContent>
           </Card>
 
