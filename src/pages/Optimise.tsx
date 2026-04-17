@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
-import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, ArrowRight, Zap, Apple, Globe, ChevronRight, Settings2, ListOrdered, BrainCircuit, AlignLeft, Check, LayoutList, LayoutGrid, ChevronLeft, Briefcase } from 'lucide-react';
+import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, ArrowRight, Zap, Apple, Globe, ChevronRight, Settings2, ListOrdered, BrainCircuit, AlignLeft, Check, LayoutList, LayoutGrid, ChevronLeft, Briefcase, CheckSquare, Square } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { format } from 'date-fns';
@@ -150,6 +150,15 @@ const Optimise = () => {
     setSelectedChanges(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
   };
 
+  const toggleAll = () => {
+    if (!optimisationResult?.changes) return;
+    if (selectedChanges.length === optimisationResult.changes.length) {
+      setSelectedChanges([]);
+    } else {
+      setSelectedChanges(optimisationResult.changes.map((c: any) => c.event_id));
+    }
+  };
+
   return (
     <Layout>
       <div className="max-w-4xl mx-auto">
@@ -252,12 +261,33 @@ const Optimise = () => {
               </div>
             </div>
 
-            <Tabs defaultValue="list" className="w-full">
-              <TabsList className="bg-gray-100 p-1 rounded-2xl mb-8">
-                <TabsTrigger value="list" className="rounded-xl px-6 py-2 data-[state=active]:bg-white flex gap-2"><LayoutList size={18} />List View</TabsTrigger>
-                <TabsTrigger value="visual" className="rounded-xl px-6 py-2 data-[state=active]:bg-white flex gap-2"><LayoutGrid size={18} />Visual Timeline</TabsTrigger>
-              </TabsList>
+            <div className="flex items-center justify-between bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+              <div className="flex items-center gap-3">
+                <Button 
+                  variant="ghost" 
+                  onClick={toggleAll} 
+                  className="flex items-center gap-2 font-bold text-indigo-600 hover:bg-indigo-50 rounded-xl"
+                >
+                  {selectedChanges.length === optimisationResult.changes.length ? (
+                    <><CheckSquare size={20} /> Deselect All</>
+                  ) : (
+                    <><Square size={20} /> Select All</>
+                  )}
+                </Button>
+                <span className="text-sm text-gray-400 font-medium">
+                  {selectedChanges.length} of {optimisationResult.changes.length} tasks selected
+                </span>
+              </div>
+              
+              <Tabs defaultValue="list" className="w-auto">
+                <TabsList className="bg-gray-100 p-1 rounded-xl">
+                  <TabsTrigger value="list" className="rounded-lg px-4 py-1.5 data-[state=active]:bg-white flex gap-2 text-xs"><LayoutList size={14} />List</TabsTrigger>
+                  <TabsTrigger value="visual" className="rounded-lg px-4 py-1.5 data-[state=active]:bg-white flex gap-2 text-xs"><LayoutGrid size={14} />Visual</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </div>
 
+            <Tabs defaultValue="list" className="w-full">
               <TabsContent value="list" className="space-y-4">
                 {optimisationResult.changes.map((change: any, i: number) => {
                   const isApplied = appliedChanges.includes(change.event_id);
