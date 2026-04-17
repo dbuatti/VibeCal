@@ -30,60 +30,82 @@ serve(async (req) => {
     const { data: { user }, error: userError } = await supabaseClient.auth.getUser()
     if (userError || !user) throw userError || new Error('User not found');
 
+    // 1. Discover Google Calendars
+    const listRes = await fetch(
+      'https://www.googleapis.com/calendar/v3/users/me/calendarList',
+      { headers: { Authorization: `Bearer ${googleAccessToken}` } }
+    )
+    const listData = await listRes.json()
+    const discovered = (listData.items || []).map(cal => ({
+      user_id: user.id,
+      calendar_id: cal.id,
+      calendar_name: cal.summary,
+      provider: 'google'
+    }))
+
+    if (discovered.length > 0) {
+      await supabaseClient
+        .from('user_calendars')
+        .upsert(discovered, { onConflict: 'user_id, calendar_id' })
+    }
+
+    // 2. Fetch enabled Google calendars
+    const { data: enabled } = await supabaseClient
+      .from('user_calendars')
+      .select('calendar_id, calendar_name')
+      .eq('user_id', user.id)
+      .eq('is_enabled', true)
+      .eq('provider', 'google')
+
+    const enabledMap = new Map(enabled?.map(c => [c.calendar_id, c.calendar_name]) || [])
+    const enabledIds = Array.from(enabledMap.keys())
+
+    if (enabledIds.length === 0) {
+      return new Response(JSON.stringify({ message: 'No Google calendars enabled', count: 0 }), { headers: corsHeaders })
+    }
+
+    // 3. Fetch events for enabled calendars
     const now = new Date()
     const fourteenDaysLater = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
     
-    const response = await fetch(
-      `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${now.toISOString()}&timeMax=${fourteenDaysLater.toISOString()}&singleEvents=true&orderBy=startTime`,
-      { headers: { Authorization: `Bearer ${googleAccessToken}` } }
-    )
-
-    if (!response.ok) throw new Error(`Google API Error: ${response.statusText}`)
-
-    const data = await response.json()
-    const events = data.items || []
-
-    const formattedEvents = events.map((event: any) => {
-      const start = new Date(event.start.dateTime || event.start.date)
-      const end = new Date(event.end.dateTime || event.end.date)
-      const durationMinutes = Math.round((end.getTime() - start.getTime()) / 60000)
+    const allEvents = []
+    for (const calId of enabledIds) {
+      const response = await fetch(
+        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?timeMin=${now.toISOString()}&timeMax=${fourteenDaysLater.toISOString()}&singleEvents=true&orderBy=startTime`,
+        { headers: { Authorization: `Bearer ${googleAccessToken}` } }
+      )
+      const data = await response.json()
+      const events = data.items || []
       
-      // SMART LOCK LOGIC:
-      // 1. Recurring events are locked
-      // 2. Events with other people (attendees) are locked
-      // 3. Events explicitly marked as "Busy" (transparency is undefined/opaque) 
-      //    vs "Free" (transparency is 'transparent')
-      const isRecurring = !!event.recurringEventId;
-      const hasAttendees = !!event.attendees && event.attendees.length > 1;
-      const isBusy = event.transparency !== 'transparent';
-      
-      // Heuristic: If it's a "Session", "Lecture", or "Audition", it's likely fixed
-      const title = event.summary || 'Untitled Event';
-      const isLikelyFixed = /session|lecture|audition|work session|gig|call/i.test(title);
+      events.forEach(event => {
+        const start = new Date(event.start.dateTime || event.start.date)
+        const end = new Date(event.end.dateTime || event.end.date)
+        
+        allEvents.push({
+          user_id: user.id,
+          event_id: event.id,
+          title: event.summary || 'Untitled Event',
+          description: event.description || '',
+          start_time: start.toISOString(),
+          end_time: end.toISOString(),
+          duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000),
+          is_recurring: !!event.recurringEventId,
+          is_locked: !!event.recurringEventId || (!!event.attendees && event.attendees.length > 1),
+          provider: 'google',
+          source_calendar: enabledMap.get(calId),
+          last_synced_at: new Date().toISOString()
+        })
+      })
+    }
 
-      return {
-        user_id: user.id,
-        event_id: event.id,
-        title: title,
-        description: event.description || '',
-        start_time: start.toISOString(),
-        end_time: end.toISOString(),
-        duration_minutes: durationMinutes,
-        is_recurring: isRecurring,
-        is_locked: isRecurring || hasAttendees || isLikelyFixed,
-        source_calendar: 'primary',
-        last_synced_at: new Date().toISOString()
-      }
-    })
-
-    if (formattedEvents.length > 0) {
+    if (allEvents.length > 0) {
       await supabaseClient
         .from('calendar_events_cache')
-        .upsert(formattedEvents, { onConflict: 'user_id, event_id' })
+        .upsert(allEvents, { onConflict: 'user_id, event_id' })
     }
 
     return new Response(
-      JSON.stringify({ message: 'Sync successful', count: formattedEvents.length }),
+      JSON.stringify({ message: 'Sync successful', count: allEvents.length, events: allEvents }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (error) {

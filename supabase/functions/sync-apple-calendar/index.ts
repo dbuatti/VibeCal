@@ -115,7 +115,7 @@ serve(async (req) => {
       }
     }
 
-    // Upsert discovered calendars so user can see them in settings
+    // Upsert discovered calendars
     if (discoveredCalendars.length > 0) {
       await supabaseClient
         .from('user_calendars')
@@ -125,12 +125,13 @@ serve(async (req) => {
     // Fetch user's enabled calendars
     const { data: enabledCalendars } = await supabaseClient
       .from('user_calendars')
-      .select('calendar_id')
+      .select('calendar_id, calendar_name')
       .eq('user_id', user.id)
       .eq('is_enabled', true)
       .eq('provider', 'apple');
 
-    const enabledPaths = enabledCalendars?.map(c => c.calendar_id) || [];
+    const enabledMap = new Map(enabledCalendars?.map(c => [c.calendar_id, c.calendar_name]) || []);
+    const enabledPaths = Array.from(enabledMap.keys());
 
     if (enabledPaths.length === 0) {
       return new Response(
@@ -139,7 +140,7 @@ serve(async (req) => {
       );
     }
 
-    // 4. Fetch events only for enabled calendars
+    // 4. Fetch events
     const now = new Date();
     const start = now.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const end = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
@@ -159,6 +160,7 @@ serve(async (req) => {
 
     const fetchPromises = enabledPaths.map(async (path) => {
       const calUrl = getFullUrl(path, homeSetUrl);
+      const calName = enabledMap.get(path);
       try {
         const response = await fetch(calUrl, {
           method: 'REPORT',
@@ -199,7 +201,7 @@ serve(async (req) => {
                 duration_minutes: Math.round((endDate.getTime() - startDate.getTime()) / 60000),
                 is_locked: true,
                 provider: 'apple',
-                source_calendar: path,
+                source_calendar: calName, // Use the human-readable name
                 last_synced_at: new Date().toISOString()
               });
             } catch (e) {
