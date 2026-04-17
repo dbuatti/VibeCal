@@ -72,8 +72,8 @@ serve(async (req) => {
     const end = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
     const eventMap = new Map();
 
-    // Shared locking logic
-    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|gig|work session|q & a|weekly/i;
+    // Shared locking logic - Removed 'gig' from default fixed keywords
+    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly/i;
     const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i, /[\u{1F300}-\u{1F9FF}]/u];
 
     for (const cal of enabled) {
