@@ -87,19 +87,25 @@ serve(async (req) => {
     const calendarsRes = await fetch(homeSetUrl, {
       method: 'PROPFIND',
       headers: { 'Authorization': `Basic ${auth}`, 'Depth': '1' },
-      body: `<?xml version="1.0" encoding="utf-8" ?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/></d:prop></d:propfind>`
+      body: `<?xml version="1.0" encoding="utf-8" ?>
+        <d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+          <d:prop>
+            <d:displayname/>
+            <d:resourcetype/>
+          </d:prop>
+        </d:propfind>`
     });
     const calendarsXml = await calendarsRes.text();
     
-    // More robust calendar matching
     const calendarResponses = calendarsXml.split('<d:response>');
     const discoveredCals = [];
     
     for (const resp of calendarResponses) {
       const href = resp.match(/<d:href>([^<]+)<\/d:href>/i)?.[1];
       const name = resp.match(/<d:displayname>([^<]+)<\/d:displayname>/i)?.[1];
+      const isCalendar = resp.includes('calendar') && !resp.includes('schedule-inbox') && !resp.includes('schedule-outbox');
       
-      if (href && name && (href.includes('calendar') || href.includes('tasks') || href.split('/').length > 4)) {
+      if (href && name && isCalendar) {
         discoveredCals.push({
           user_id: user.id,
           calendar_id: href,
@@ -130,17 +136,29 @@ serve(async (req) => {
 
     // 4. Fetch Events
     const syncStartTime = new Date();
-    syncStartTime.setDate(syncStartTime.getDate() - 7); // Look back 7 days to be safe
+    syncStartTime.setDate(syncStartTime.getDate() - 7);
     const syncEndTime = new Date();
     syncEndTime.setDate(syncEndTime.getDate() + 365);
     
     const startStr = syncStartTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endStr = syncEndTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
+    // FIXED XML: Removed the invalid </expand> closing tag
     const reportXml = `
       <c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
-        <d:prop><d:getetag /><c:calendar-data><c:expand start="${startStr}" end="${endStr}"/></c:expand></c:calendar-data></d:prop>
-        <c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"><c:time-range start="${startStr}" end="${endStr}"/></c:comp-filter></c:comp-filter></c:filter>
+        <d:prop>
+          <d:getetag />
+          <c:calendar-data>
+            <c:expand start="${startStr}" end="${endStr}"/>
+          </c:calendar-data>
+        </d:prop>
+        <c:filter>
+          <c:comp-filter name="VCALENDAR">
+            <c:comp-filter name="VEVENT">
+              <c:time-range start="${startStr}" end="${endStr}"/>
+            </c:comp-filter>
+          </c:comp-filter>
+        </c:filter>
       </c:calendar-query>
     `;
 
@@ -159,13 +177,12 @@ serve(async (req) => {
       });
       
       if (!res.ok) {
-        console.error(`[${functionName}] Error fetching calendar "${cal.calendar_name}": ${res.status}`);
+        const errText = await res.text();
+        console.error(`[${functionName}] Error fetching calendar "${cal.calendar_name}": ${res.status}`, errText);
         continue;
       }
 
       const xml = await res.text();
-      
-      // Robust ICS parsing
       const eventDataMatches = xml.matchAll(/<c:calendar-data>([\s\S]*?)<\/c:calendar-data>/gi);
       
       for (const match of eventDataMatches) {
@@ -173,7 +190,7 @@ serve(async (req) => {
         const eventBlocks = ics.split('BEGIN:VEVENT');
         
         for (let i = 1; i < eventBlocks.length; i++) {
-          const block = eventBlocks[i].replace(/\r?\n[ \t]/g, ''); // Unfold lines
+          const block = eventBlocks[i].replace(/\r?\n[ \t]/g, '');
           
           const getProp = (prop) => {
             const re = new RegExp(`^${prop}(?:;[^:]*)?:(.*)$`, 'im');
@@ -194,12 +211,11 @@ serve(async (req) => {
               if (dtEnd) {
                 end = parseIcsDate(dtEnd, userTimezone);
               } else if (duration) {
-                // Simple duration parser (e.g., PT1H)
                 const hours = parseInt(duration.match(/(\d+)H/)?.[1] || '0');
                 const mins = parseInt(duration.match(/(\d+)M/)?.[1] || '0');
                 end = new Date(start.getTime() + (hours * 60 + mins) * 60 * 1000);
               } else {
-                end = new Date(start.getTime() + 60 * 60 * 1000); // Default 1h
+                end = new Date(start.getTime() + 60 * 60 * 1000);
               }
               
               const isExplicitlyMovable = movableKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
@@ -232,20 +248,15 @@ serve(async (req) => {
     console.log(`[${functionName}] Total unique events found: ${uniqueEvents.length}`);
 
     if (uniqueEvents.length > 0) {
-      const { error: upsertError } = await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
-      if (upsertError) {
-        console.error(`[${functionName}] Upsert error:`, upsertError.message);
-      } else {
-        // Only cleanup if we actually got data back to prevent accidental wipes
-        await supabaseAdmin.from('calendar_events_cache')
-          .delete()
-          .eq('user_id', user.id)
-          .eq('provider', 'apple')
-          .lt('last_synced_at', syncTimestamp);
-      }
+      await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
+      
+      await supabaseAdmin.from('calendar_events_cache')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('provider', 'apple')
+        .lt('last_synced_at', syncTimestamp);
     }
 
-    console.log(`[${functionName}] FINISHED - Cached ${uniqueEvents.length} unique events from Apple.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders });
   } catch (error) {
     console.error(`[${functionName}] FATAL ERROR:`, error.message);
@@ -254,11 +265,6 @@ serve(async (req) => {
 });
 
 function parseIcsDate(icsDate, timezone) {
-  // Handle formats like:
-  // 20260421T103000Z
-  // TZID=Australia/Melbourne:20260421T103000
-  // 20260421
-  
   const dateStr = icsDate.split(':').pop().trim();
   const y = parseInt(dateStr.substring(0, 4));
   const m = parseInt(dateStr.substring(4, 6)) - 1;
@@ -273,26 +279,8 @@ function parseIcsDate(icsDate, timezone) {
       return new Date(Date.UTC(y, m, d, h, min, s));
     }
     
-    // Floating time or specific TZID
-    // We'll treat it as local to the user's timezone
-    const localDate = new Date(y, m, d, h, min, s);
-    
-    // If we have a TZID in the string, we should ideally use it, 
-    // but for now, we'll use the user's profile timezone
-    try {
-      const formatter = new Intl.DateTimeFormat('en-US', { 
-        timeZone: timezone, 
-        year: 'numeric', month: 'numeric', day: 'numeric', 
-        hour: 'numeric', minute: 'numeric', second: 'numeric', 
-        hour12: false 
-      });
-      // This is a simplified conversion
-      return localDate; 
-    } catch (e) {
-      return localDate;
-    }
+    return new Date(y, m, d, h, min, s);
   }
   
-  // All-day event
   return new Date(y, m, d);
 }
