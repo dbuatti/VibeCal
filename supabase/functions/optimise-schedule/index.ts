@@ -16,8 +16,10 @@ serve(async (req) => {
     console.log("[optimise-schedule] Starting intelligent redistribution...");
     
     const authHeader = req.headers.get('Authorization')
-    const { durationOverride, maxTasksOverride } = await req.json();
+    const { durationOverride, maxTasksOverride, slotAlignment = 15 } = await req.json();
     
+    console.log(`[optimise-schedule] Config: duration=${durationOverride}, maxTasks=${maxTasksOverride}, alignment=${slotAlignment}m`);
+
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_ANON_KEY') ?? '',
@@ -40,6 +42,7 @@ serve(async (req) => {
     const movableEvents = allEvents.filter(e => !e.is_locked);
 
     if (movableEvents.length === 0) {
+      console.log("[optimise-schedule] No movable events to process.");
       return new Response(JSON.stringify({ message: 'No movable events found.', changes: [] }), { headers: corsHeaders });
     }
 
@@ -49,6 +52,12 @@ serve(async (req) => {
       const tzDate = new Date(date.toLocaleString('en-US', { timeZone: userTimezone }));
       const diff = tzDate.getTime() - date.getTime();
       return Math.round(diff / 3600000);
+    };
+
+    // Helper to snap time to alignment (e.g. 14:10 -> 14:15 or 14:30)
+    const alignTime = (date, alignmentMinutes) => {
+      const ms = alignmentMinutes * 60 * 1000;
+      return new Date(Math.ceil(date.getTime() / ms) * ms);
     };
 
     // Start from tomorrow
@@ -70,6 +79,8 @@ serve(async (req) => {
       let foundSlot = false;
       let attempts = 0;
 
+      console.log(`[optimise-schedule] Processing task: "${event.title}" (${effectiveDuration}m)`);
+
       while (!foundSlot && attempts < 14) {
         const dayKey = currentPointer.toISOString().split('T')[0];
         const offset = getOffset(currentPointer);
@@ -77,9 +88,11 @@ serve(async (req) => {
         if (!dailyStats.has(dayKey)) {
           dailyStats.set(dayKey, { tasks: 0, hours: 0 });
           currentPointer.setUTCHours(startH - offset, startM, 0, 0);
+          // Ensure start of day is aligned
+          currentPointer = alignTime(currentPointer, slotAlignment);
         }
+        
         const stats = dailyStats.get(dayKey);
-
         const dayEnd = new Date(currentPointer);
         dayEnd.setUTCHours(endH - offset, endM, 0, 0);
 
@@ -92,8 +105,10 @@ serve(async (req) => {
         const pastTasksLimit = stats.tasks >= maxTasks;
 
         if (pastWorkday || pastHoursLimit || pastTasksLimit) {
+          console.log(`[optimise-schedule] Day ${dayKey} full or past limit. Moving to next day.`);
           currentPointer.setUTCDate(currentPointer.getUTCDate() + 1);
           currentPointer.setUTCHours(startH - offset, startM, 0, 0);
+          currentPointer = alignTime(currentPointer, slotAlignment);
           attempts++;
           continue;
         }
@@ -106,11 +121,14 @@ serve(async (req) => {
         });
 
         if (collision) {
-          currentPointer = new Date(new Date(collision.end_time).getTime() + 10 * 60000);
+          console.log(`[optimise-schedule] Collision with "${collision.title}" at ${currentPointer.toISOString()}. Jumping past it.`);
+          currentPointer = new Date(new Date(collision.end_time).getTime() + 1 * 60000); // 1 min buffer
+          currentPointer = alignTime(currentPointer, slotAlignment);
         } else {
           foundSlot = true;
           stats.tasks += 1;
           stats.hours += (effectiveDuration / 60);
+          console.log(`[optimise-schedule] Slot found: ${currentPointer.toISOString()} to ${potentialEnd.toISOString()}`);
         }
       }
 
@@ -124,7 +142,9 @@ serve(async (req) => {
           new_end: new Date(currentPointer.getTime() + durationMs).toISOString(),
           duration: effectiveDuration
         });
-        currentPointer = new Date(currentPointer.getTime() + durationMs + 10 * 60000);
+        // Move pointer for next task and align it
+        currentPointer = new Date(currentPointer.getTime() + durationMs + 5 * 60000); // 5 min gap
+        currentPointer = alignTime(currentPointer, slotAlignment);
       }
     }
 
@@ -136,6 +156,7 @@ serve(async (req) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (error) {
+    console.error("[optimise-schedule] Fatal Error:", error);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders })
   }
 })

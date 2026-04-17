@@ -7,7 +7,7 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, ArrowRight, Zap, Apple, Globe, ChevronRight, Settings2, ListOrdered, BrainCircuit } from 'lucide-react';
+import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, ArrowRight, Zap, Apple, Globe, ChevronRight, Settings2, ListOrdered, BrainCircuit, AlignLeft } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { format } from 'date-fns';
@@ -26,6 +26,7 @@ const Optimise = () => {
   // Requirements state
   const [durationOverride, setDurationOverride] = useState<string>("original");
   const [maxTasksOverride, setMaxTasksOverride] = useState<number>(5);
+  const [slotAlignment, setSlotAlignment] = useState<string>("15");
 
   // Step 1: Analyse Calendar
   const runAnalysis = async () => {
@@ -82,7 +83,7 @@ const Optimise = () => {
         .upsert({ 
           user_id: user.id, 
           task_name: taskName, 
-          is_movable: currentStatus // If it was locked, we are unlocking it (making it movable)
+          is_movable: currentStatus 
         }, { onConflict: 'user_id, task_name' });
 
       setEvents(events.map(e => e.event_id === eventId ? { ...e, is_locked: !currentStatus } : e));
@@ -136,7 +137,8 @@ const Optimise = () => {
       const { data, error } = await supabase.functions.invoke('optimise-schedule', {
         body: { 
           durationOverride: durationOverride === "original" ? null : parseInt(durationOverride),
-          maxTasksOverride: maxTasksOverride
+          maxTasksOverride: maxTasksOverride,
+          slotAlignment: parseInt(slotAlignment)
         }
       });
       
@@ -358,6 +360,25 @@ const Optimise = () => {
                         <SelectItem value="30">30 Minute Blocks</SelectItem>
                         <SelectItem value="45">45 Minute Blocks</SelectItem>
                         <SelectItem value="60">60 Minute Blocks</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-4">
+                    <Label className="text-lg font-bold flex items-center gap-2">
+                      <AlignLeft className="text-indigo-600" size={20} />
+                      Slot Alignment
+                    </Label>
+                    <p className="text-sm text-gray-500 mb-4">Ensure tasks start on clean intervals (e.g. on the hour).</p>
+                    <Select value={slotAlignment} onValueChange={setSlotAlignment}>
+                      <SelectTrigger className="h-14 rounded-2xl border-gray-200 font-bold">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="1">No Alignment (Freeform)</SelectItem>
+                        <SelectItem value="15">Every 15 Minutes</SelectItem>
+                        <SelectItem value="30">Every 30 Minutes</SelectItem>
+                        <SelectItem value="60">On the Hour (60m)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
