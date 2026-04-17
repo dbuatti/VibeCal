@@ -23,7 +23,6 @@ serve(async (req) => {
     const { data: { user } } = await supabaseUser.auth.getUser()
     if (!user) throw new Error("Unauthorized");
 
-    // Fetch existing events to preserve is_locked status
     const { data: existingEvents } = await supabaseAdmin
       .from('calendar_events_cache')
       .select('event_id, is_locked')
@@ -57,7 +56,8 @@ serve(async (req) => {
     const eventMap = new Map();
     const syncTimestamp = new Date().toISOString();
     
-    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga|show|tech|dress|night|opening|closing|birthday|party|gala|buffer|probe|experiment|quinceanera|🎭|✨/i;
+    // Expanded fixed keywords to catch more common non-movable events
+    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga|show|tech|dress|night|opening|closing|birthday|party|gala|buffer|probe|experiment|quinceanera|🎭|✨|lunch|dinner|breakfast|brunch|bump in|performance|gig|concert/i;
     const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i];
 
     for (const cal of enabledCalendars) {
@@ -71,7 +71,6 @@ serve(async (req) => {
           let end = event.end.dateTime ? new Date(event.end.dateTime) : new Date(event.end.date + "T09:30:00");
           if (start < syncStartTime) return;
 
-          // PERSISTENCE LOGIC: If we already have this event, keep its current is_locked status
           let isLocked = existingLockStatus.has(event.id) ? existingLockStatus.get(event.id) : null;
 
           if (isLocked === null) {

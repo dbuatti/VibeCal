@@ -31,7 +31,6 @@ serve(async (req) => {
     const { data: { user } } = await supabaseUser.auth.getUser()
     if (!user) throw new Error("Unauthorized");
 
-    // Fetch existing events to preserve is_locked status
     const { data: existingEvents } = await supabaseAdmin
       .from('calendar_events_cache')
       .select('event_id, is_locked')
@@ -102,12 +101,10 @@ serve(async (req) => {
     }
     if (discoveredCals.length > 0) await supabaseAdmin.from('user_calendars').upsert(discoveredCals, { onConflict: 'user_id, calendar_id' });
 
-    // 3. Get Enabled Calendars
     const { data: enabled } = await supabaseAdmin.from('user_calendars').select('calendar_id, calendar_name, is_enabled').eq('user_id', user.id).eq('provider', 'apple');
     const enabledCalendars = (enabled || []).filter(c => c.is_enabled);
     if (enabledCalendars.length === 0) return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
 
-    // 4. Fetch Events
     const syncStartTime = new Date();
     syncStartTime.setHours(0, 0, 0, 0);
     const syncEndTime = new Date();
@@ -122,7 +119,7 @@ serve(async (req) => {
       </c:calendar-query>
     `;
 
-    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga|show|tech|dress|night|opening|closing|birthday|party|gala|buffer|probe|experiment|quinceanera|🎭|✨/i;
+    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga|show|tech|dress|night|opening|closing|birthday|party|gala|buffer|probe|experiment|quinceanera|🎭|✨|lunch|dinner|breakfast|brunch|bump in|performance|gig|concert/i;
     const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i];
 
     const eventMap = new Map();
@@ -180,9 +177,10 @@ serve(async (req) => {
           let end = parseIcsDate(dtendMatch?.[1]?.trim(), tzidMatch?.[1], userTimezone);
           if (!end) end = new Date(start.getTime() + 30 * 60000);
           const uid = uidMatch[1].trim();
-          const uniqueId = `${uid}-${start.getTime()}`;
           
-          // PERSISTENCE LOGIC: If we already have this event, keep its current is_locked status
+          // Use UID as the primary key for stability, but keep the start time in the map key for uniqueness if needed
+          const uniqueId = uid; 
+          
           let isLocked = existingLockStatus.has(uniqueId) ? existingLockStatus.get(uniqueId) : null;
           
           if (isLocked === null) {
