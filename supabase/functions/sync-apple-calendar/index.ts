@@ -35,8 +35,9 @@ serve(async (req) => {
     }
 
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
-    const baseUrl = "https://caldav.icloud.com";
+    const initialBase = "https://caldav.icloud.com";
 
+    // Helper to build full URLs using the current server shard
     const getFullUrl = (path: string, currentBase: string) => {
       if (path.startsWith('http')) return path;
       const urlObj = new URL(currentBase);
@@ -45,7 +46,7 @@ serve(async (req) => {
 
     // 1. Find the Principal URL
     console.log("[sync-apple-calendar] Step 1: Finding Principal...");
-    const principalRes = await fetch(baseUrl, {
+    const principalRes = await fetch(initialBase, {
       method: 'PROPFIND',
       headers: {
         'Authorization': `Basic ${auth}`,
@@ -60,7 +61,9 @@ serve(async (req) => {
     const principalPath = principalXml.match(/current-user-principal[^>]*>\s*<[^>]*href[^>]*>([^<]+)/i)?.[1];
     if (!principalPath) throw new Error("Could not find Principal path.");
     
-    const principalUrl = getFullUrl(principalPath, baseUrl);
+    // Important: principalRes.url might be a redirected shard URL (e.g. p46-caldav)
+    const principalUrl = getFullUrl(principalPath, principalRes.url);
+    console.log("[sync-apple-calendar] Principal URL:", principalUrl);
 
     // 2. Find the Calendar Home Set
     console.log("[sync-apple-calendar] Step 2: Finding Calendar Home Set...");
@@ -78,7 +81,8 @@ serve(async (req) => {
     const homeSetPath = homeSetXml.match(/calendar-home-set[^>]*>\s*<[^>]*href[^>]*>([^<]+)/i)?.[1];
     if (!homeSetPath) throw new Error("Could not find Calendar Home Set.");
     
-    const homeSetUrl = getFullUrl(homeSetPath, principalUrl);
+    const homeSetUrl = getFullUrl(homeSetPath, homeSetRes.url);
+    console.log("[sync-apple-calendar] Home Set URL:", homeSetUrl);
 
     // 3. Find individual calendars within the Home Set
     console.log("[sync-apple-calendar] Step 3: Listing individual calendars...");
@@ -93,23 +97,23 @@ serve(async (req) => {
     });
 
     const listXml = await listRes.text();
-    // Log snippet for debugging if it fails
-    console.log("[sync-apple-calendar] List XML Snippet:", listXml.substring(0, 1000));
-
     const calendarPaths = [];
-    // Split by response tag to isolate each resource
     const responses = listXml.split(/<[^:]*:response>/i);
     
+    // Normalize homeSetPath for comparison (remove trailing slash)
+    const normHomePath = homeSetPath.replace(/\/$/, '');
+
     for (const resp of responses) {
-      // Look for resourcetype containing 'calendar'
-      if (resp.toLowerCase().includes('calendar') && resp.toLowerCase().includes('resourcetype')) {
-        // Extract href - handle both prefixed <D:href> and plain <href>
-        const hrefMatch = resp.match(/<[^>]*href[^>]*>([^<]+)/i);
+      // Look for the specific 'calendar' resource type tag
+      if (resp.includes(':calendar') || resp.includes('<calendar')) {
+        const hrefMatch = resp.match(/<[^:]*:href[^>]*>([^<]+)/i);
         const href = hrefMatch?.[1];
         
-        // Only add if it's not the home set itself and not already added
-        if (href && href !== homeSetPath && !calendarPaths.includes(href)) {
-          calendarPaths.push(href);
+        if (href) {
+          const normHref = href.replace(/\/$/, '');
+          if (normHref !== normHomePath && !calendarPaths.includes(href)) {
+            calendarPaths.push(href);
+          }
         }
       }
     }
@@ -117,9 +121,7 @@ serve(async (req) => {
     console.log(`[sync-apple-calendar] Found ${calendarPaths.length} individual calendars.`);
 
     if (calendarPaths.length === 0) {
-      console.warn("[sync-apple-calendar] No individual calendars found. This usually causes a 403 on the next step.");
-      // Fallback to home set if nothing found, though likely to 403
-      calendarPaths.push(homeSetPath);
+      throw new Error("No individual calendars found. Please ensure you have at least one calendar in iCloud.");
     }
 
     // 4. Fetch events from each calendar
