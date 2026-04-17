@@ -37,7 +37,7 @@ serve(async (req) => {
     if (!user) throw new Error("Unauthorized");
 
     // 1. Discover/Update Calendar List
-    console.log("[sync-calendar] Fetching calendar list...");
+    console.log("[sync-calendar] Fetching calendar list from Google...");
     const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
       headers: { Authorization: `Bearer ${googleAccessToken}` }
     })
@@ -58,12 +58,12 @@ serve(async (req) => {
         color: cal.backgroundColor || '#6366f1'
       }))
       
-      // Upsert discovered calendars
+      // Upsert discovered calendars - this will also fix the 'provider' if it was wrong
       const { error: upsertError } = await supabaseAdmin.from('user_calendars').upsert(discovered, { onConflict: 'user_id, calendar_id' });
       if (upsertError) console.error("[sync-calendar] Error upserting calendars:", upsertError);
     }
 
-    // 2. Get Enabled Calendars from DB
+    // 2. Get Enabled Calendars from DB (Strictly Google)
     const { data: enabled } = await supabaseAdmin
       .from('user_calendars')
       .select('calendar_id, calendar_name')
@@ -72,11 +72,11 @@ serve(async (req) => {
       .eq('provider', 'google')
 
     if (!enabled || enabled.length === 0) {
-      console.log("[sync-calendar] No Google calendars are enabled in settings.");
+      console.log("[sync-calendar] No Google calendars are enabled.");
       return new Response(JSON.stringify({ message: 'No Google calendars enabled', count: 0 }), { headers: corsHeaders })
     }
 
-    // Clear Google cache for this user before re-syncing
+    // Clear Google cache for this user
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google');
 
     // 3. Fetch Events
@@ -85,6 +85,12 @@ serve(async (req) => {
     const eventMap = new Map();
 
     for (const cal of enabled) {
+      // Skip IDs that clearly aren't Google IDs (like 'icloud-personal')
+      if (cal.calendar_id.includes('icloud')) {
+        console.warn(`[sync-calendar] Skipping invalid Google ID: ${cal.calendar_id}`);
+        continue;
+      }
+
       const encodedId = encodeURIComponent(cal.calendar_id);
       console.log(`[sync-calendar] Fetching events for: ${cal.calendar_name} (ID: ${cal.calendar_id})`);
       
@@ -96,11 +102,7 @@ serve(async (req) => {
       const data = await res.json()
       
       if (data.error) {
-        if (data.code === 404) {
-          console.warn(`[sync-calendar] Calendar not found (404): ${cal.calendar_name}. Skipping.`);
-        } else {
-          console.error(`[sync-calendar] Google API Error (Events for ${cal.calendar_name}):`, data.error);
-        }
+        console.error(`[sync-calendar] Google API Error (Events for ${cal.calendar_name}):`, data.error);
         continue;
       }
 
@@ -127,14 +129,8 @@ serve(async (req) => {
     }
 
     const uniqueEvents = Array.from(eventMap.values());
-    console.log(`[sync-calendar] Total unique events to cache: ${uniqueEvents.length}`);
-
     if (uniqueEvents.length > 0) {
-      const { error: insertError } = await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' })
-      if (insertError) {
-        console.error("[sync-calendar] Database Error:", insertError);
-        throw insertError;
-      }
+      await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' })
     }
 
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders })

@@ -1,0 +1,1 @@
+ALTER TABLE public.user_calendars ADD COLUMN IF NOT EXISTS color TEXT;
