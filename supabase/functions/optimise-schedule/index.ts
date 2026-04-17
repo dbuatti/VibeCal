@@ -14,10 +14,10 @@ serve(async (req) => {
   }
 
   try {
-    console.log("[optimise-schedule] Starting theme-aware redistribution with workload awareness...");
+    console.log("[optimise-schedule] Starting theme-aware redistribution with surplus handling...");
     
     const authHeader = req.headers.get('Authorization')
-    const { durationOverride, maxTasksOverride, slotAlignment = 15, selectedDays = [1, 2, 3, 4, 5] } = await req.json();
+    const { durationOverride, maxTasksOverride, slotAlignment = 15, selectedDays = [1, 2, 3, 4, 5], placeholderDate } = await req.json();
     
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -105,13 +105,16 @@ serve(async (req) => {
       }
     });
 
+    let surplusCount = 0;
+
     for (const event of categorizedEvents) {
       const effectiveDuration = durationOverride || event.duration_minutes;
       const durationMs = effectiveDuration * 60000;
       let foundSlot = false;
       let dayOffset = 1;
 
-      while (!foundSlot && dayOffset < 30) {
+      // Search window: next 7 days
+      while (!foundSlot && dayOffset <= 7) {
         let currentPointer = new Date();
         currentPointer.setDate(currentPointer.getDate() + dayOffset);
         currentPointer.setHours(0, 0, 0, 0);
@@ -142,7 +145,6 @@ serve(async (req) => {
           const potentialEnd = new Date(searchPointer.getTime() + durationMs);
           const pastWorkday = potentialEnd > dayEnd;
           
-          // Only enforce hours limit if the task is considered "work"
           const taskWorkHours = event.is_work ? (effectiveDuration / 60) : 0;
           const pastHoursLimit = (stats.hours + taskWorkHours) > maxWorkHours;
           const pastTasksLimit = stats.tasks >= maxTasks;
@@ -171,11 +173,36 @@ serve(async (req) => {
               new_start: searchPointer.toISOString(),
               new_end: potentialEnd.toISOString(),
               duration: effectiveDuration,
-              is_work: event.is_work
+              is_work: event.is_work,
+              is_surplus: false
             });
           }
         }
         if (!foundSlot) dayOffset++;
+      }
+
+      // If no slot found in the window, move to placeholder
+      if (!foundSlot && placeholderDate) {
+        const pDate = new Date(placeholderDate);
+        const offset = getOffset(pDate);
+        const [startH, startM] = settings.day_start_time.split(':').map(Number);
+        
+        const pStart = new Date(pDate);
+        pStart.setUTCHours(startH - offset, startM + surplusCount, 0, 0); // Stack with 1min offset
+        const pEnd = new Date(pStart.getTime() + durationMs);
+
+        proposedChanges.push({
+          event_id: event.event_id,
+          title: event.title,
+          old_start: event.start_time,
+          old_duration: event.duration_minutes,
+          new_start: pStart.toISOString(),
+          new_end: pEnd.toISOString(),
+          duration: effectiveDuration,
+          is_work: event.is_work,
+          is_surplus: true
+        });
+        surplusCount++;
       }
     }
 

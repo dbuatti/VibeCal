@@ -12,10 +12,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
-import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, ArrowRight, Zap, Apple, Globe, ChevronRight, Settings2, ListOrdered, BrainCircuit, AlignLeft, Check, LayoutList, LayoutGrid, ChevronLeft, Briefcase, CheckSquare, Square } from 'lucide-react';
+import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, ArrowRight, Zap, Apple, Globe, ChevronRight, Settings2, ListOrdered, BrainCircuit, AlignLeft, Check, LayoutList, LayoutGrid, ChevronLeft, Briefcase, CheckSquare, Square, Inbox } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
-import { format } from 'date-fns';
+import { format, nextSaturday } from 'date-fns';
 import { cn } from '@/lib/utils';
 import VisualSchedule from '@/components/VisualSchedule';
 
@@ -40,6 +40,7 @@ const Optimise = () => {
   const [maxTasksOverride, setMaxTasksOverride] = useState<number>(5);
   const [slotAlignment, setSlotAlignment] = useState<string>("15");
   const [selectedDays, setSelectedDays] = useState<number[]>([1, 2, 3, 4, 5]);
+  const [placeholderDate, setPlaceholderDate] = useState<string>(format(nextSaturday(new Date()), 'yyyy-MM-dd'));
 
   const toggleDay = (day: number) => {
     setSelectedDays(prev => prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day]);
@@ -103,12 +104,18 @@ const Optimise = () => {
     setStatusText('Calculating optimal alignment...');
     try {
       const { data, error } = await supabase.functions.invoke('optimise-schedule', {
-        body: { durationOverride: durationOverride === "original" ? null : parseInt(durationOverride), maxTasksOverride, slotAlignment: parseInt(slotAlignment), selectedDays }
+        body: { 
+          durationOverride: durationOverride === "original" ? null : parseInt(durationOverride), 
+          maxTasksOverride, 
+          slotAlignment: parseInt(slotAlignment), 
+          selectedDays,
+          placeholderDate // Pass the placeholder date to the edge function
+        }
       });
       if (error) throw error;
       setOptimisationResult(data);
       setAppliedChanges([]);
-      setSelectedChanges(data.changes.map((c: any) => c.event_id)); // Select all by default
+      setSelectedChanges(data.changes.map((c: any) => c.event_id));
       setCurrentStep('proposed');
       showSuccess("Optimisation complete!");
     } catch (err: any) { showError(err.message); }
@@ -230,6 +237,30 @@ const Optimise = () => {
                   ))}
                 </div>
               </div>
+
+              <div className="space-y-6 p-6 bg-indigo-50/50 rounded-3xl border border-indigo-100">
+                <Label className="text-lg font-bold flex items-center gap-2"><Inbox className="text-indigo-600" size={20} />Surplus Handling</Label>
+                <div className="space-y-4">
+                  <p className="text-sm text-gray-500 font-medium">If tasks exceed your daily limit, where should they go?</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label className="text-xs font-bold text-gray-400 uppercase">Placeholder Day</Label>
+                      <Input 
+                        type="date" 
+                        value={placeholderDate} 
+                        onChange={(e) => setPlaceholderDate(e.target.value)}
+                        className="h-12 rounded-xl border-gray-200 font-bold"
+                      />
+                    </div>
+                    <div className="flex items-end">
+                      <p className="text-xs text-indigo-600 font-bold bg-white p-3 rounded-xl border border-indigo-100">
+                        Surplus tasks will be stacked on this day for future shuffling.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
                 <div className="space-y-4">
                   <Label className="text-lg font-bold flex items-center gap-2"><Clock className="text-indigo-600" size={20} />Duration Override</Label>
@@ -292,8 +323,10 @@ const Optimise = () => {
                 {optimisationResult.changes.map((change: any, i: number) => {
                   const isApplied = appliedChanges.includes(change.event_id);
                   const isSelected = selectedChanges.includes(change.event_id);
+                  const isSurplus = change.is_surplus;
+
                   return (
-                    <Card key={i} className={cn("border-none shadow-sm bg-white rounded-2xl overflow-hidden group transition-all", isApplied && "opacity-50 grayscale")}>
+                    <Card key={i} className={cn("border-none shadow-sm bg-white rounded-2xl overflow-hidden group transition-all", isApplied && "opacity-50 grayscale", isSurplus && "border-l-4 border-l-amber-400")}>
                       <div className="flex flex-col md:flex-row">
                         <div className="p-6 flex-1 flex items-center gap-4">
                           <Checkbox checked={isSelected} onCheckedChange={() => toggleSelection(change.event_id)} disabled={isApplied} className="w-6 h-6 rounded-lg border-2 border-indigo-100 data-[state=checked]:bg-indigo-600" />
@@ -301,10 +334,11 @@ const Optimise = () => {
                             <div className="flex items-center gap-3 mb-2">
                               <h3 className="font-bold text-gray-900 text-lg">{change.title}</h3>
                               {change.is_work && <Badge variant="secondary" className="bg-amber-50 text-amber-700 border-amber-100 flex gap-1 items-center"><Briefcase size={10} /> Work</Badge>}
+                              {isSurplus && <Badge variant="secondary" className="bg-indigo-50 text-indigo-700 border-indigo-100 flex gap-1 items-center"><Inbox size={10} /> Surplus</Badge>}
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                               <div><p className="text-[10px] font-bold text-gray-400 uppercase">Current</p><p className="text-sm font-medium text-gray-500 line-through">{format(new Date(change.old_start), 'MMM d, HH:mm')}</p></div>
-                              <div><p className="text-[10px] font-bold text-indigo-400 uppercase">Proposed</p><p className="text-sm font-bold text-indigo-600">{format(new Date(change.new_start), 'MMM d, HH:mm')} → {format(new Date(change.new_end), 'HH:mm')}</p></div>
+                              <div><p className={cn("text-[10px] font-bold uppercase", isSurplus ? "text-amber-500" : "text-indigo-400")}>{isSurplus ? 'Placeholder' : 'Proposed'}</p><p className={cn("text-sm font-bold", isSurplus ? "text-amber-600" : "text-indigo-600")}>{format(new Date(change.new_start), 'MMM d, HH:mm')} → {format(new Date(change.new_end), 'HH:mm')}</p></div>
                             </div>
                           </div>
                         </div>
