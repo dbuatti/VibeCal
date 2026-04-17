@@ -11,6 +11,7 @@ import Settings from "./pages/Settings";
 import History from "./pages/History";
 import Login from "./pages/Login";
 import Plan from "./pages/Plan";
+import Vet from "./pages/Vet";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -20,13 +21,11 @@ const App = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setLoading(false);
     });
 
-    // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
     });
@@ -43,30 +42,13 @@ const App = () => {
         <Sonner />
         <BrowserRouter>
           <Routes>
-            <Route 
-              path="/login" 
-              element={!session ? <Login /> : <Navigate to="/" replace />} 
-            />
-            <Route 
-              path="/" 
-              element={session ? <Index /> : <Navigate to="/login" replace />} 
-            />
-            <Route 
-              path="/optimise" 
-              element={session ? <Optimise /> : <Navigate to="/login" replace />} 
-            />
-            <Route 
-              path="/plan" 
-              element={session ? <Plan /> : <Navigate to="/login" replace />} 
-            />
-            <Route 
-              path="/history" 
-              element={session ? <History /> : <Navigate to="/login" replace />} 
-            />
-            <Route 
-              path="/settings" 
-              element={session ? <Settings /> : <Navigate to="/login" replace />} 
-            />
+            <Route path="/login" element={!session ? <Login /> : <Navigate to="/" replace />} />
+            <Route path="/" element={session ? <Index /> : <Navigate to="/login" replace />} />
+            <Route path="/optimise" element={session ? <Optimise /> : <Navigate to="/login" replace />} />
+            <Route path="/plan" element={session ? <Plan /> : <Navigate to="/login" replace />} />
+            <Route path="/vet" element={session ? <Vet /> : <Navigate to="/login" replace />} />
+            <Route path="/history" element={session ? <History /> : <Navigate to="/login" replace />} />
+            <Route path="/settings" element={session ? <Settings /> : <Navigate to="/login" replace />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

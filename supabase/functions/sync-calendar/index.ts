@@ -23,6 +23,14 @@ serve(async (req) => {
     const { data: { user } } = await supabaseUser.auth.getUser()
     if (!user) throw new Error("Unauthorized");
 
+    // Fetch existing events to preserve is_locked status
+    const { data: existingEvents } = await supabaseAdmin
+      .from('calendar_events_cache')
+      .select('event_id, is_locked')
+      .eq('user_id', user.id);
+    
+    const existingLockStatus = new Map(existingEvents?.map(e => [e.event_id, e.is_locked]) || []);
+
     const { data: settings } = await supabaseAdmin.from('user_settings').select('movable_keywords, locked_keywords').eq('user_id', user.id).single();
     const movableKeywords = settings?.movable_keywords || [];
     const lockedKeywords = settings?.locked_keywords || [];
@@ -41,7 +49,6 @@ serve(async (req) => {
     const enabledCalendars = (enabled || []).filter(c => c.is_enabled);
     if (enabledCalendars.length === 0) return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
 
-    // SYNC FROM TODAY ONLY
     const syncStartTime = new Date();
     syncStartTime.setHours(0, 0, 0, 0);
     const syncEndTime = new Date();
@@ -50,7 +57,6 @@ serve(async (req) => {
     const eventMap = new Map();
     const syncTimestamp = new Date().toISOString();
     
-    // Safety net keywords for automatic locking
     const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga|show|tech|dress|night|opening|closing|birthday|party|gala|buffer|probe|experiment|quinceanera|🎭|✨/i;
     const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i];
 
@@ -63,10 +69,17 @@ serve(async (req) => {
           const title = event.summary || 'Untitled';
           let start = event.start.dateTime ? new Date(event.start.dateTime) : new Date(event.start.date + "T09:00:00");
           let end = event.end.dateTime ? new Date(event.end.dateTime) : new Date(event.end.date + "T09:30:00");
-          if (start < syncStartTime) return; // STRICT FILTER
-          const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
-          const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
-          const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && ((event.attendees?.length > 1) || fixedKeywords.test(title) || fixedPatterns.some(p => p.test(title))));
+          if (start < syncStartTime) return;
+
+          // PERSISTENCE LOGIC: If we already have this event, keep its current is_locked status
+          let isLocked = existingLockStatus.has(event.id) ? existingLockStatus.get(event.id) : null;
+
+          if (isLocked === null) {
+            const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
+            const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
+            isLocked = isExplicitlyLocked || (!isExplicitlyMovable && ((event.attendees?.length > 1) || fixedKeywords.test(title) || fixedPatterns.some(p => p.test(title))));
+          }
+
           eventMap.set(event.id, {
             user_id: user.id, event_id: event.id, title: title, start_time: start.toISOString(), end_time: end.toISOString(),
             duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000) || 30, is_locked: isLocked,
@@ -78,14 +91,7 @@ serve(async (req) => {
 
     const uniqueEvents = Array.from(eventMap.values());
     if (uniqueEvents.length > 0) await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
-
-    // PURGE OLD EVENTS
-    await supabaseAdmin.from('calendar_events_cache')
-      .delete()
-      .eq('user_id', user.id)
-      .eq('provider', 'google')
-      .lt('start_time', syncStartTime.toISOString());
-
+    await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google').lt('start_time', syncStartTime.toISOString());
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders })
   } catch (error) {
     console.error("[sync-calendar] FATAL ERROR:", error.message);

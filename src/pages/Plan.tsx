@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Layout from '@/components/Layout';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
@@ -25,6 +26,7 @@ const DAYS = [
 ];
 
 const Plan = () => {
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [currentStep, setCurrentStep] = useState<PlanStep>('initial');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -117,38 +119,13 @@ const Plan = () => {
       }
       
       if (currentStep !== 'active_plan') {
-        setCurrentStep('vetting_tasks');
+        navigate('/vet');
       }
       
       showSuccess(skipSync ? 'Loaded from cache!' : 'Calendar synced!');
     } catch (err: any) { 
       showError(err.message); 
     }
-    finally { setIsProcessing(false); }
-  };
-
-  const runAIClassification = async () => {
-    setIsProcessing(true);
-    setStatusText('AI is learning...');
-    try {
-      const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords').single();
-      const { data, error } = await supabase.functions.invoke('classify-tasks', {
-        body: { 
-          tasks: events.map(e => e.title), 
-          movableKeywords: settings?.movable_keywords || [],
-          lockedKeywords: settings?.locked_keywords || []
-        }
-      });
-      if (error) throw error;
-      const updatedEvents = [...events];
-      for (let i = 0; i < updatedEvents.length; i++) {
-        const isMovable = data.classifications[i];
-        updatedEvents[i].is_locked = !isMovable;
-        await supabase.from('calendar_events_cache').update({ is_locked: !isMovable }).eq('event_id', updatedEvents[i].event_id);
-      }
-      setEvents(updatedEvents);
-      showSuccess("AI updated classifications!");
-    } catch (err: any) { showError(err.message); }
     finally { setIsProcessing(false); }
   };
 
@@ -160,7 +137,6 @@ const Plan = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // If this is a fresh optimisation (not a resuggest), clear previous applied changes
       const currentApplied = isResuggest ? appliedChanges : [];
 
       const { data, error } = await supabase.functions.invoke('optimise-schedule', {
@@ -292,13 +268,6 @@ const Plan = () => {
     } catch (err: any) { showError("Failed to undo: " + err.message); }
   };
 
-  const toggleLock = async (eventId: string, currentStatus: boolean) => {
-    try {
-      await supabase.from('calendar_events_cache').update({ is_locked: !currentStatus }).eq('event_id', eventId);
-      setEvents(events.map(e => e.event_id === eventId ? { ...e, is_locked: !currentStatus } : e));
-    } catch (err: any) { showError("Failed to update lock"); }
-  };
-
   const RequirementsForm = () => (
     <div className="space-y-6 p-2">
       <div className="grid grid-cols-2 gap-4">
@@ -382,38 +351,6 @@ const Plan = () => {
     </div>
   );
 
-  const VettingOverlay = () => (
-    <div className="space-y-4 p-2">
-      <div className="flex items-center justify-between mb-2">
-        <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Synced Events</p>
-        <Button variant="ghost" size="sm" onClick={runAIClassification} className="h-7 px-2 text-[8px] font-black uppercase tracking-widest text-indigo-600 hover:bg-indigo-50">
-          <BrainCircuit size={12} className="mr-1" /> AI Vet
-        </Button>
-      </div>
-      <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
-        {events.map((event, i) => (
-          <div key={i} className={cn(
-            "p-3 rounded-xl border transition-all flex items-center justify-between",
-            event.is_locked ? "bg-white border-gray-100 opacity-60" : "bg-indigo-50/30 border-indigo-100 shadow-sm"
-          )}>
-            <div className="flex items-center gap-3 overflow-hidden">
-              <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center shrink-0", event.is_locked ? "bg-gray-50 text-gray-300" : "bg-white text-indigo-600 shadow-sm")}>
-                {event.is_locked ? <Lock size={14} /> : <Unlock size={14} />}
-              </div>
-              <div className="overflow-hidden">
-                <h3 className="font-black text-[11px] text-gray-900 tracking-tight truncate max-w-[160px]">{event.title}</h3>
-                <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest">
-                  {format(parseISO(event.start_time), 'EEE, HH:mm')}
-                </p>
-              </div>
-            </div>
-            <Switch checked={!event.is_locked} onCheckedChange={() => toggleLock(event.event_id, event.is_locked)} className="data-[state=checked]:bg-indigo-600 scale-90" />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-
   return (
     <Layout hideSidebar={deepFocus}>
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
@@ -436,17 +373,13 @@ const Plan = () => {
         </div>
         <div className="flex gap-2">
           {(currentStep === 'active_plan' || currentStep === 'vetting_tasks') && (
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button variant="outline" className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
-                  <CheckSquare size={14} className="mr-2" /> Vet Tasks
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-80 rounded-[2rem] shadow-2xl border-none p-6" align="end">
-                <h3 className="text-sm font-black text-gray-900 mb-4 uppercase tracking-widest">Vet Synced Tasks</h3>
-                <VettingOverlay />
-              </PopoverContent>
-            </Popover>
+            <Button 
+              variant="outline" 
+              onClick={() => navigate('/vet')}
+              className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm"
+            >
+              <CheckSquare size={14} className="mr-2" /> Vet Tasks
+            </Button>
           )}
           
           {currentStep === 'active_plan' ? (
@@ -504,46 +437,6 @@ const Plan = () => {
                 </div>
               </div>
             </Card>
-          )}
-
-          {currentStep === 'vetting_tasks' && (
-            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <div className="flex items-center justify-between bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
-                <div>
-                  <h2 className="text-xl font-black text-gray-900 tracking-tight">Vet Your Tasks</h2>
-                  <p className="text-gray-400 text-xs font-medium">Toggle tasks that are movable.</p>
-                </div>
-                <div className="flex gap-3">
-                  <Button variant="outline" onClick={runAIClassification} className="rounded-xl px-6 h-12 font-black text-[9px] uppercase tracking-widest flex gap-2 border-indigo-100 text-indigo-600">
-                    <BrainCircuit size={16} /> AI Vet
-                  </Button>
-                  <Button onClick={() => setCurrentStep('requirements')} className="bg-indigo-600 text-white rounded-xl px-8 h-12 font-black text-[9px] uppercase tracking-widest flex gap-2 shadow-lg shadow-indigo-100">
-                    Next <ChevronRight size={16} />
-                  </Button>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 gap-3">
-                {events.map((event, i) => (
-                  <div key={i} className={cn(
-                    "p-4 rounded-2xl border transition-all flex items-center justify-between",
-                    event.is_locked ? "bg-white border-gray-100 opacity-60" : "bg-indigo-50/30 border-indigo-100 shadow-sm"
-                  )}>
-                    <div className="flex items-center gap-4">
-                      <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center", event.is_locked ? "bg-gray-50 text-gray-300" : "bg-white text-indigo-600 shadow-sm")}>
-                        {event.is_locked ? <Lock size={18} /> : <Unlock size={18} />}
-                      </div>
-                      <div>
-                        <h3 className="font-black text-base text-gray-900 tracking-tight">{event.title}</h3>
-                        <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">
-                          {format(parseISO(event.start_time), 'EEE, MMM d')} • {format(parseISO(event.start_time), 'HH:mm')}
-                        </p>
-                      </div>
-                    </div>
-                    <Switch checked={!event.is_locked} onCheckedChange={() => toggleLock(event.event_id, event.is_locked)} className="data-[state=checked]:bg-indigo-600 scale-110" />
-                  </div>
-                ))}
-              </div>
-            </div>
           )}
 
           {currentStep === 'requirements' && (
