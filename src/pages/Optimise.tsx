@@ -45,7 +45,7 @@ const Optimise = () => {
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
 
-      await finalizeSync(data.count, data.events);
+      await finalizeSync(data.count, 'google', data.events);
     } catch (err: any) {
       showError(err.message);
     } finally {
@@ -67,7 +67,7 @@ const Optimise = () => {
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
 
-      await finalizeSync(data.count, data.events);
+      await finalizeSync(data.count, 'apple', data.events);
     } catch (err: any) {
       showError(err.message);
     } finally {
@@ -75,19 +75,21 @@ const Optimise = () => {
     }
   };
 
-  const finalizeSync = async (count: number, rawEvents?: any[]) => {
+  const finalizeSync = async (count: number, provider: string, rawEvents?: any[]) => {
     setStep('Verifying database records...');
     setProgress(80);
 
     const { data: events, error: fetchError } = await supabase
       .from('calendar_events_cache')
       .select('*')
+      .eq('provider', provider)
       .order('start_time', { ascending: true });
 
     if (fetchError) throw fetchError;
 
     setSyncReport({
       total: events?.length || 0,
+      provider,
       range: {
         start: events?.[0]?.start_time,
         end: events?.[events.length - 1]?.start_time
@@ -98,7 +100,7 @@ const Optimise = () => {
     });
     
     setProgress(100);
-    showSuccess(`Successfully synced ${count} events!`);
+    showSuccess(`Successfully synced ${count} ${provider} events!`);
   };
 
   const runOptimisation = async () => {
@@ -221,7 +223,7 @@ const Optimise = () => {
           <div className="space-y-6">
             <div className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between">
               <div>
-                <h2 className="text-xl font-bold text-gray-900">Calendar Synced</h2>
+                <h2 className="text-xl font-bold text-gray-900 capitalize">{syncReport.provider} Calendar Synced</h2>
                 <p className="text-gray-500 text-sm mt-1">{syncReport.total} events found in the next 14 days.</p>
               </div>
               <div className="flex gap-3">
