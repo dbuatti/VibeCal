@@ -302,7 +302,13 @@ const Settings = () => {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       {calendars.filter(c => c.provider === 'google').map((cal) => (
                         <div key={cal.id} className="flex items-center justify-between p-3 bg-blue-50/30 rounded-xl border border-blue-100/50">
-                          <span className="text-sm font-bold text-gray-700 truncate">{cal.calendar_name}</span>
+                          <div className="flex items-center gap-3 overflow-hidden">
+                            <div 
+                              className="w-3 h-3 rounded-full shrink-0" 
+                              style={{ backgroundColor: cal.color || '#6366f1' }} 
+                            />
+                            <span className="text-sm font-bold text-gray-700 truncate">{cal.calendar_name}</span>
+                          </div>
                           <Switch 
                             checked={cal.is_enabled} 
                             onCheckedChange={(val) => toggleCalendar(cal.id, val)}
@@ -329,7 +335,13 @@ const Settings = () => {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       {calendars.filter(c => c.provider === 'apple').map((cal) => (
                         <div key={cal.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
-                          <span className="text-sm font-bold text-gray-700 truncate">{cal.calendar_name}</span>
+                          <div className="flex items-center gap-3 overflow-hidden">
+                            <div 
+                              className="w-3 h-3 rounded-full shrink-0" 
+                              style={{ backgroundColor: cal.color || '#6366f1' }} 
+                            />
+                            <span className="text-sm font-bold text-gray-700 truncate">{cal.calendar_name}</span>
+                          </div>
                           <Switch 
                             checked={cal.is_enabled} 
                             onCheckedChange={(val) => toggleCalendar(cal.id, val)}

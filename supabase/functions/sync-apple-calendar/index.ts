@@ -78,7 +78,7 @@ serve(async (req) => {
     
     const homeSetUrl = getFullUrl(homeSetPath, homeSetRes.url);
 
-    // 3. Find individual calendars and their names
+    // 3. Find individual calendars, names, and COLORS
     const listRes = await fetch(homeSetUrl, {
       method: 'PROPFIND',
       headers: {
@@ -86,7 +86,14 @@ serve(async (req) => {
         'Content-Type': 'application/xml; charset=utf-8',
         'Depth': '1'
       },
-      body: `<?xml version="1.0" encoding="utf-8" ?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype /><d:displayname /></d:prop></d:propfind>`
+      body: `<?xml version="1.0" encoding="utf-8" ?>
+      <d:propfind xmlns:d="DAV:" xmlns:ical="http://apple.com/ns/ical/">
+        <d:prop>
+          <d:resourcetype />
+          <d:displayname />
+          <ical:calendar-color />
+        </d:prop>
+      </d:propfind>`
     });
 
     const listXml = await listRes.text();
@@ -98,8 +105,11 @@ serve(async (req) => {
       if (resp.includes('<calendar') || resp.includes(':calendar')) {
         const hrefMatch = resp.match(/<(?:[^:>]*:)?href[^>]*>([^<]+)/i);
         const nameMatch = resp.match(/<(?:[^:>]*:)?displayname[^>]*>([^<]+)/i);
+        const colorMatch = resp.match(/<(?:[^:>]*:)?calendar-color[^>]*>([^<]+)/i);
+        
         const href = hrefMatch?.[1];
         const name = nameMatch?.[1] || href?.split('/').filter(Boolean).pop() || 'Unnamed Calendar';
+        const color = colorMatch?.[1] || '#6366f1'; // Default indigo if not found
         
         if (href) {
           const normHref = href.replace(/\/$/, '');
@@ -108,7 +118,8 @@ serve(async (req) => {
               user_id: user.id,
               calendar_id: href,
               calendar_name: name,
-              provider: 'apple'
+              provider: 'apple',
+              color: color
             });
           }
         }
@@ -201,7 +212,7 @@ serve(async (req) => {
                 duration_minutes: Math.round((endDate.getTime() - startDate.getTime()) / 60000),
                 is_locked: true,
                 provider: 'apple',
-                source_calendar: calName, // Use the human-readable name
+                source_calendar: calName,
                 last_synced_at: new Date().toISOString()
               });
             } catch (e) {

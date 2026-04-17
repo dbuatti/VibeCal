@@ -40,7 +40,8 @@ serve(async (req) => {
       user_id: user.id,
       calendar_id: cal.id,
       calendar_name: cal.summary,
-      provider: 'google'
+      provider: 'google',
+      color: cal.backgroundColor || '#6366f1'
     }))
 
     if (discovered.length > 0) {
