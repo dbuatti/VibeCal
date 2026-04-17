@@ -7,9 +7,9 @@ import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import DayByDayPlanner from '@/components/DayByDayPlanner';
 import RequirementsForm from '@/components/RequirementsForm';
-import PlanPageHeader from '@/components/PlanPageHeader';
-import PlanInitialView from '@/components/PlanInitialView';
-import PlanLoadingView from '@/components/PlanLoadingView';
+import PlanPageHeader from '@/components/plan/PlanPageHeader';
+import PlanInitialView from '@/components/plan/PlanInitialView';
+import PlanLoadingView from '@/components/plan/PlanLoadingView';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { format, nextSaturday, parseISO, addMinutes } from 'date-fns';
 

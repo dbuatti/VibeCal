@@ -2,18 +2,16 @@
 
 import React, { useEffect, useState } from 'react';
 import Layout from '@/components/Layout';
-import WorkWindowSettings from '../components/settings/WorkWindowSettings';
-import KeywordManager from '../components/settings/KeywordManager';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import WorkWindowSettings from '@/components/settings/WorkWindowSettings';
+import KeywordManager from '@/components/settings/KeywordManager';
+import DayThemesSettings from '@/components/settings/DayThemesSettings';
+import OptimisationLogicSettings from '@/components/settings/OptimisationLogicSettings';
+import CalendarSettings from '@/components/settings/CalendarSettings';
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { cn } from '@/lib/utils';
-import { Save, Shield, Target, Calendar, RefreshCw, Sparkles, Ban, Briefcase } from 'lucide-react';
+import { Save, Sparkles, Ban, Briefcase, RefreshCw } from 'lucide-react';
 
 const Settings = () => {
   const [loading, setLoading] = useState(true);
@@ -203,6 +201,12 @@ const Settings = () => {
     }
   };
 
+  const handleThemeChange = (index: number, value: string) => {
+    const newThemes = [...themes];
+    newThemes[index].theme = value;
+    setThemes(newThemes);
+  };
+
   if (loading) return <Layout><div className="flex items-center justify-center h-64"><RefreshCw className="animate-spin text-indigo-600" /></div></Layout>;
 
   return (
@@ -251,119 +255,17 @@ const Settings = () => {
             />
           </div>
 
-          <Card className="border-none shadow-sm rounded-2xl">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Target className="text-indigo-600" size={20} />
-                Day Themes
-              </CardTitle>
-              <CardDescription>Assign focus areas to specific days. The AI will try to match tasks to these themes.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {themes.map((t, i) => (
-                <div key={i} className="flex items-center gap-4 p-3 bg-gray-50 rounded-xl">
-                  <span className="w-24 font-bold text-gray-500">{t.label}</span>
-                  <Input 
-                    placeholder="e.g. Music, Admin, Deep Work" 
-                    className="bg-white border-gray-200 rounded-xl"
-                    value={t.theme}
-                    onChange={(e) => {
-                      const newThemes = [...themes];
-                      newThemes[i].theme = e.target.value;
-                      setThemes(newThemes);
-                    }}
-                  />
-                </div>
-              ))}
-            </CardContent>
-          </Card>
+          <DayThemesSettings themes={themes} onThemeChange={handleThemeChange} />
         </div>
 
         <div className="space-y-8">
-          <Card className="border-none shadow-sm rounded-2xl">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Shield className="text-indigo-600" size={20} />
-                Optimisation Logic
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-2">
-                <Label>Aggressiveness</Label>
-                <Select 
-                  value={settings.optimisation_aggressiveness}
-                  onValueChange={(val) => setSettings({...settings, optimisation_aggressiveness: val})}
-                >
-                  <SelectTrigger className="rounded-xl">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="relaxed">Relaxed (Keep most)</SelectItem>
-                    <SelectItem value="balanced">Balanced</SelectItem>
-                    <SelectItem value="strict">Strict (Aggressive moves)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Preview Mode</Label>
-                  <p className="text-xs text-gray-500">Review changes before syncing</p>
-                </div>
-                <Switch 
-                  checked={settings.preview_mode_enabled}
-                  onCheckedChange={(val) => setSettings({...settings, preview_mode_enabled: val})}
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Group Similar Tasks</Label>
-                  <p className="text-xs text-gray-500">Minimise context switching</p>
-                </div>
-                <Switch 
-                  checked={settings.group_similar_tasks}
-                  onCheckedChange={(val) => setSettings({...settings, group_similar_tasks: val})}
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-none shadow-sm rounded-2xl border-l-4 border-l-gray-900">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Calendar className="text-gray-900" size={20} />
-                Calendars
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={discoverCalendars}
-                disabled={isTesting}
-                className="w-full rounded-xl border-gray-200"
-              >
-                <RefreshCw size={14} className={cn("mr-2", isTesting && "animate-spin")} />
-                Refresh List
-              </Button>
-              
-              <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2">
-                {calendars.map((cal) => (
-                  <div key={cal.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
-                    <div className="flex items-center gap-3 overflow-hidden">
-                      <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: cal.color || '#6366f1' }} />
-                      <span className="text-xs font-bold text-gray-700 truncate">{cal.calendar_name}</span>
-                    </div>
-                    <Switch 
-                      checked={cal.is_enabled} 
-                      onCheckedChange={(val) => toggleCalendar(cal.id, val)}
-                    />
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
+          <OptimisationLogicSettings settings={settings} setSettings={setSettings} />
+          <CalendarSettings 
+            calendars={calendars} 
+            isTesting={isTesting} 
+            onDiscover={discoverCalendars} 
+            onToggle={toggleCalendar} 
+          />
         </div>
       </div>
     </Layout>
