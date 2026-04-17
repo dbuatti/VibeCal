@@ -17,12 +17,13 @@ import {
   CheckCircle2,
   SortAsc,
   SortDesc,
-  Eye,
+  Eye, 
   EyeOff,
   Clock,
   Layers,
   Zap,
-  MoreHorizontal
+  Briefcase,
+  Globe
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -37,7 +38,7 @@ import {
   DropdownMenuTrigger,
   DropdownMenuCheckboxItem
 } from '@/components/ui/dropdown-menu';
-import { format, parseISO } from 'date-fns';
+import { format, parseISO, isToday, isTomorrow } from 'date-fns';
 import { cn } from '@/lib/utils';
 
 type SortField = 'date' | 'title' | 'status';
@@ -166,6 +167,16 @@ const Vet = () => {
       });
   }, [events, searchQuery, showLocked, showUnlocked, sortBy, sortOrder, selectedProvider]);
 
+  const groupedEvents = useMemo(() => {
+    const groups: { [key: string]: any[] } = {};
+    filteredEvents.forEach(event => {
+      const dateKey = format(parseISO(event.start_time), 'yyyy-MM-dd');
+      if (!groups[dateKey]) groups[dateKey] = [];
+      groups[dateKey].push(event);
+    });
+    return groups;
+  }, [filteredEvents]);
+
   const stats = useMemo(() => {
     const total = events.length;
     const locked = events.filter(e => e.is_locked).length;
@@ -175,9 +186,16 @@ const Vet = () => {
 
   const providers = Array.from(new Set(events.map(e => e.provider)));
 
+  const getDateLabel = (dateStr: string) => {
+    const date = parseISO(dateStr);
+    if (isToday(date)) return "Today";
+    if (isTomorrow(date)) return "Tomorrow";
+    return format(date, 'EEEE, MMM do');
+  };
+
   return (
     <Layout>
-      <div className="max-w-5xl mx-auto">
+      <div className="max-w-5xl mx-auto pb-24">
         {/* Header Section */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-6">
           <div className="space-y-1">
@@ -232,16 +250,16 @@ const Vet = () => {
           ))}
         </div>
 
-        {/* Filter & Search Bar */}
-        <div className="bg-white rounded-[2.5rem] border border-gray-100 shadow-sm overflow-hidden mb-8">
-          <div className="p-6 border-b border-gray-50 flex flex-col lg:flex-row gap-4 justify-between items-center">
+        {/* Sticky Filter & Search Bar */}
+        <div className="sticky top-4 z-50 bg-white/80 backdrop-blur-xl rounded-[2.5rem] border border-gray-100 shadow-xl overflow-hidden mb-8">
+          <div className="p-4 flex flex-col lg:flex-row gap-4 justify-between items-center">
             <div className="relative w-full lg:w-96">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
               <Input 
                 placeholder="Search tasks..." 
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-12 h-12 rounded-2xl border-gray-100 bg-gray-50/50 font-bold text-sm focus:ring-indigo-500 transition-all"
+                className="pl-12 h-12 rounded-2xl border-none bg-gray-50/50 font-bold text-sm focus:ring-indigo-500 transition-all"
               />
             </div>
             
@@ -270,7 +288,7 @@ const Vet = () => {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" className="rounded-xl h-10 px-4 font-black text-[10px] uppercase tracking-widest border-gray-100 hover:bg-gray-50">
-                    <Filter size={14} className="mr-2" /> Sort & Filter
+                    <Filter size={14} className="mr-2" /> Sort
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent className="w-56 rounded-2xl p-2" align="end">
@@ -292,25 +310,6 @@ const Vet = () => {
                   <DropdownMenuItem onClick={() => setSortOrder('desc')} className="rounded-lg font-bold text-xs">
                     <SortDesc size={14} className="mr-2" /> Descending
                   </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuLabel className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-2 py-1.5">Provider</DropdownMenuLabel>
-                  <DropdownMenuCheckboxItem 
-                    checked={selectedProvider === 'all'} 
-                    onCheckedChange={() => setSelectedProvider('all')}
-                    className="rounded-lg font-bold text-xs"
-                  >
-                    All Providers
-                  </DropdownMenuCheckboxItem>
-                  {providers.map(p => (
-                    <DropdownMenuCheckboxItem 
-                      key={p}
-                      checked={selectedProvider === p} 
-                      onCheckedChange={() => setSelectedProvider(p)}
-                      className="rounded-lg font-bold text-xs capitalize"
-                    >
-                      {p}
-                    </DropdownMenuCheckboxItem>
-                  ))}
                 </DropdownMenuContent>
               </DropdownMenu>
 
@@ -331,88 +330,111 @@ const Vet = () => {
               </DropdownMenu>
             </div>
           </div>
+        </div>
 
-          {/* Task List */}
-          <div className="divide-y divide-gray-50">
-            {loading ? (
-              <div className="p-20 text-center">
-                <RefreshCw className="animate-spin text-indigo-600 mx-auto mb-4" size={32} />
-                <p className="text-gray-400 font-bold">Loading your schedule...</p>
-              </div>
-            ) : filteredEvents.length > 0 ? (
-              <div className="grid grid-cols-1 gap-0">
-                {filteredEvents.map((event) => (
-                  <div key={event.event_id} className={cn(
-                    "p-6 flex items-center justify-between transition-all group hover:bg-gray-50/80",
-                    event.is_locked ? "bg-white" : "bg-indigo-50/5"
-                  )}>
-                    <div className="flex items-center gap-6 flex-1 min-w-0">
-                      <div className={cn(
-                        "w-14 h-14 rounded-2xl flex items-center justify-center shrink-0 transition-all duration-500 group-hover:scale-110",
-                        event.is_locked ? "bg-red-50 text-red-400" : "bg-indigo-50 text-indigo-600"
-                      )}>
-                        {event.is_locked ? <Lock size={24} /> : <Unlock size={24} />}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-3 mb-1">
-                          <h3 className="font-black text-lg text-gray-900 tracking-tight truncate">{event.title}</h3>
-                          <Badge variant="outline" className="text-[8px] font-black border-gray-100 text-gray-400 px-2 py-0 h-4 uppercase tracking-tighter shrink-0">
-                            {event.provider}
-                          </Badge>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                          <div className="flex items-center gap-1.5 text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                            <Calendar size={12} className="text-indigo-400" />
-                            {format(parseISO(event.start_time), 'EEEE, MMM do')}
-                          </div>
-                          <div className="flex items-center gap-1.5 text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                            <Clock size={12} className="text-indigo-400" />
-                            {format(parseISO(event.start_time), 'HH:mm')}
-                          </div>
-                          <div className="flex items-center gap-1.5 text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                            <Zap size={12} className="text-indigo-400" />
-                            {event.duration_minutes}m
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <div className="flex items-center gap-6 ml-4">
-                      <div className="hidden sm:flex flex-col items-end">
-                        <span className={cn(
-                          "text-[10px] font-black uppercase tracking-widest",
-                          event.is_locked ? "text-red-400" : "text-indigo-600"
-                        )}>
-                          {event.is_locked ? 'Fixed' : 'Movable'}
-                        </span>
-                        <span className="text-[8px] font-bold text-gray-300 uppercase tracking-tighter">Status</span>
-                      </div>
-                      <Switch 
-                        checked={!event.is_locked} 
-                        onCheckedChange={() => toggleLock(event.event_id, event.is_locked)} 
-                        className="data-[state=checked]:bg-indigo-600 scale-125" 
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="p-20 text-center">
-                <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-6">
-                  <Search className="text-gray-300" size={32} />
+        {/* Task List Grouped by Date */}
+        <div className="space-y-12">
+          {loading ? (
+            <div className="p-20 text-center">
+              <RefreshCw className="animate-spin text-indigo-600 mx-auto mb-4" size={32} />
+              <p className="text-gray-400 font-bold">Loading your schedule...</p>
+            </div>
+          ) : Object.keys(groupedEvents).length > 0 ? (
+            Object.keys(groupedEvents).sort().map(dateKey => (
+              <div key={dateKey} className="space-y-4">
+                <div className="flex items-center gap-4 px-4">
+                  <h2 className="text-sm font-black text-gray-400 uppercase tracking-[0.2em]">
+                    {getDateLabel(dateKey)}
+                  </h2>
+                  <div className="h-px flex-1 bg-gray-100" />
                 </div>
-                <p className="text-gray-400 font-bold text-lg">No tasks found matching your filters.</p>
-                <Button variant="link" onClick={() => {
-                  setSearchQuery('');
-                  setShowLocked(true);
-                  setShowUnlocked(true);
-                  setSelectedProvider('all');
-                }} className="text-indigo-600 font-black text-xs uppercase tracking-widest mt-2">
-                  Clear all filters
-                </Button>
+                
+                <div className="grid grid-cols-1 gap-3">
+                  {groupedEvents[dateKey].map((event) => (
+                    <div key={event.event_id} className={cn(
+                      "p-5 rounded-[2rem] border transition-all duration-300 group flex items-center justify-between relative overflow-hidden",
+                      event.is_locked 
+                        ? "bg-white border-gray-100 shadow-sm" 
+                        : "bg-indigo-50/30 border-indigo-100/50 shadow-sm"
+                    )}>
+                      {/* Work Watermark */}
+                      {event.is_work && (
+                        <div className="absolute -right-2 -bottom-2 opacity-[0.03] pointer-events-none rotate-12">
+                          <Briefcase size={64} />
+                        </div>
+                      )}
+
+                      <div className="flex items-center gap-5 flex-1 min-w-0 relative z-10">
+                        <div className={cn(
+                          "w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-all duration-500 group-hover:rotate-6",
+                          event.is_locked ? "bg-gray-50 text-gray-400" : "bg-white text-indigo-600 shadow-md"
+                        )}>
+                          {event.is_locked ? <Lock size={20} /> : <Unlock size={20} />}
+                        </div>
+                        
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <h3 className="font-black text-base text-gray-900 tracking-tight truncate">{event.title}</h3>
+                            {event.is_work && (
+                              <Badge variant="secondary" className="bg-slate-100 text-slate-500 text-[8px] font-black px-1.5 py-0 h-4 uppercase tracking-tighter border-none">
+                                Work
+                              </Badge>
+                            )}
+                          </div>
+                          
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                            <div className="flex items-center gap-1.5 text-[9px] font-black text-gray-400 uppercase tracking-widest">
+                              <Clock size={12} className="text-indigo-400" />
+                              {format(parseISO(event.start_time), 'HH:mm')}
+                            </div>
+                            <div className="flex items-center gap-1.5 text-[9px] font-black text-gray-400 uppercase tracking-widest">
+                              <Zap size={12} className="text-indigo-400" />
+                              {event.duration_minutes}m
+                            </div>
+                            <div className="flex items-center gap-1.5 text-[9px] font-black text-gray-400 uppercase tracking-widest">
+                              <Globe size={12} className="text-indigo-400" />
+                              {event.source_calendar || event.provider}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center gap-6 ml-4 relative z-10">
+                        <div className="hidden sm:flex flex-col items-end">
+                          <span className={cn(
+                            "text-[9px] font-black uppercase tracking-widest",
+                            event.is_locked ? "text-red-400" : "text-indigo-600"
+                          )}>
+                            {event.is_locked ? 'Fixed' : 'Movable'}
+                          </span>
+                        </div>
+                        <Switch 
+                          checked={!event.is_locked} 
+                          onCheckedChange={() => toggleLock(event.event_id, event.is_locked)} 
+                          className="data-[state=checked]:bg-indigo-600 scale-110" 
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
-            )}
-          </div>
+            ))
+          ) : (
+            <div className="p-20 text-center bg-white rounded-[3rem] border border-dashed border-gray-200">
+              <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                <Search className="text-gray-300" size={32} />
+              </div>
+              <p className="text-gray-400 font-bold text-lg">No tasks found matching your filters.</p>
+              <Button variant="link" onClick={() => {
+                setSearchQuery('');
+                setShowLocked(true);
+                setShowUnlocked(true);
+                setSelectedProvider('all');
+              }} className="text-indigo-600 font-black text-xs uppercase tracking-widest mt-2">
+                Clear all filters
+              </Button>
+            </div>
+          )}
         </div>
       </div>
     </Layout>
