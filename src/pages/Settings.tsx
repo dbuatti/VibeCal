@@ -123,24 +123,58 @@ const Settings = () => {
     }
   };
 
-  const addKeyword = () => {
+  const addKeyword = async () => {
     if (!newKeyword.trim()) return;
-    if (settings.movable_keywords.includes(newKeyword.trim().toLowerCase())) {
+    const trimmed = newKeyword.trim().toLowerCase();
+    if (settings.movable_keywords.includes(trimmed)) {
       setNewKeyword('');
       return;
     }
-    setSettings({
-      ...settings,
-      movable_keywords: [...settings.movable_keywords, newKeyword.trim().toLowerCase()]
-    });
+    
+    const newKeywords = [...settings.movable_keywords, trimmed];
+    setSettings(prev => ({
+      ...prev,
+      movable_keywords: newKeywords
+    }));
     setNewKeyword('');
+
+    // Auto-save to DB
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      
+      const { error } = await supabase
+        .from('user_settings')
+        .upsert({ user_id: user.id, movable_keywords: newKeywords });
+      
+      if (error) throw error;
+      showSuccess(`Added "${trimmed}"`);
+    } catch (err: any) {
+      showError("Failed to save keyword");
+    }
   };
 
-  const removeKeyword = (kw: string) => {
-    setSettings({
-      ...settings,
-      movable_keywords: settings.movable_keywords.filter((k: string) => k !== kw)
-    });
+  const removeKeyword = async (kw: string) => {
+    const newKeywords = settings.movable_keywords.filter((k: string) => k !== kw);
+    setSettings(prev => ({
+      ...prev,
+      movable_keywords: newKeywords
+    }));
+
+    // Auto-save to DB
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      
+      const { error } = await supabase
+        .from('user_settings')
+        .upsert({ user_id: user.id, movable_keywords: newKeywords });
+      
+      if (error) throw error;
+      showSuccess(`Removed "${kw}"`);
+    } catch (err: any) {
+      showError("Failed to remove keyword");
+    }
   };
 
   const toggleCalendar = async (id: string, enabled: boolean) => {
