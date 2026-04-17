@@ -8,21 +8,16 @@ import { Badge } from '@/components/ui/badge';
 import { 
   ChevronLeft, 
   ChevronRight, 
-  CheckCircle2, 
-  AlertCircle, 
   Clock, 
   ListOrdered, 
   Sparkles, 
-  ArrowRight,
-  Inbox,
-  Calendar as CalendarIcon,
-  RefreshCw,
-  Zap,
-  Trophy,
-  LayoutDashboard,
-  Star,
-  RotateCcw,
-  ArrowUpRight
+  RefreshCw, 
+  Zap, 
+  Trophy, 
+  LayoutDashboard, 
+  RotateCcw, 
+  ArrowUpRight,
+  Calendar as CalendarIcon
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import VisualSchedule from './VisualSchedule';
@@ -68,7 +63,6 @@ const DayByDayPlanner = ({
   const currentDateStr = allDates[currentIndex];
   const currentDate = currentDateStr ? parseISO(currentDateStr) : new Date();
 
-  // Changes that either move TO this day or move AWAY from this day
   const dayChanges = useMemo(() => {
     return changes.filter(c => 
       format(parseISO(c.new_start), 'yyyy-MM-dd') === currentDateStr ||
@@ -84,12 +78,6 @@ const DayByDayPlanner = ({
     if (dayChanges.length === 0) return true;
     return dayChanges.every(c => appliedChanges.includes(c.event_id));
   }, [dayChanges, appliedChanges]);
-
-  const isRoutineEvent = (title: string) => {
-    const t = title.toLowerCase();
-    return t.includes('lunch') || t.includes('dinner') || t.includes('breakfast') || 
-           t.includes('affirmation') || t.includes('break') || t.includes('coffee');
-  };
 
   const isWorkEvent = (event: any) => {
     if (event.is_work === true) return true;
@@ -112,7 +100,6 @@ const DayByDayPlanner = ({
   }, [allDates, changes, appliedChanges, hasAutoDefaulted]);
 
   const stats = useMemo(() => {
-    // Only count events that will actually be on this day after changes
     const eventsOnThisDay = [
       ...dayLockedEvents,
       ...changes.filter(c => format(parseISO(c.new_start), 'yyyy-MM-dd') === currentDateStr && !c.is_surplus)
@@ -134,17 +121,15 @@ const DayByDayPlanner = ({
       }
     });
 
-    const taskEvents = eventsOnThisDay.filter(e => !isRoutineEvent(e.title || ''));
-    const surplusCount = changes.filter(c => format(parseISO(c.new_start), 'yyyy-MM-dd') === currentDateStr && c.is_surplus).length;
+    const taskEvents = eventsOnThisDay.filter(e => !e.title?.toLowerCase().includes('lunch') && !e.title?.toLowerCase().includes('break'));
 
     return {
       tasks: taskEvents.length,
       hours: totalWorkMinutes / 60,
-      surplusCount,
       isOverTasks: taskEvents.length > maxTasks,
       isOverHours: (totalWorkMinutes / 60) > maxHours
     };
-  }, [dayLockedEvents, changes, currentDateStr, maxTasks, maxHours, workKeywords]);
+  }, [dayLockedEvents, changes, currentDateStr, maxTasks, maxHours]);
 
   const handleSyncDay = async () => {
     setIsSyncing(true);
@@ -165,105 +150,99 @@ const DayByDayPlanner = ({
 
   if (isFinished) {
     return (
-      <div className="max-w-2xl mx-auto text-center py-24 animate-in zoom-in-95 duration-700">
-        <div className="w-32 h-32 bg-green-50 rounded-[3rem] flex items-center justify-center mx-auto mb-10 shadow-2xl shadow-green-100/50 border border-green-100">
-          <Trophy className="text-green-600" size={64} />
-        </div>
-        <h2 className="text-5xl font-black text-gray-900 mb-6 tracking-tight">Session Complete!</h2>
-        <p className="text-gray-400 text-xl mb-12 font-medium leading-relaxed">Your calendar is now perfectly aligned.</p>
-        <div className="grid grid-cols-2 gap-6">
-          <Link to="/"><Button className="w-full bg-indigo-600 py-10 text-xl font-black rounded-[2rem]"><LayoutDashboard className="mr-3" /> Dashboard</Button></Link>
-          <Button variant="outline" onClick={() => setIsFinished(false)} className="rounded-[2rem] py-10 text-xl font-black">Review Plan</Button>
+      <div className="max-w-md mx-auto text-center py-16 animate-in zoom-in-95 duration-500">
+        <Trophy className="text-green-600 mx-auto mb-6" size={48} />
+        <h2 className="text-3xl font-black text-gray-900 mb-4 tracking-tight">Complete!</h2>
+        <div className="grid grid-cols-2 gap-4">
+          <Link to="/"><Button className="w-full bg-indigo-600 py-6 font-black rounded-xl"><LayoutDashboard className="mr-2" size={18} /> Dashboard</Button></Link>
+          <Button variant="outline" onClick={() => setIsFinished(false)} className="rounded-xl py-6 font-black">Review</Button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-12 animate-in fade-in slide-in-from-bottom-8 duration-1000">
-      <div className="space-y-3">
-        <div className="flex justify-between items-end px-4">
-          <span className="text-[10px] font-black uppercase tracking-[0.3em] text-indigo-600">Session Progress</span>
-          <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{currentIndex + 1} of {allDates.length} Days</span>
+    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+      <div className="space-y-2">
+        <div className="flex justify-between items-end px-2">
+          <span className="text-[8px] font-black uppercase tracking-[0.2em] text-indigo-600">Progress</span>
+          <span className="text-[8px] font-black text-gray-400 uppercase tracking-widest">{currentIndex + 1} / {allDates.length}</span>
         </div>
-        <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden shadow-inner">
-          <div className="h-full bg-indigo-600 transition-all duration-1000" style={{ width: `${((currentIndex + 1) / allDates.length) * 100}%` }} />
+        <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
+          <div className="h-full bg-indigo-600 transition-all duration-700" style={{ width: `${((currentIndex + 1) / allDates.length) * 100}%` }} />
         </div>
       </div>
 
-      <div className={cn("flex items-center justify-between p-10 rounded-[3.5rem] border transition-all duration-700 shadow-xl", isDayVetted ? "bg-green-50/50 border-green-100" : "bg-white border-gray-100")}>
-        <Button variant="ghost" size="icon" onClick={() => setCurrentIndex(prev => Math.max(0, prev - 1))} disabled={currentIndex === 0} className="rounded-3xl h-16 w-16"><ChevronLeft size={32} /></Button>
+      <div className={cn("flex items-center justify-between p-6 rounded-[2rem] border transition-all shadow-lg", isDayVetted ? "bg-green-50/50 border-green-100" : "bg-white border-gray-100")}>
+        <Button variant="ghost" size="icon" onClick={() => setCurrentIndex(prev => Math.max(0, prev - 1))} disabled={currentIndex === 0} className="rounded-xl h-12 w-12"><ChevronLeft size={24} /></Button>
         <div className="text-center relative">
-          {showXP && <div className="absolute -top-16 left-1/2 -translate-x-1/2 animate-bounce"><Badge className="bg-yellow-400 text-yellow-900 px-6 py-2.5 rounded-full font-black">+50 XP</Badge></div>}
-          <h2 className="text-4xl font-black text-gray-900 tracking-tight mb-2">{format(currentDate, 'EEEE, MMMM do')}</h2>
-          <Badge className={cn("border-none px-4 py-1 rounded-full font-black text-[10px] uppercase tracking-[0.2em]", isDayVetted ? "bg-green-500 text-white" : "bg-indigo-100 text-indigo-600")}>{isDayVetted ? 'Vetted' : 'Vetting Phase'}</Badge>
+          {showXP && <div className="absolute -top-10 left-1/2 -translate-x-1/2 animate-bounce"><Badge className="bg-yellow-400 text-yellow-900 px-4 py-1 rounded-full font-black text-[9px]">+50 XP</Badge></div>}
+          <h2 className="text-xl font-black text-gray-900 tracking-tight">{format(currentDate, 'EEEE, MMM do')}</h2>
+          <Badge className={cn("border-none px-3 py-0.5 rounded-full font-black text-[8px] uppercase tracking-widest mt-1", isDayVetted ? "bg-green-500 text-white" : "bg-indigo-100 text-indigo-600")}>{isDayVetted ? 'Vetted' : 'Vetting'}</Badge>
         </div>
-        <Button variant="ghost" size="icon" onClick={() => setCurrentIndex(prev => Math.min(allDates.length - 1, prev + 1))} disabled={currentIndex === allDates.length - 1} className="rounded-3xl h-16 w-16"><ChevronRight size={32} /></Button>
+        <Button variant="ghost" size="icon" onClick={() => setCurrentIndex(prev => Math.min(allDates.length - 1, prev + 1))} disabled={currentIndex === allDates.length - 1} className="rounded-xl h-12 w-12"><ChevronRight size={24} /></Button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
-        <div className="space-y-8">
-          <Card className="border-none shadow-xl rounded-[3rem] overflow-hidden bg-white">
-            <CardHeader className="pb-4 px-10 pt-10"><CardTitle className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em]">Day Capacity</CardTitle></CardHeader>
-            <CardContent className="space-y-8 px-10 pb-10">
-              <div className="space-y-4">
-                <div className="flex justify-between text-xs font-black uppercase tracking-widest">
-                  <span className="flex items-center gap-2 text-gray-500"><Clock size={16} className="text-indigo-500" /> Work Hours</span>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="space-y-6">
+          <Card className="border-none shadow-md rounded-2xl overflow-hidden bg-white">
+            <CardContent className="p-6 space-y-6">
+              <div className="space-y-3">
+                <div className="flex justify-between text-[9px] font-black uppercase tracking-widest">
+                  <span className="flex items-center gap-1.5 text-gray-500"><Clock size={14} className="text-indigo-500" /> Hours</span>
                   <span className={cn(stats.isOverHours ? "text-red-500" : "text-gray-900")}>{stats.hours.toFixed(1)} / {maxHours}h</span>
                 </div>
-                <div className="h-2 w-full bg-gray-50 rounded-full overflow-hidden"><div className={cn("h-full transition-all duration-1000", stats.isOverHours ? "bg-red-400" : "bg-indigo-500")} style={{ width: `${Math.min((stats.hours / maxHours) * 100, 100)}%` }} /></div>
+                <div className="h-1.5 w-full bg-gray-50 rounded-full overflow-hidden"><div className={cn("h-full transition-all duration-700", stats.isOverHours ? "bg-red-400" : "bg-indigo-500")} style={{ width: `${Math.min((stats.hours / maxHours) * 100, 100)}%` }} /></div>
               </div>
-              <div className="space-y-4">
-                <div className="flex justify-between text-xs font-black uppercase tracking-widest">
-                  <span className="flex items-center gap-2 text-gray-500"><ListOrdered size={16} className="text-indigo-500" /> Task Count</span>
+              <div className="space-y-3">
+                <div className="flex justify-between text-[9px] font-black uppercase tracking-widest">
+                  <span className="flex items-center gap-1.5 text-gray-500"><ListOrdered size={14} className="text-indigo-500" /> Tasks</span>
                   <span className={cn(stats.isOverTasks ? "text-red-500" : "text-gray-900")}>{stats.tasks} / {maxTasks}</span>
                 </div>
-                <div className="h-2 w-full bg-gray-50 rounded-full overflow-hidden"><div className={cn("h-full transition-all duration-1000", stats.isOverTasks ? "bg-red-400" : "bg-indigo-500")} style={{ width: `${Math.min((stats.tasks / maxTasks) * 100, 100)}%` }} /></div>
+                <div className="h-1.5 w-full bg-gray-50 rounded-full overflow-hidden"><div className={cn("h-full transition-all duration-700", stats.isOverTasks ? "bg-red-400" : "bg-indigo-500")} style={{ width: `${Math.min((stats.tasks / maxTasks) * 100, 100)}%` }} /></div>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="border-none shadow-xl rounded-[3rem] overflow-hidden bg-white">
-            <CardHeader className="px-10 pt-10 pb-4"><CardTitle className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em]">Proposed Changes</CardTitle></CardHeader>
-            <CardContent className="space-y-4 px-10 pb-10 max-h-[450px] overflow-y-auto">
+          <Card className="border-none shadow-md rounded-2xl overflow-hidden bg-white">
+            <CardHeader className="px-6 pt-6 pb-2"><CardTitle className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Changes</CardTitle></CardHeader>
+            <CardContent className="space-y-3 px-6 pb-6 max-h-[300px] overflow-y-auto">
               {dayChanges.length > 0 ? dayChanges.map((change, i) => {
                 const isMovingAway = format(parseISO(change.old_start), 'yyyy-MM-dd') === currentDateStr && format(parseISO(change.new_start), 'yyyy-MM-dd') !== currentDateStr;
                 return (
-                  <div key={i} className={cn("p-6 rounded-[2rem] border flex items-center justify-between transition-all duration-500", appliedChanges.includes(change.event_id) ? "bg-green-50 border-green-100 opacity-60" : isMovingAway ? "bg-red-50/30 border-red-100" : "bg-gray-50/50 border-gray-100")}>
-                    <div className="flex items-center gap-5">
-                      <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center", isMovingAway ? "bg-red-100 text-red-600" : "bg-white text-indigo-600 shadow-sm")}>
-                        {isMovingAway ? <ArrowUpRight size={24} /> : <Sparkles size={24} />}
+                  <div key={i} className={cn("p-4 rounded-xl border flex items-center justify-between transition-all", appliedChanges.includes(change.event_id) ? "bg-green-50 border-green-100 opacity-60" : isMovingAway ? "bg-red-50/30 border-red-100" : "bg-gray-50/50 border-gray-100")}>
+                    <div className="flex items-center gap-3">
+                      <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center", isMovingAway ? "bg-red-100 text-red-600" : "bg-white text-indigo-600 shadow-sm")}>
+                        {isMovingAway ? <ArrowUpRight size={16} /> : <Sparkles size={16} />}
                       </div>
                       <div>
-                        <p className="text-base font-black text-gray-900 tracking-tight">{change.title}</p>
-                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{isMovingAway ? `Moving to ${format(parseISO(change.new_start), 'EEE')}` : `Moving to ${format(parseISO(change.new_start), 'HH:mm')}`}</p>
+                        <p className="text-xs font-black text-gray-900 tracking-tight truncate max-w-[120px]">{change.title}</p>
+                        <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest">{isMovingAway ? `To ${format(parseISO(change.new_start), 'EEE')}` : `To ${format(parseISO(change.new_start), 'HH:mm')}`}</p>
                       </div>
                     </div>
                   </div>
                 );
-              }) : <div className="text-center py-16 text-gray-300 font-black uppercase tracking-[0.3em]">No changes</div>}
+              }) : <div className="text-center py-8 text-gray-300 font-black uppercase tracking-widest text-[9px]">No changes</div>}
             </CardContent>
           </Card>
 
-          <div className="space-y-4">
+          <div className="space-y-3">
             {isDayVetted ? (
-              <Button onClick={handleUndoDay} disabled={isSyncing} variant="outline" className="w-full rounded-[2.5rem] py-12 text-2xl font-black border-gray-100 text-gray-400 hover:text-indigo-600 transition-all">
-                {isSyncing ? <RefreshCw className="animate-spin mr-4" size={28} /> : <><RotateCcw className="mr-4" size={28} /> Undo Vetting</>}
+              <Button onClick={handleUndoDay} disabled={isSyncing} variant="outline" className="w-full rounded-2xl py-8 text-lg font-black border-gray-100 text-gray-400">
+                {isSyncing ? <RefreshCw className="animate-spin mr-2" size={20} /> : <><RotateCcw className="mr-2" size={20} /> Undo</>}
               </Button>
             ) : (
-              <Button onClick={handleSyncDay} disabled={isSyncing} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded-[2.5rem] py-12 text-2xl font-black shadow-2xl transition-all">
-                {isSyncing ? <RefreshCw className="animate-spin mr-4" size={28} /> : <><Zap className="mr-4" size={28} /> Confirm & Sync Day</>}
+              <Button onClick={handleSyncDay} disabled={isSyncing} className="w-full bg-indigo-600 text-white rounded-2xl py-8 text-lg font-black shadow-xl">
+                {isSyncing ? <RefreshCw className="animate-spin mr-2" size={20} /> : <><Zap className="mr-2" size={20} /> Sync Day</>}
               </Button>
             )}
           </div>
         </div>
 
         <div className="lg:col-span-2">
-          <div className="flex flex-row items-center justify-between px-4 mb-8">
-            <div className="flex items-center gap-4">
-              <div className="w-14 h-14 bg-white rounded-[1.5rem] flex items-center justify-center shadow-xl border border-gray-50"><CalendarIcon className="text-indigo-600" size={28} /></div>
-              <div><h3 className="text-2xl font-black text-gray-900 tracking-tight">Visual Map</h3><p className="text-xs font-medium text-gray-400">Your day at a glance</p></div>
-            </div>
+          <div className="flex items-center gap-3 mb-4 px-2">
+            <CalendarIcon className="text-indigo-600" size={20} />
+            <h3 className="text-lg font-black text-gray-900 tracking-tight">Visual Map</h3>
           </div>
           <VisualSchedule 
             events={events.filter(e => format(parseISO(e.start_time), 'yyyy-MM-dd') === currentDateStr)} 

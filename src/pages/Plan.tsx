@@ -5,7 +5,7 @@ import Layout from '@/components/Layout';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import DayByDayPlanner from '@/components/DayByDayPlanner';
-import { Brain, RefreshCw, Trash2, Eye, EyeOff, Sparkles, Calendar, Clock, ListOrdered, ChevronRight, BrainCircuit, Inbox, Unlock, Lock, History, RotateCcw, Settings2, AlertTriangle } from 'lucide-react';
+import { Brain, RefreshCw, Trash2, Eye, EyeOff, Sparkles, Calendar, Clock, ListOrdered, ChevronRight, BrainCircuit, Inbox, Unlock, Lock, History, Settings2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
@@ -36,7 +36,6 @@ const Plan = () => {
   const [deepFocus, setDeepFocus] = useState(false);
   const [lastSynced, setLastSynced] = useState<string | null>(null);
 
-  // Optimiser State
   const [durationOverride, setDurationOverride] = useState<string>("original");
   const [maxTasksOverride, setMaxTasksOverride] = useState<number>(5);
   const [maxHoursOverride, setMaxHoursOverride] = useState<number>(6);
@@ -102,25 +101,12 @@ const Plan = () => {
     try {
       if (!skipSync) {
         const { data: { session } } = await supabase.auth.getSession();
-        
         if (session?.provider_token) {
-          console.log("[Plan] Calling sync-calendar with token");
-          const { data, error } = await supabase.functions.invoke('sync-calendar', { 
+          await supabase.functions.invoke('sync-calendar', { 
             body: { googleAccessToken: session.provider_token } 
           });
-          
-          if (error) {
-            console.error("[Plan] sync-calendar error:", error);
-            throw new Error(`Google Sync Failed: ${error.message || 'Unknown error'}`);
-          }
-          console.log("[Plan] sync-calendar success:", data);
-        } else {
-          console.warn("[Plan] No Google provider_token found. Skipping Google sync.");
-          showError("Google session expired. Please sign out and back in to sync Google Calendar.");
         }
-        
-        const { error: appleError } = await supabase.functions.invoke('sync-apple-calendar');
-        if (appleError) console.warn("[Plan] Apple Sync Warning:", appleError);
+        await supabase.functions.invoke('sync-apple-calendar');
       }
       
       const { data: fetchedEvents } = await supabase.from('calendar_events_cache').select('*').order('start_time', { ascending: true });
@@ -131,7 +117,6 @@ const Plan = () => {
       setCurrentStep('vetting_tasks');
       showSuccess(skipSync ? 'Loaded from cache!' : 'Calendar synced!');
     } catch (err: any) { 
-      console.error("[Plan] Analysis Error:", err);
       showError(err.message); 
     }
     finally { setIsProcessing(false); }
@@ -139,7 +124,7 @@ const Plan = () => {
 
   const runAIClassification = async () => {
     setIsProcessing(true);
-    setStatusText('AI is learning your preferences...');
+    setStatusText('AI is learning...');
     try {
       const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords').single();
       const { data, error } = await supabase.functions.invoke('classify-tasks', {
@@ -157,7 +142,7 @@ const Plan = () => {
         await supabase.from('calendar_events_cache').update({ is_locked: !isMovable }).eq('event_id', updatedEvents[i].event_id);
       }
       setEvents(updatedEvents);
-      showSuccess("AI has updated your task classifications!");
+      showSuccess("AI updated classifications!");
     } catch (err: any) { showError(err.message); }
     finally { setIsProcessing(false); }
   };
@@ -165,7 +150,7 @@ const Plan = () => {
   const runOptimisation = async () => {
     if (selectedDays.length === 0) { showError("Select at least one day."); return; }
     setIsProcessing(true);
-    setStatusText('Calculating optimal alignment...');
+    setStatusText('Optimising...');
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -198,20 +183,13 @@ const Plan = () => {
 
   const handleResetPlan = async () => {
     if (!proposal) return;
-    if (!confirm("Are you sure you want to clear this proposed plan?")) return;
-
+    if (!confirm("Clear this plan?")) return;
     try {
-      await supabase
-        .from('optimisation_history')
-        .update({ status: 'cancelled' })
-        .eq('id', proposal.id);
-      
+      await supabase.from('optimisation_history').update({ status: 'cancelled' }).eq('id', proposal.id);
       setProposal(null);
       setCurrentStep('initial');
       showSuccess("Plan cleared");
-    } catch (err: any) {
-      showError("Failed to reset plan");
-    }
+    } catch (err: any) { showError("Failed to reset"); }
   };
 
   const handleApplyDay = async (dateChanges: any[]) => {
@@ -223,10 +201,9 @@ const Plan = () => {
       for (const change of dateChanges) {
         const eventIdx = updatedEvents.findIndex(e => e.event_id === change.event_id);
         if (eventIdx === -1) continue;
-
         const eventInCache = updatedEvents[eventIdx];
 
-        const { error: pushError } = await supabase.functions.invoke('push-to-provider', {
+        await supabase.functions.invoke('push-to-provider', {
           body: { 
             eventId: change.event_id, 
             provider: eventInCache.provider, 
@@ -237,8 +214,6 @@ const Plan = () => {
           }
         });
 
-        if (pushError) throw pushError;
-
         await supabase.from('calendar_events_cache')
           .update({ 
             start_time: change.new_start, 
@@ -248,35 +223,16 @@ const Plan = () => {
           })
           .eq('event_id', change.event_id);
         
-        updatedEvents[eventIdx] = {
-          ...eventInCache,
-          start_time: change.new_start,
-          end_time: change.new_end,
-          duration_minutes: change.duration
-        };
-        
-        if (!newAppliedIds.includes(change.event_id)) {
-          newAppliedIds.push(change.event_id);
-        }
+        updatedEvents[eventIdx] = { ...eventInCache, start_time: change.new_start, end_time: change.new_end, duration_minutes: change.duration };
+        if (!newAppliedIds.includes(change.event_id)) newAppliedIds.push(change.event_id);
       }
 
-      const updatedProposedChanges = proposal.proposed_changes.map((c: any) => ({
-        ...c,
-        applied: newAppliedIds.includes(c.event_id)
-      }));
-
-      await supabase
-        .from('optimisation_history')
-        .update({ proposed_changes: updatedProposedChanges })
-        .eq('id', proposal.id);
-
+      const updatedProposedChanges = proposal.proposed_changes.map((c: any) => ({ ...c, applied: newAppliedIds.includes(c.event_id) }));
+      await supabase.from('optimisation_history').update({ proposed_changes: updatedProposedChanges }).eq('id', proposal.id);
       setEvents(updatedEvents);
       setAppliedChanges(newAppliedIds);
       setProposal({ ...proposal, proposed_changes: updatedProposedChanges });
-    } catch (err: any) {
-      showError(err.message);
-      throw err;
-    }
+    } catch (err: any) { showError(err.message); throw err; }
   };
 
   const handleUndoApplyDay = async (dateChanges: any[]) => {
@@ -289,12 +245,10 @@ const Plan = () => {
       for (const change of dateChanges) {
         const eventIdx = updatedEvents.findIndex(e => e.event_id === change.event_id);
         if (eventIdx === -1) continue;
-
         const eventInCache = updatedEvents[eventIdx];
         const oldEnd = addMinutes(parseISO(change.old_start), change.old_duration).toISOString();
 
-        // Revert in provider
-        const { error: pushError } = await supabase.functions.invoke('push-to-provider', {
+        await supabase.functions.invoke('push-to-provider', {
           body: { 
             eventId: change.event_id, 
             provider: eventInCache.provider, 
@@ -305,154 +259,89 @@ const Plan = () => {
           }
         });
 
-        if (pushError) throw pushError;
-
-        // Revert in cache
         await supabase.from('calendar_events_cache')
-          .update({ 
-            start_time: change.old_start, 
-            end_time: oldEnd, 
-            duration_minutes: change.old_duration,
-            last_synced_at: new Date().toISOString() 
-          })
+          .update({ start_time: change.old_start, end_time: oldEnd, duration_minutes: change.old_duration, last_synced_at: new Date().toISOString() })
           .eq('event_id', change.event_id);
 
-        updatedEvents[eventIdx] = {
-          ...eventInCache,
-          start_time: change.old_start,
-          end_time: oldEnd,
-          duration_minutes: change.old_duration
-        };
+        updatedEvents[eventIdx] = { ...eventInCache, start_time: change.old_start, end_time: oldEnd, duration_minutes: change.old_duration };
       }
 
-      const updatedProposedChanges = proposal.proposed_changes.map((c: any) => ({
-        ...c,
-        applied: newAppliedIds.includes(c.event_id)
-      }));
-
-      await supabase
-        .from('optimisation_history')
-        .update({ proposed_changes: updatedProposedChanges })
-        .eq('id', proposal.id);
-
+      const updatedProposedChanges = proposal.proposed_changes.map((c: any) => ({ ...c, applied: newAppliedIds.includes(c.event_id) }));
+      await supabase.from('optimisation_history').update({ proposed_changes: updatedProposedChanges }).eq('id', proposal.id);
       setEvents(updatedEvents);
       setAppliedChanges(newAppliedIds);
       setProposal({ ...proposal, proposed_changes: updatedProposedChanges });
-      showSuccess("Day vetting reset and calendar reverted.");
-    } catch (err: any) {
-      showError("Failed to undo vetting: " + err.message);
-    }
+      showSuccess("Day reverted.");
+    } catch (err: any) { showError("Failed to undo: " + err.message); }
   };
 
   const toggleLock = async (eventId: string, currentStatus: boolean) => {
     try {
       await supabase.from('calendar_events_cache').update({ is_locked: !currentStatus }).eq('event_id', eventId);
       setEvents(events.map(e => e.event_id === eventId ? { ...e, is_locked: !currentStatus } : e));
-    } catch (err: any) { showError("Failed to update lock status"); }
+    } catch (err: any) { showError("Failed to update lock"); }
   };
 
   return (
     <Layout hideSidebar={deepFocus}>
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-12 gap-6">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
         <div>
-          <div className="flex items-center gap-4 mb-3">
-            <Badge className="bg-indigo-50 text-indigo-600 border-none px-4 py-1.5 rounded-full font-black flex gap-2 text-[10px] uppercase tracking-widest">
-              <Brain size={14} /> ADHD Focus Mode
+          <div className="flex items-center gap-3 mb-2">
+            <Badge className="bg-indigo-50 text-indigo-600 border-none px-3 py-1 rounded-full font-black flex gap-2 text-[9px] uppercase tracking-widest">
+              <Brain size={12} /> ADHD Focus
             </Badge>
             {currentStep === 'active_plan' && (
-              <div className="flex items-center gap-3 px-4 py-1.5 bg-white rounded-full border border-gray-100 shadow-sm">
-                <Switch 
-                  id="deep-focus" 
-                  checked={deepFocus} 
-                  onCheckedChange={setDeepFocus}
-                  className="data-[state=checked]:bg-indigo-600 h-5 w-9"
-                />
-                <Label htmlFor="deep-focus" className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer">
-                  {deepFocus ? <EyeOff size={14} /> : <Eye size={14} />}
-                  Deep Focus
+              <div className="flex items-center gap-2 px-3 py-1 bg-white rounded-full border border-gray-100 shadow-sm">
+                <Switch id="deep-focus" checked={deepFocus} onCheckedChange={setDeepFocus} className="h-4 w-8" />
+                <Label htmlFor="deep-focus" className="text-[9px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5 cursor-pointer">
+                  {deepFocus ? <EyeOff size={12} /> : <Eye size={12} />}
+                  Compact
                 </Label>
               </div>
             )}
           </div>
-          <h1 className="text-5xl font-black text-gray-900 tracking-tight">Daily Plan</h1>
-          <p className="text-gray-400 mt-2 font-medium text-lg">
-            {currentStep === 'active_plan' ? 'Review and confirm your schedule one day at a time.' : 'Align your schedule with your life.'}
-          </p>
+          <h1 className="text-3xl font-black text-gray-900 tracking-tight">Daily Plan</h1>
         </div>
-        <div className="flex gap-3">
+        <div className="flex gap-2">
           {(currentStep === 'active_plan' || currentStep === 'vetting_tasks') && (
-            <Button 
-              variant="outline" 
-              onClick={() => setCurrentStep('requirements')}
-              className="bg-white border-gray-100 text-gray-500 hover:text-indigo-600 hover:border-indigo-100 rounded-2xl font-black text-[10px] uppercase tracking-widest h-12 px-6 shadow-sm transition-all"
-            >
-              <Settings2 size={16} className="mr-2" /> Requirements
+            <Button variant="outline" onClick={() => setCurrentStep('requirements')} className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
+              <Settings2 size={14} className="mr-2" /> Requirements
             </Button>
           )}
-          <Button 
-            variant="outline" 
-            onClick={() => runAnalysis(false)}
-            disabled={isProcessing}
-            className="bg-white border-gray-100 text-gray-500 hover:text-indigo-600 hover:border-indigo-100 rounded-2xl font-black text-[10px] uppercase tracking-widest h-12 px-6 shadow-sm transition-all"
-          >
-            <RefreshCw size={16} className={cn("mr-2", isProcessing && "animate-spin")} /> Resync
+          <Button variant="outline" onClick={() => runAnalysis(false)} disabled={isProcessing} className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
+            <RefreshCw size={14} className={cn("mr-2", isProcessing && "animate-spin")} /> Resync
           </Button>
           {currentStep === 'active_plan' && (
-            <Button 
-              variant="outline" 
-              onClick={handleResetPlan}
-              className="bg-white border-gray-100 text-gray-400 hover:text-red-500 hover:border-red-100 rounded-2xl font-black text-[10px] uppercase tracking-widest h-12 px-6 shadow-sm transition-all"
-            >
-              <Trash2 size={16} className="mr-2" /> Reset Plan
+            <Button variant="outline" onClick={handleResetPlan} className="bg-white border-gray-100 text-gray-400 hover:text-red-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
+              <Trash2 size={14} className="mr-2" /> Reset
             </Button>
           )}
         </div>
       </div>
 
       {isProcessing ? (
-        <div className="flex flex-col items-center justify-center py-32 text-center">
-          <div className="relative w-40 h-40 mb-12">
-            <div className="absolute inset-0 bg-indigo-100 rounded-full animate-ping opacity-20" />
-            <div className="relative bg-white rounded-full p-10 shadow-2xl border border-indigo-50">
-              <RefreshCw className="text-indigo-600 animate-spin w-20 h-20" />
-            </div>
-          </div>
-          <h2 className="text-4xl font-black text-gray-900 mb-4 tracking-tight">{statusText}</h2>
-          <p className="text-gray-400 font-medium text-lg">This usually takes a few seconds...</p>
+        <div className="flex flex-col items-center justify-center py-20 text-center">
+          <RefreshCw className="text-indigo-600 animate-spin w-12 h-12 mb-4" />
+          <h2 className="text-xl font-black text-gray-900 tracking-tight">{statusText}</h2>
         </div>
       ) : (
         <>
           {currentStep === 'initial' && (
-            <Card className="border-none shadow-2xl shadow-indigo-100/50 rounded-[4rem] overflow-hidden bg-white">
-              <div className="bg-gradient-to-br from-indigo-600 via-indigo-700 to-purple-800 p-24 text-white text-center relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-full h-full opacity-10 pointer-events-none">
-                  <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-white rounded-full blur-[120px]" />
-                  <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-400 rounded-full blur-[120px]" />
+            <Card className="border-none shadow-xl rounded-[2rem] overflow-hidden bg-white">
+              <div className="bg-gradient-to-br from-indigo-600 to-purple-800 p-12 text-white text-center">
+                <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center mx-auto mb-6 backdrop-blur-xl border border-white/30">
+                  <Calendar size={32} />
                 </div>
-                
-                <div className="relative z-10">
-                  <div className="w-28 h-28 bg-white/20 rounded-[2.5rem] flex items-center justify-center mx-auto mb-12 backdrop-blur-xl border border-white/30 shadow-2xl">
-                    <Calendar size={56} />
-                  </div>
-                  <h2 className="text-5xl font-black mb-8 tracking-tight">Ready to Optimise?</h2>
-                  <p className="text-indigo-100 mb-14 text-xl font-medium max-w-lg mx-auto leading-relaxed">We'll sync your calendars and identify which tasks can be moved to better align with your focus.</p>
-                  
-                  <div className="flex flex-col sm:flex-row items-center justify-center gap-6">
-                    <Button onClick={() => runAnalysis(false)} className="bg-white text-indigo-600 hover:bg-indigo-50 rounded-[2.5rem] px-16 py-10 text-2xl font-black shadow-2xl transition-all hover:scale-[1.02] active:scale-[0.98]">
-                      <RefreshCw className="mr-3" size={24} /> Sync Fresh
+                <h2 className="text-3xl font-black mb-4 tracking-tight">Ready to Optimise?</h2>
+                <p className="text-indigo-100 mb-8 text-base font-medium max-w-md mx-auto">Align your schedule with your life.</p>
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+                  <Button onClick={() => runAnalysis(false)} className="bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl px-10 py-6 text-lg font-black shadow-xl">
+                    Sync Fresh
+                  </Button>
+                  {events.length > 0 && (
+                    <Button onClick={() => runAnalysis(true)} variant="outline" className="bg-white/10 border-white/20 text-white hover:bg-white/20 rounded-2xl px-10 py-6 text-lg font-black">
+                      Use Cache
                     </Button>
-                    
-                    {events.length > 0 && (
-                      <Button onClick={() => runAnalysis(true)} variant="outline" className="bg-white/10 border-white/20 text-white hover:bg-white/20 rounded-[2.5rem] px-16 py-10 text-2xl font-black transition-all backdrop-blur-sm">
-                        <History className="mr-3" size={24} /> Use Cache
-                      </Button>
-                    )}
-                  </div>
-
-                  {lastSynced && (
-                    <p className="text-indigo-200 mt-12 text-xs font-black uppercase tracking-[0.3em] opacity-60">
-                      Last synced {formatDistanceToNow(new Date(lastSynced))} ago
-                    </p>
                   )}
                 </div>
               </div>
@@ -460,62 +349,39 @@ const Plan = () => {
           )}
 
           {currentStep === 'vetting_tasks' && (
-            <div className="space-y-10 animate-in fade-in slide-in-from-bottom-8 duration-1000">
-              <div className="flex items-center justify-between bg-white p-12 rounded-[3rem] border border-gray-100 shadow-xl shadow-gray-100/50">
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="flex items-center justify-between bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
                 <div>
-                  <h2 className="text-3xl font-black text-gray-900 tracking-tight">Vet Your Tasks</h2>
-                  <p className="text-gray-400 font-medium mt-2">Toggle tasks that are movable to allow the AI to reschedule them.</p>
+                  <h2 className="text-xl font-black text-gray-900 tracking-tight">Vet Your Tasks</h2>
+                  <p className="text-gray-400 text-xs font-medium">Toggle tasks that are movable.</p>
                 </div>
-                <div className="flex gap-4">
-                  <Button variant="outline" onClick={runAIClassification} className="rounded-[1.5rem] px-10 h-16 font-black text-[10px] uppercase tracking-[0.2em] flex gap-3 border-indigo-100 text-indigo-600 hover:bg-indigo-50 transition-all">
-                    <BrainCircuit size={22} /> Ask AI to Vet
+                <div className="flex gap-3">
+                  <Button variant="outline" onClick={runAIClassification} className="rounded-xl px-6 h-12 font-black text-[9px] uppercase tracking-widest flex gap-2 border-indigo-100 text-indigo-600">
+                    <BrainCircuit size={16} /> AI Vet
                   </Button>
-                  <Button onClick={() => setCurrentStep('requirements')} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-[1.5rem] px-12 h-16 font-black text-[10px] uppercase tracking-[0.2em] flex gap-3 shadow-2xl shadow-indigo-100 transition-all hover:scale-[1.02]">
-                    Next: Requirements <ChevronRight size={22} />
+                  <Button onClick={() => setCurrentStep('requirements')} className="bg-indigo-600 text-white rounded-xl px-8 h-12 font-black text-[9px] uppercase tracking-widest flex gap-2 shadow-lg shadow-indigo-100">
+                    Next <ChevronRight size={16} />
                   </Button>
                 </div>
               </div>
-              <div className="grid grid-cols-1 gap-5">
+              <div className="grid grid-cols-1 gap-3">
                 {events.map((event, i) => (
                   <div key={i} className={cn(
-                    "p-8 rounded-[2.5rem] border transition-all duration-500 flex items-center justify-between group",
-                    event.is_locked 
-                      ? "bg-white border-gray-100 opacity-60" 
-                      : "bg-indigo-50/30 border-indigo-100 shadow-sm"
+                    "p-4 rounded-2xl border transition-all flex items-center justify-between",
+                    event.is_locked ? "bg-white border-gray-100 opacity-60" : "bg-indigo-50/30 border-indigo-100 shadow-sm"
                   )}>
-                    <div className="flex items-center gap-8">
-                      <div className={cn(
-                        "w-16 h-16 rounded-[1.5rem] flex items-center justify-center transition-all duration-500",
-                        event.is_locked ? "bg-gray-50 text-gray-300" : "bg-white text-indigo-600 shadow-xl shadow-indigo-100/50"
-                      )}>
-                        {event.is_locked ? <Lock size={28} /> : <Unlock size={28} />}
+                    <div className="flex items-center gap-4">
+                      <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center", event.is_locked ? "bg-gray-50 text-gray-300" : "bg-white text-indigo-600 shadow-sm")}>
+                        {event.is_locked ? <Lock size={18} /> : <Unlock size={18} />}
                       </div>
                       <div>
-                        <h3 className="font-black text-2xl text-gray-900 tracking-tight">{event.title}</h3>
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-2">
-                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">
-                            {event.is_locked ? 'Fixed Event' : 'Movable Task'}
-                          </p>
-                          <div className="flex items-center gap-2">
-                            <Calendar size={12} className="text-gray-300" />
-                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                              {format(parseISO(event.start_time), 'EEE, MMM d')}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Clock size={12} className="text-gray-300" />
-                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                              {format(parseISO(event.start_time), 'HH:mm')}
-                            </span>
-                          </div>
-                        </div>
+                        <h3 className="font-black text-base text-gray-900 tracking-tight">{event.title}</h3>
+                        <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">
+                          {format(parseISO(event.start_time), 'EEE, MMM d')} • {format(parseISO(event.start_time), 'HH:mm')}
+                        </p>
                       </div>
                     </div>
-                    <Switch 
-                      checked={!event.is_locked} 
-                      onCheckedChange={() => toggleLock(event.event_id, event.is_locked)} 
-                      className="data-[state=checked]:bg-indigo-600 scale-150" 
-                    />
+                    <Switch checked={!event.is_locked} onCheckedChange={() => toggleLock(event.event_id, event.is_locked)} className="data-[state=checked]:bg-indigo-600 scale-110" />
                   </div>
                 ))}
               </div>
@@ -523,71 +389,52 @@ const Plan = () => {
           )}
 
           {currentStep === 'requirements' && (
-            <Card className="border-none shadow-2xl shadow-gray-100/50 rounded-[4rem] overflow-hidden bg-white animate-in fade-in slide-in-from-bottom-8 duration-1000">
-              <CardHeader className="p-16 border-b border-gray-50">
-                <CardTitle className="text-4xl font-black tracking-tight">Specify Requirements</CardTitle>
+            <Card className="border-none shadow-xl rounded-[2rem] overflow-hidden bg-white animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <CardHeader className="p-8 border-b border-gray-50">
+                <CardTitle className="text-2xl font-black tracking-tight">Requirements</CardTitle>
               </CardHeader>
-              <CardContent className="p-16 space-y-16">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-16">
-                  <div className="space-y-6">
-                    <Label className="text-2xl font-black flex items-center gap-4">
-                      <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center">
-                        <Clock className="text-indigo-600" size={24} />
-                      </div>
-                      Task Duration
-                    </Label>
+              <CardContent className="p-8 space-y-8">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="space-y-3">
+                    <Label className="text-sm font-black flex items-center gap-2"><Clock size={16} className="text-indigo-600" /> Duration</Label>
                     <Select value={durationOverride} onValueChange={setDurationOverride}>
-                      <SelectTrigger className="h-20 rounded-[2rem] border-gray-100 font-black text-2xl px-10 focus:ring-indigo-500 bg-gray-50/50">
-                        <SelectValue placeholder="Select duration" />
+                      <SelectTrigger className="h-12 rounded-xl border-gray-100 font-black text-base px-4 bg-gray-50/50">
+                        <SelectValue />
                       </SelectTrigger>
-                      <SelectContent className="rounded-2xl">
-                        <SelectItem value="original">Original Duration</SelectItem>
-                        <SelectItem value="15">15 Minutes</SelectItem>
-                        <SelectItem value="30">30 Minutes</SelectItem>
-                        <SelectItem value="45">45 Minutes</SelectItem>
-                        <SelectItem value="60">60 Minutes</SelectItem>
-                        <SelectItem value="90">90 Minutes</SelectItem>
+                      <SelectContent className="rounded-xl">
+                        <SelectItem value="original">Original</SelectItem>
+                        <SelectItem value="15">15m</SelectItem>
+                        <SelectItem value="30">30m</SelectItem>
+                        <SelectItem value="45">45m</SelectItem>
+                        <SelectItem value="60">60m</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-6">
-                    <Label className="text-2xl font-black flex items-center gap-4">
-                      <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center">
-                        <RefreshCw className="text-indigo-600" size={24} />
-                      </div>
-                      Slot Alignment
-                    </Label>
+                  <div className="space-y-3">
+                    <Label className="text-sm font-black flex items-center gap-2"><RefreshCw size={16} className="text-indigo-600" /> Alignment</Label>
                     <Select value={slotAlignment} onValueChange={setSlotAlignment}>
-                      <SelectTrigger className="h-20 rounded-[2rem] border-gray-100 font-black text-2xl px-10 focus:ring-indigo-500 bg-gray-50/50">
-                        <SelectValue placeholder="Select alignment" />
+                      <SelectTrigger className="h-12 rounded-xl border-gray-100 font-black text-base px-4 bg-gray-50/50">
+                        <SelectValue />
                       </SelectTrigger>
-                      <SelectContent className="rounded-2xl">
-                        <SelectItem value="5">5 Minutes</SelectItem>
-                        <SelectItem value="15">15 Minutes</SelectItem>
-                        <SelectItem value="30">30 Minutes</SelectItem>
-                        <SelectItem value="60">60 Minutes</SelectItem>
+                      <SelectContent className="rounded-xl">
+                        <SelectItem value="5">5m</SelectItem>
+                        <SelectItem value="15">15m</SelectItem>
+                        <SelectItem value="30">30m</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                 </div>
 
-                <div className="space-y-10">
-                  <Label className="text-2xl font-black flex items-center gap-4">
-                    <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center">
-                      <Calendar className="text-indigo-600" size={24} />
-                    </div>
-                    Allowed Days
-                  </Label>
-                  <div className="flex flex-wrap gap-5">
+                <div className="space-y-4">
+                  <Label className="text-sm font-black flex items-center gap-2"><Calendar size={16} className="text-indigo-600" /> Allowed Days</Label>
+                  <div className="flex flex-wrap gap-2">
                     {DAYS.map((day) => (
                       <button 
                         key={day.value} 
                         onClick={() => setSelectedDays(prev => prev.includes(day.value) ? prev.filter(d => d !== day.value) : [...prev, day.value])} 
                         className={cn(
-                          "px-10 py-5 rounded-[1.5rem] font-black text-[10px] uppercase tracking-[0.2em] transition-all border-2",
-                          selectedDays.includes(day.value) 
-                            ? "bg-indigo-600 border-indigo-600 text-white shadow-2xl shadow-indigo-100" 
-                            : "bg-white border-gray-100 text-gray-400 hover:border-indigo-100"
+                          "px-4 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest transition-all border-2",
+                          selectedDays.includes(day.value) ? "bg-indigo-600 border-indigo-600 text-white shadow-md" : "bg-white border-gray-100 text-gray-400"
                         )}
                       >
                         {day.label}
@@ -596,72 +443,19 @@ const Plan = () => {
                   </div>
                 </div>
 
-                <div className="space-y-10 p-12 bg-indigo-50/30 rounded-[3rem] border border-indigo-100/50">
-                  <Label className="text-2xl font-black flex items-center gap-4">
-                    <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-xl shadow-indigo-100/50">
-                      <Inbox className="text-indigo-600" size={24} />
-                    </div>
-                    Surplus Handling
-                  </Label>
-                  <div className="space-y-8">
-                    <p className="text-gray-500 font-medium text-lg leading-relaxed">If tasks exceed your daily limit, where should they go?</p>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
-                      <div className="space-y-4">
-                        <Label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Placeholder Day</Label>
-                        <Input 
-                          type="date" 
-                          value={placeholderDate} 
-                          onChange={(e) => setPlaceholderDate(e.target.value)}
-                          className="h-16 rounded-[1.5rem] border-gray-100 font-black text-xl px-8 focus:ring-indigo-500 bg-white shadow-sm"
-                        />
-                      </div>
-                      <div className="flex items-end">
-                        <div className="bg-white p-8 rounded-[2rem] border border-indigo-100 shadow-xl shadow-indigo-100/20">
-                          <p className="text-sm text-indigo-600 font-black leading-relaxed uppercase tracking-widest">
-                            Surplus tasks will be stacked on this day for future shuffling.
-                          </p>
-                        </div>
-                      </div>
-                    </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="space-y-3">
+                    <Label className="text-sm font-black flex items-center gap-2"><Clock size={16} className="text-indigo-600" /> Max Hours</Label>
+                    <Input type="number" value={maxHoursOverride} onChange={(e) => setMaxHoursOverride(parseInt(e.target.value))} className="h-12 rounded-xl border-gray-100 font-black text-lg px-4 bg-gray-50/50" />
                   </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-16">
-                  <div className="space-y-6">
-                    <Label className="text-2xl font-black flex items-center gap-4">
-                      <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center">
-                        <Clock className="text-indigo-600" size={24} />
-                      </div>
-                      Max Work Hours/Day
-                    </Label>
-                    <Input 
-                      type="number" 
-                      value={maxHoursOverride} 
-                      onChange={(e) => setMaxHoursOverride(parseInt(e.target.value))} 
-                      className="h-20 rounded-[2rem] border-gray-100 font-black text-3xl px-10 focus:ring-indigo-500 bg-gray-50/50" 
-                    />
-                  </div>
-                  <div className="space-y-6">
-                    <Label className="text-2xl font-black flex items-center gap-4">
-                      <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center">
-                        <ListOrdered className="text-indigo-600" size={24} />
-                      </div>
-                      Max Tasks/Day
-                    </Label>
-                    <Input 
-                      type="number" 
-                      value={maxTasksOverride} 
-                      onChange={(e) => setMaxTasksOverride(parseInt(e.target.value))} 
-                      className="h-20 rounded-[2rem] border-gray-100 font-black text-3xl px-10 focus:ring-indigo-500 bg-gray-50/50" 
-                    />
+                  <div className="space-y-3">
+                    <Label className="text-sm font-black flex items-center gap-2"><ListOrdered size={16} className="text-indigo-600" /> Max Tasks</Label>
+                    <Input type="number" value={maxTasksOverride} onChange={(e) => setMaxTasksOverride(parseInt(e.target.value))} className="h-12 rounded-xl border-gray-100 font-black text-lg px-4 bg-gray-50/50" />
                   </div>
                 </div>
                 
-                <Button 
-                  onClick={runOptimisation} 
-                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded-[2.5rem] py-12 text-3xl font-black shadow-2xl shadow-indigo-100 transition-all hover:scale-[1.01] active:scale-[0.99]"
-                >
-                  Generate Proposed Schedule
+                <Button onClick={runOptimisation} className="w-full bg-indigo-600 text-white rounded-2xl py-8 text-xl font-black shadow-xl shadow-indigo-100">
+                  Generate Plan
                 </Button>
               </CardContent>
             </Card>
