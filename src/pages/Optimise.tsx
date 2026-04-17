@@ -6,7 +6,7 @@ import { Progress } from '@/components/ui/progress';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, Bug, ArrowRight, Zap, Apple, Info, Globe, ChevronRight, Settings2 } from 'lucide-react';
+import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, Bug, ArrowRight, Zap, Apple, Info, Globe, ChevronRight, Settings2, Tag } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { format } from 'date-fns';
@@ -22,7 +22,6 @@ const Optimise = () => {
   const [isApplying, setIsApplying] = useState(false);
   const [events, setEvents] = useState<any[]>([]);
   
-  // New state for pre-optimisation settings
   const [durationOverride, setDurationOverride] = useState<string>("original");
 
   const fetchEventsAndReview = async (providerLabel: string) => {
@@ -135,6 +134,7 @@ const Optimise = () => {
             start_time: change.new_start,
             end_time: change.new_end,
             duration_minutes: change.duration,
+            category: change.category,
             last_synced_at: new Date().toISOString()
           })
           .eq('event_id', change.event_id)
@@ -167,7 +167,6 @@ const Optimise = () => {
           </div>
         </div>
 
-        {/* INITIAL STATE */}
         {!isOptimising && !isReviewing && !optimisationResult && (
           <div className="space-y-8">
             <Card className="border-none shadow-2xl shadow-indigo-100/50 rounded-[2.5rem] overflow-hidden bg-white">
@@ -203,7 +202,6 @@ const Optimise = () => {
           </div>
         )}
 
-        {/* LOADING STATE */}
         {isOptimising && (
           <Card className="border-none shadow-sm rounded-[2.5rem] p-16 text-center bg-white">
             <div className="relative w-24 h-24 mx-auto mb-10">
@@ -220,7 +218,6 @@ const Optimise = () => {
           </Card>
         )}
 
-        {/* REVIEW STATE */}
         {isReviewing && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="flex flex-col md:flex-row items-start md:items-center justify-between bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm gap-6">
@@ -323,7 +320,6 @@ const Optimise = () => {
           </div>
         )}
 
-        {/* RESULTS STATE */}
         {optimisationResult && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="flex items-center justify-between">
@@ -339,11 +335,19 @@ const Optimise = () => {
                   <Card key={i} className="border-none shadow-sm bg-white rounded-2xl overflow-hidden group hover:shadow-md transition-all">
                     <div className="flex flex-col md:flex-row">
                       <div className="p-6 flex-1">
-                        <div className="flex items-center gap-3 mb-4">
-                          <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
-                            <Calendar className="text-indigo-600" size={20} />
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
+                              <Calendar className="text-indigo-600" size={20} />
+                            </div>
+                            <h3 className="font-bold text-gray-900 text-lg">{change.title}</h3>
                           </div>
-                          <h3 className="font-bold text-gray-900 text-lg">{change.title}</h3>
+                          {change.category && change.category !== 'General' && (
+                            <div className="flex items-center gap-1.5 bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider">
+                              <Tag size={12} />
+                              {change.category}
+                            </div>
+                          )}
                         </div>
                         
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
@@ -366,15 +370,7 @@ const Optimise = () => {
                       <div className="bg-indigo-50/50 px-6 py-4 md:w-48 flex flex-col justify-center border-t md:border-t-0 md:border-l border-indigo-100/50">
                         <div className="flex items-center gap-2 text-indigo-600 font-bold text-sm">
                           <Clock size={14} />
-                          {change.old_duration !== change.duration ? (
-                            <span className="flex items-center gap-1">
-                              <span className="line-through opacity-50">{change.old_duration}m</span>
-                              <ArrowRight size={10} />
-                              {change.duration}m
-                            </span>
-                          ) : (
-                            <span>{change.duration}m</span>
-                          )}
+                          {change.duration} mins
                         </div>
                         <p className="text-[10px] text-indigo-400 font-bold uppercase mt-1">Duration</p>
                       </div>
