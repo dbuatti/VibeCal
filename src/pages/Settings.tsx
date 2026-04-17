@@ -10,10 +10,12 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
-import { Save, Clock, Shield, Target, Apple, Mail, Lock } from 'lucide-react';
+import { Save, Clock, Shield, Target, Apple, Mail, Lock, Eye, EyeOff, RefreshCw, CheckCircle2 } from 'lucide-react';
 
 const Settings = () => {
   const [loading, setLoading] = useState(true);
+  const [isTesting, setIsTesting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [settings, setSettings] = useState<any>({
     day_start_time: '09:00',
     day_end_time: '17:00',
@@ -88,6 +90,34 @@ const Settings = () => {
     }
   };
 
+  const testAppleConnection = async () => {
+    setIsTesting(true);
+    try {
+      // First save the current credentials to ensure the edge function uses the latest ones
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not authenticated');
+
+      await supabase
+        .from('profiles')
+        .update({ 
+          apple_id: profile.apple_id, 
+          apple_app_password: profile.apple_app_password 
+        })
+        .eq('id', user.id);
+
+      const { data, error } = await supabase.functions.invoke('sync-apple-calendar');
+      
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+
+      showSuccess(`Connection successful! Found ${data.count} events.`);
+    } catch (err: any) {
+      showError(`Connection failed: ${err.message}`);
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
   return (
     <Layout>
       <div className="flex justify-between items-end mb-8">
@@ -139,12 +169,28 @@ const Settings = () => {
           </Card>
 
           <Card className="border-none shadow-sm rounded-2xl border-l-4 border-l-gray-900">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Apple className="text-gray-900" size={20} />
-                Apple Calendar (CalDAV)
-              </CardTitle>
-              <CardDescription>Connect your iCloud calendar for two-way sync.</CardDescription>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Apple className="text-gray-900" size={20} />
+                  Apple Calendar (CalDAV)
+                </CardTitle>
+                <CardDescription>Connect your iCloud calendar for two-way sync.</CardDescription>
+              </div>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={testAppleConnection}
+                disabled={isTesting || !profile.apple_id || !profile.apple_app_password}
+                className="rounded-xl border-gray-200 hover:bg-gray-50"
+              >
+                {isTesting ? (
+                  <RefreshCw size={14} className="mr-2 animate-spin" />
+                ) : (
+                  <CheckCircle2 size={14} className="mr-2 text-green-600" />
+                )}
+                Test Connection
+              </Button>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -164,12 +210,22 @@ const Settings = () => {
                     <Lock size={14} className="text-gray-400" />
                     App-Specific Password
                   </Label>
-                  <Input 
-                    type="password"
-                    placeholder="xxxx-xxxx-xxxx-xxxx"
-                    value={profile.apple_app_password || ''}
-                    onChange={(e) => setProfile({...profile, apple_app_password: e.target.value})}
-                  />
+                  <div className="relative">
+                    <Input 
+                      type={showPassword ? "text" : "password"}
+                      placeholder="xxxx-xxxx-xxxx-xxxx"
+                      value={profile.apple_app_password || ''}
+                      onChange={(e) => setProfile({...profile, apple_app_password: e.target.value})}
+                      className="pr-10"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                    >
+                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
                 </div>
               </div>
               <div className="bg-gray-50 p-4 rounded-xl text-xs text-gray-500 leading-relaxed">
