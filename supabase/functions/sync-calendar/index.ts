@@ -96,12 +96,12 @@ serve(async (req) => {
     // Clear existing cache for this provider
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google');
 
-    // 3. Fetch Events
+    // 3. Fetch Events - Increased window to 365 days
     const now = new Date()
-    const end = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
+    const end = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000)
     const eventMap = new Map();
 
-    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly/i;
+    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga/i;
     const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i];
 
     for (const cal of enabledCalendars) {

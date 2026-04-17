@@ -100,19 +100,19 @@ serve(async (req) => {
     // Clear existing cache for this provider
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
 
-    // 3. Fetch Events
+    // 3. Fetch Events - Increased window to 365 days
     const now = new Date();
     const startStr = now.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-    const endStr = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    const endStr = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
     const reportXml = `
       <c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
-        <d:prop><d:getetag /><c:calendar-data><c:expand start="${startStr}" end="${endStr}"/></c:calendar-data></d:prop>
+        <d:prop><d:getetag /><c:calendar-data><c:expand start="${startStr}" end="${endStr}"/></c:expand></c:calendar-data></d:prop>
         <c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"><c:time-range start="${startStr}" end="${endStr}"/></c:comp-filter></c:comp-filter></c:filter>
       </c:calendar-query>
     `;
 
-    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly/i;
+    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga/i;
     const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i];
 
     const eventMap = new Map();
@@ -148,12 +148,10 @@ serve(async (req) => {
           if (dtEnd) {
             end = parseIcsDate(dtEnd, userTimezone);
           } else if (duration) {
-            // Simple duration parsing (e.g., PT1H15M)
             const hours = parseInt(duration.match(/(\d+)H/)?.[1] || '0');
             const mins = parseInt(duration.match(/(\d+)M/)?.[1] || '0');
             end = new Date(start.getTime() + (hours * 3600 + mins * 60) * 1000);
           } else {
-            // Fallback to 60 minutes if no end or duration
             end = new Date(start.getTime() + 60 * 60 * 1000);
           }
           
@@ -164,9 +162,12 @@ serve(async (req) => {
                            fixedKeywords.test(summary) || 
                            fixedPatterns.some(p => p.test(summary))));
           
-          eventMap.set(uid, {
+          // Use a combination of UID and Start Time to ensure recurring instances are unique
+          const uniqueId = `${uid}-${dtStart.replace(/[^a-zA-Z0-9]/g, '')}`;
+          
+          eventMap.set(uniqueId, {
             user_id: user.id,
-            event_id: uid,
+            event_id: uniqueId,
             title: summary,
             start_time: start.toISOString(),
             end_time: end.toISOString(),
