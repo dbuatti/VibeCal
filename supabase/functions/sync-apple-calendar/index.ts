@@ -119,7 +119,7 @@ serve(async (req) => {
       </c:calendar-query>
     `;
 
-    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga|show|tech|dress|night|opening|closing|birthday|party|gala|buffer|probe|experiment|quinceanera|🎭|✨|lunch|dinner|breakfast|brunch|bump in|performance|gig|concert/i;
+    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga|show|tech|dress|night|opening|closing|birthday|party|gala|buffer|probe|experiment|quinceanera|🎭|✨|lunch|dinner|breakfast|brunch|bump in|performance|gig|concert|wedding|funeral|doctor|dentist|flight|train|hotel|check-in|check-out|reservation|40th|50th|60th|anniversary/i;
     const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i];
 
     const eventMap = new Map();
@@ -178,15 +178,19 @@ serve(async (req) => {
           if (!end) end = new Date(start.getTime() + 30 * 60000);
           const uid = uidMatch[1].trim();
           
-          // Use UID as the primary key for stability, but keep the start time in the map key for uniqueness if needed
-          const uniqueId = uid; 
+          // CRITICAL: Use a unique ID per instance for recurring events to prevent overwriting
+          const uniqueId = `${uid}-${start.toISOString()}`; 
           
           let isLocked = existingLockStatus.has(uniqueId) ? existingLockStatus.get(uniqueId) : null;
           
           if (isLocked === null) {
             const isExplicitlyMovable = movableKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
             const isExplicitlyLocked = lockedKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));
-            isLocked = isExplicitlyLocked || (!isExplicitlyMovable && (fixedKeywords.test(summary) || fixedPatterns.some(p => p.test(summary))));
+            
+            // Force lock for high-priority fixed terms
+            const isHighPriorityFixed = /lunch|dinner|birthday|party|quinceanera|wedding|funeral/i.test(summary);
+            
+            isLocked = isExplicitlyLocked || isHighPriorityFixed || (!isExplicitlyMovable && (fixedKeywords.test(summary) || fixedPatterns.some(p => p.test(summary))));
           }
 
           const isWork = workKeywords.some(kw => summary.toLowerCase().includes(kw.toLowerCase()));

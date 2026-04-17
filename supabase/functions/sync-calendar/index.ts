@@ -57,7 +57,7 @@ serve(async (req) => {
     const syncTimestamp = new Date().toISOString();
     
     // Expanded fixed keywords to catch more common non-movable events
-    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga|show|tech|dress|night|opening|closing|birthday|party|gala|buffer|probe|experiment|quinceanera|🎭|✨|lunch|dinner|breakfast|brunch|bump in|performance|gig|concert/i;
+    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga|show|tech|dress|night|opening|closing|birthday|party|gala|buffer|probe|experiment|quinceanera|🎭|✨|lunch|dinner|breakfast|brunch|bump in|performance|gig|concert|wedding|funeral|doctor|dentist|flight|train|hotel|check-in|check-out|reservation|40th|50th|60th|anniversary/i;
     const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i];
 
     for (const cal of enabledCalendars) {
@@ -76,7 +76,11 @@ serve(async (req) => {
           if (isLocked === null) {
             const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
             const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
-            isLocked = isExplicitlyLocked || (!isExplicitlyMovable && ((event.attendees?.length > 1) || fixedKeywords.test(title) || fixedPatterns.some(p => p.test(title))));
+            
+            // Force lock for high-priority fixed terms even if they match a movable keyword (e.g. "Lunch" shouldn't be moved just because "email" is movable)
+            const isHighPriorityFixed = /lunch|dinner|birthday|party|quinceanera|wedding|funeral/i.test(title);
+            
+            isLocked = isExplicitlyLocked || isHighPriorityFixed || (!isExplicitlyMovable && ((event.attendees?.length > 1) || fixedKeywords.test(title) || fixedPatterns.some(p => p.test(title))));
           }
 
           eventMap.set(event.id, {
