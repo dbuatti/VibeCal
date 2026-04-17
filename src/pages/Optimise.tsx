@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, ArrowRight, Zap, Apple, Globe, ChevronRight, Settings2, ListOrdered, BrainCircuit, AlignLeft, Check, LayoutList, LayoutGrid } from 'lucide-react';
+import { Sparkles, RefreshCw, CheckCircle2, Calendar, Clock, Lock, Unlock, ArrowRight, Zap, Apple, Globe, ChevronRight, Settings2, ListOrdered, BrainCircuit, AlignLeft, Check, LayoutList, LayoutGrid, ChevronLeft } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { format } from 'date-fns';
@@ -182,17 +182,14 @@ const Optimise = () => {
 
   // Step 4: Apply Single Change
   const applySingleChange = async (change: any) => {
-    console.log("[Optimise] Applying change and pushing to provider:", change.title);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       const { data: { session } } = await supabase.auth.getSession();
       if (!user) throw new Error("User not found");
 
-      // 1. Find the event in cache to get provider info
       const eventInCache = events.find(e => e.event_id === change.event_id);
       if (!eventInCache) throw new Error("Event not found in cache");
 
-      // 2. Push to Provider
       const { error: pushError } = await supabase.functions.invoke('push-to-provider', {
         body: {
           eventId: change.event_id,
@@ -206,7 +203,6 @@ const Optimise = () => {
 
       if (pushError) throw pushError;
 
-      // 3. Update Local Cache
       await supabase
         .from('calendar_events_cache')
         .update({
@@ -221,7 +217,6 @@ const Optimise = () => {
       setAppliedChanges(prev => [...prev, change.event_id]);
       showSuccess(`Synced: ${change.title}`);
     } catch (err: any) {
-      console.error("[Optimise] applySingleChange failed:", err);
       showError(err.message);
     }
   };
@@ -249,6 +244,25 @@ const Optimise = () => {
     }
   };
 
+  const steps: { id: Step; label: string }[] = [
+    { id: 'initial', label: 'Analyse' },
+    { id: 'vetting', label: 'Vet' },
+    { id: 'requirements', label: 'Requirements' },
+    { id: 'proposed', label: 'Proposed' }
+  ];
+
+  const handleStepClick = (stepId: Step) => {
+    if (isProcessing) return;
+    
+    const stepIndex = steps.findIndex(s => s.id === stepId);
+    const currentIndex = steps.findIndex(s => s.id === currentStep);
+    
+    // Allow going back to any step, or forward if we have events
+    if (stepIndex < currentIndex || (events.length > 0 && stepIndex > 0)) {
+      setCurrentStep(stepId);
+    }
+  };
+
   return (
     <Layout>
       <div className="max-w-4xl mx-auto">
@@ -257,21 +271,37 @@ const Optimise = () => {
           <p className="text-lg text-gray-500">Align your movable tasks with your work window.</p>
           
           <div className="flex items-center gap-4 mt-8">
-            {['Analyse', 'Vet', 'Requirements', 'Proposed'].map((s, i) => {
-              const steps: Step[] = ['initial', 'vetting', 'requirements', 'proposed'];
-              const isActive = steps.indexOf(currentStep) >= i;
+            {steps.map((s, i) => {
+              const isActive = steps.findIndex(step => step.id === currentStep) >= i;
+              const isCurrent = currentStep === s.id;
+              const isClickable = i === 0 || events.length > 0;
+
               return (
-                <React.Fragment key={s}>
-                  <div className="flex items-center gap-2">
+                <React.Fragment key={s.id}>
+                  <button 
+                    onClick={() => handleStepClick(s.id)}
+                    disabled={!isClickable || isProcessing}
+                    className={cn(
+                      "flex items-center gap-2 group outline-none transition-all",
+                      !isClickable && "opacity-40 cursor-not-allowed"
+                    )}
+                  >
                     <div className={cn(
-                      "w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-colors",
-                      isActive ? "bg-indigo-600 text-white" : "bg-gray-100 text-gray-400"
+                      "w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all",
+                      isActive ? "bg-indigo-600 text-white" : "bg-gray-100 text-gray-400",
+                      isCurrent && "ring-4 ring-indigo-100"
                     )}>
                       {i + 1}
                     </div>
-                    <span className={cn("text-sm font-bold", isActive ? "text-gray-900" : "text-gray-400")}>{s}</span>
-                  </div>
-                  {i < 3 && <div className="h-px w-8 bg-gray-100" />}
+                    <span className={cn(
+                      "text-sm font-bold transition-colors", 
+                      isActive ? "text-gray-900" : "text-gray-400",
+                      isClickable && !isActive && "group-hover:text-gray-600"
+                    )}>
+                      {s.label}
+                    </span>
+                  </button>
+                  {i < steps.length - 1 && <div className="h-px w-8 bg-gray-100" />}
                 </React.Fragment>
               );
             })}
@@ -322,6 +352,14 @@ const Optimise = () => {
                 <p className="text-gray-500 font-medium">Unlock tasks you want the AI to redistribute.</p>
               </div>
               <div className="flex gap-3">
+                <Button 
+                  variant="outline"
+                  onClick={() => setCurrentStep('initial')}
+                  className="rounded-xl px-6 h-12 font-bold border-gray-200"
+                >
+                  <ChevronLeft size={20} className="mr-2" />
+                  Back
+                </Button>
                 <Button 
                   variant="outline"
                   onClick={runAIClassification}
@@ -473,7 +511,8 @@ const Optimise = () => {
 
                 <div className="flex gap-4 pt-6">
                   <Button variant="outline" onClick={() => setCurrentStep('vetting')} className="rounded-xl h-14 px-8">
-                    Back
+                    <ChevronLeft size={20} className="mr-2" />
+                    Back to Vetting
                   </Button>
                   <Button 
                     onClick={runOptimisation}
@@ -491,9 +530,14 @@ const Optimise = () => {
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-bold text-gray-900">Proposed Schedule</h2>
-              <Button variant="outline" onClick={() => setCurrentStep('requirements')} className="rounded-xl border-gray-200">
-                Adjust Requirements
-              </Button>
+              <div className="flex gap-3">
+                <Button variant="outline" onClick={() => setCurrentStep('vetting')} className="rounded-xl border-gray-200">
+                  Back to Vetting
+                </Button>
+                <Button variant="outline" onClick={() => setCurrentStep('requirements')} className="rounded-xl border-gray-200">
+                  Adjust Requirements
+                </Button>
+              </div>
             </div>
 
             <Tabs defaultValue="list" className="w-full">
