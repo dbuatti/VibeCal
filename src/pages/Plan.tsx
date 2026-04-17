@@ -160,6 +160,9 @@ const Plan = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
+      // If this is a fresh optimisation (not a resuggest), clear previous applied changes
+      const currentApplied = isResuggest ? appliedChanges : [];
+
       const { data, error } = await supabase.functions.invoke('optimise-schedule', {
         body: { 
           durationOverride: durationOverride === "original" ? null : parseInt(durationOverride), 
@@ -167,26 +170,27 @@ const Plan = () => {
           slotAlignment: parseInt(slotAlignment), 
           selectedDays,
           placeholderDate,
-          vettedEventIds: isResuggest ? appliedChanges : [] 
+          vettedEventIds: currentApplied 
         }
       });
       if (error) throw error;
 
       let finalChanges = data.changes;
       if (isResuggest && proposal) {
-        const vettedChanges = proposal.proposed_changes.filter((c: any) => appliedChanges.includes(c.event_id));
-        const newUnvettedChanges = data.changes.filter((c: any) => !appliedChanges.includes(c.event_id));
+        const vettedChanges = proposal.proposed_changes.filter((c: any) => currentApplied.includes(c.event_id));
+        const newUnvettedChanges = data.changes.filter((c: any) => !currentApplied.includes(c.event_id));
         finalChanges = [...vettedChanges, ...newUnvettedChanges];
       }
 
       const { data: newProposal } = await supabase.from('optimisation_history').insert({
         user_id: user.id,
-        proposed_changes: finalChanges.map((c: any) => ({ ...c, applied: appliedChanges.includes(c.event_id) })),
+        proposed_changes: finalChanges.map((c: any) => ({ ...c, applied: currentApplied.includes(c.event_id) })),
         status: 'proposed',
         metadata: { selectedDays, maxTasksOverride, maxHoursOverride, durationOverride, isResuggest, placeholderDate }
       }).select().single();
 
       setProposal(newProposal);
+      setAppliedChanges(currentApplied);
       setCurrentStep('active_plan');
       showSuccess(isResuggest ? "Day resuggested!" : "Optimisation complete!");
     } catch (err: any) { showError(err.message); }

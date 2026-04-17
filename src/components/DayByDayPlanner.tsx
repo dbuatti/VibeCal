@@ -162,6 +162,12 @@ const DayByDayPlanner = ({
     }
   };
 
+  const getDayStatus = () => {
+    if (dayChanges.length === 0) return "No Changes";
+    if (isDayVetted) return "Vetted";
+    return "Vetting";
+  };
+
   if (isFinished) {
     return (
       <div className="max-w-md mx-auto text-center py-16 animate-in zoom-in-95 duration-500">
@@ -193,8 +199,13 @@ const DayByDayPlanner = ({
           {showXP && <div className="absolute -top-10 left-1/2 -translate-x-1/2 animate-bounce"><Badge className="bg-yellow-400 text-yellow-900 px-4 py-1 rounded-full font-black text-[9px]">+50 XP</Badge></div>}
           <h2 className="text-xl font-black text-gray-900 tracking-tight">{format(currentDate, 'EEEE, MMM do')}</h2>
           <div className="flex items-center gap-2 mt-1">
-            <Badge className={cn("border-none px-3 py-0.5 rounded-full font-black text-[8px] uppercase tracking-widest", isDayVetted ? "bg-green-500 text-white" : "bg-indigo-100 text-indigo-600")}>{isDayVetted ? 'Vetted' : 'Vetting'}</Badge>
-            {!isDayVetted && onResuggestDay && (
+            <Badge className={cn(
+              "border-none px-3 py-0.5 rounded-full font-black text-[8px] uppercase tracking-widest", 
+              dayChanges.length === 0 ? "bg-gray-100 text-gray-400" : isDayVetted ? "bg-green-500 text-white" : "bg-indigo-100 text-indigo-600"
+            )}>
+              {getDayStatus()}
+            </Badge>
+            {dayChanges.length > 0 && !isDayVetted && onResuggestDay && (
               <button 
                 onClick={handleResuggest}
                 disabled={isResuggesting}
@@ -253,7 +264,11 @@ const DayByDayPlanner = ({
           </Card>
 
           <div className="space-y-3">
-            {isDayVetted ? (
+            {dayChanges.length === 0 ? (
+              <Button disabled className="w-full bg-gray-100 text-gray-400 rounded-2xl py-8 text-lg font-black cursor-not-allowed">
+                No Sync Required
+              </Button>
+            ) : isDayVetted ? (
               <Button onClick={handleUndoDay} disabled={isSyncing} variant="outline" className="w-full rounded-2xl py-8 text-lg font-black border-gray-100 text-gray-400">
                 {isSyncing ? <RefreshCw className="animate-spin mr-2" size={20} /> : <><RotateCcw className="mr-2" size={20} /> Undo</>}
               </Button>
