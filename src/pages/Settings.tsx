@@ -30,7 +30,7 @@ const Settings = () => {
     optimisation_aggressiveness: 'balanced',
     preview_mode_enabled: true,
     group_similar_tasks: true,
-    movable_keywords: ['arrangement', 'email', 'outreach', 'draft', 'exploration'],
+    movable_keywords: ['arrangement', 'email', 'outreach', 'draft', 'exploration', 'clean', 'chore', 'practice'],
     locked_keywords: ['meeting', 'call', 'appointment', 'rehearsal', 'lesson'],
     work_keywords: ['meeting', 'call', 'lesson', 'audition', 'rehearsal']
   });

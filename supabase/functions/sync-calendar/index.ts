@@ -98,7 +98,7 @@ serve(async (req) => {
     const eventMap = new Map();
 
     const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly/i;
-    const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i, /[\u{1F300}-\u{1F9FF}]/u];
+    const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i]; // Removed emoji pattern to be less aggressive
 
     for (const cal of enabled) {
       let calId = cal.calendar_id;
@@ -118,7 +118,6 @@ serve(async (req) => {
 
         if (fallbackRes.ok) {
           console.log(`[sync-calendar] Fallback successful. Updating DB ID from ${calId} to ${fallbackId}`);
-          // Permanently update the ID in our database so we don't 404 next time
           await supabaseAdmin.from('user_calendars')
             .update({ calendar_id: fallbackId })
             .eq('user_id', user.id)
@@ -156,8 +155,8 @@ serve(async (req) => {
           const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
           const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
           
+          // Smarter locking: Only lock recurring events if they match fixed keywords or have multiple attendees
           const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && (
-            !!event.recurringEventId || 
             (event.attendees?.length > 1) ||
             fixedKeywords.test(title) ||
             fixedPatterns.some(p => p.test(title))
