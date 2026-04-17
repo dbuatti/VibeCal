@@ -1,12 +1,23 @@
 "use client";
 
 import React from 'react';
-import { Brain, Eye, EyeOff, CheckSquare, Settings2, RefreshCw, Trash2 } from 'lucide-react';
+import { Brain, Eye, EyeOff, CheckSquare, Settings2, RefreshCw, Trash2, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { 
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { cn } from '@/lib/utils';
 
 interface PlanPageHeaderProps {
@@ -17,6 +28,7 @@ interface PlanPageHeaderProps {
   onVetTasks: () => void;
   onResync: () => void;
   onReset: () => void;
+  onFullReset: () => void;
   renderRequirementsForm: () => React.ReactNode;
 }
 
@@ -28,6 +40,7 @@ const PlanPageHeader = ({
   onVetTasks,
   onResync,
   onReset,
+  onFullReset,
   renderRequirementsForm
 }: PlanPageHeaderProps) => {
   return (
@@ -77,17 +90,58 @@ const PlanPageHeader = ({
             <Settings2 size={14} className="mr-2" /> Requirements
           </Button>
         )}
-        <Button variant="outline" onClick={onResync} disabled={isProcessing} className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
-          <RefreshCw size={14} className={cn("mr-2", isProcessing && "animate-spin")} /> Resync
-        </Button>
+        
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
+              <RefreshCw size={14} className={cn("mr-2", isProcessing && "animate-spin")} /> Sync
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent className="w-56 rounded-2xl p-2" align="end">
+            <DropdownMenuItem onClick={onResync} disabled={isProcessing} className="rounded-lg font-bold text-xs">
+              <RefreshCw size={14} className="mr-2" /> Standard Resync
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <DropdownMenuItem onSelect={(e) => e.preventDefault()} className="rounded-lg font-bold text-xs text-red-600">
+                  <AlertTriangle size={14} className="mr-2" /> Full System Reset
+                </DropdownMenuItem>
+              </AlertDialogTrigger>
+              <AlertDialogContent className="rounded-[2rem]">
+                <AlertDialogHeader>
+                  <AlertDialogTitle className="text-2xl font-black tracking-tight">Are you absolutely sure?</AlertDialogTitle>
+                  <AlertDialogDescription className="text-gray-500 font-medium">
+                    This will clear your entire calendar cache and all proposed plans. You will need to resync from scratch. This cannot be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel className="rounded-xl font-bold">Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={onFullReset} className="bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold">
+                    Yes, Reset Everything
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
         {currentStep === 'active_plan' && (
           <Button variant="outline" onClick={onReset} className="bg-white border-gray-100 text-gray-400 hover:text-red-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
-            <Trash2 size={14} className="mr-2" /> Reset
+            <Trash2 size={14} className="mr-2" /> Clear Plan
           </Button>
         )}
       </div>
     </div>
   );
 };
+
+import { 
+  DropdownMenu, 
+  DropdownMenuContent, 
+  DropdownMenuItem, 
+  DropdownMenuSeparator, 
+  DropdownMenuTrigger 
+} from '@/components/ui/dropdown-menu';
 
 export default PlanPageHeader;

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '@/components/Layout';
 import { supabase } from '@/lib/supabase';
@@ -14,15 +14,34 @@ import {
   Filter,
   Calendar,
   RefreshCw,
-  CheckCircle2
+  CheckCircle2,
+  SortAsc,
+  SortDesc,
+  Eye,
+  EyeOff,
+  Trash2,
+  CheckSquare,
+  Square
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
+import { 
+  DropdownMenu, 
+  DropdownMenuContent, 
+  DropdownMenuItem, 
+  DropdownMenuLabel, 
+  DropdownMenuSeparator, 
+  DropdownMenuTrigger,
+  DropdownMenuCheckboxItem
+} from '@/components/ui/dropdown-menu';
 import { format, parseISO } from 'date-fns';
 import { cn } from '@/lib/utils';
+
+type SortField = 'date' | 'title' | 'status';
+type SortOrder = 'asc' | 'desc';
 
 const Vet = () => {
   const navigate = useNavigate();
@@ -30,7 +49,13 @@ const Vet = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [events, setEvents] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filter, setFilter] = useState<'all' | 'locked' | 'movable'>('all');
+  
+  // Advanced Filtering & Sorting State
+  const [showLocked, setShowLocked] = useState(true);
+  const [showUnlocked, setShowUnlocked] = useState(true);
+  const [sortBy, setSortBy] = useState<SortField>('date');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
+  const [selectedProvider, setSelectedProvider] = useState<string | 'all'>('all');
 
   const fetchEvents = async () => {
     setLoading(true);
@@ -69,6 +94,30 @@ const Vet = () => {
     }
   };
 
+  const bulkAction = async (action: 'lock_all' | 'unlock_all') => {
+    const isLocked = action === 'lock_all';
+    const targetIds = filteredEvents.map(e => e.event_id);
+    
+    if (targetIds.length === 0) return;
+
+    try {
+      setIsProcessing(true);
+      const { error } = await supabase
+        .from('calendar_events_cache')
+        .update({ is_locked: isLocked })
+        .in('event_id', targetIds);
+
+      if (error) throw error;
+
+      setEvents(events.map(e => targetIds.includes(e.event_id) ? { ...e, is_locked: isLocked } : e));
+      showSuccess(`${isLocked ? 'Locked' : 'Unlocked'} ${targetIds.length} tasks`);
+    } catch (err) {
+      showError("Bulk action failed");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const runAIClassification = async () => {
     setIsProcessing(true);
     try {
@@ -97,14 +146,28 @@ const Vet = () => {
     }
   };
 
-  const filteredEvents = events.filter(e => {
-    const matchesSearch = e.title.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesFilter = filter === 'all' || (filter === 'locked' ? e.is_locked : !e.is_locked);
-    return matchesSearch && matchesFilter;
-  });
+  const filteredEvents = useMemo(() => {
+    return events
+      .filter(e => {
+        const matchesSearch = e.title.toLowerCase().includes(searchQuery.toLowerCase());
+        const matchesLocked = e.is_locked ? showLocked : showUnlocked;
+        const matchesProvider = selectedProvider === 'all' || e.provider === selectedProvider;
+        return matchesSearch && matchesLocked && matchesProvider;
+      })
+      .sort((a, b) => {
+        let comparison = 0;
+        if (sortBy === 'date') {
+          comparison = new Date(a.start_time).getTime() - new Date(b.start_time).getTime();
+        } else if (sortBy === 'title') {
+          comparison = a.title.localeCompare(b.title);
+        } else if (sortBy === 'status') {
+          comparison = (a.is_locked === b.is_locked) ? 0 : a.is_locked ? 1 : -1;
+        }
+        return sortOrder === 'asc' ? comparison : -comparison;
+      });
+  }, [events, searchQuery, showLocked, showUnlocked, sortBy, sortOrder, selectedProvider]);
 
-  const lockedCount = events.filter(e => e.is_locked).length;
-  const movableCount = events.filter(e => !e.is_locked).length;
+  const providers = Array.from(new Set(events.map(e => e.provider)));
 
   return (
     <Layout>
@@ -140,39 +203,9 @@ const Vet = () => {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-          <Card className="border-none shadow-sm rounded-3xl bg-white p-6 flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Total Tasks</p>
-              <p className="text-2xl font-black text-gray-900">{events.length}</p>
-            </div>
-            <div className="w-12 h-12 bg-gray-50 rounded-2xl flex items-center justify-center text-gray-400">
-              <Calendar size={24} />
-            </div>
-          </Card>
-          <Card className="border-none shadow-sm rounded-3xl bg-white p-6 flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Locked</p>
-              <p className="text-2xl font-black text-gray-900">{lockedCount}</p>
-            </div>
-            <div className="w-12 h-12 bg-red-50 rounded-2xl flex items-center justify-center text-red-500">
-              <Lock size={24} />
-            </div>
-          </Card>
-          <Card className="border-none shadow-sm rounded-3xl bg-white p-6 flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Movable</p>
-              <p className="text-2xl font-black text-gray-900">{movableCount}</p>
-            </div>
-            <div className="w-12 h-12 bg-green-50 rounded-2xl flex items-center justify-center text-green-500">
-              <Unlock size={24} />
-            </div>
-          </Card>
-        </div>
-
-        <div className="bg-white rounded-[2.5rem] border border-gray-100 shadow-sm overflow-hidden">
-          <div className="p-8 border-b border-gray-50 flex flex-col md:flex-row gap-4 justify-between items-center">
-            <div className="relative w-full md:w-72">
+        <div className="bg-white rounded-[2.5rem] border border-gray-100 shadow-sm overflow-hidden mb-8">
+          <div className="p-8 border-b border-gray-50 flex flex-col lg:flex-row gap-6 justify-between items-center">
+            <div className="relative w-full lg:w-96">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
               <Input 
                 placeholder="Search tasks..." 
@@ -181,19 +214,94 @@ const Vet = () => {
                 className="pl-12 h-12 rounded-2xl border-gray-100 bg-gray-50/50 font-bold text-sm focus:ring-indigo-500"
               />
             </div>
-            <div className="flex bg-gray-50 p-1.5 rounded-2xl border border-gray-100">
-              {(['all', 'locked', 'movable'] as const).map((f) => (
-                <button
-                  key={f}
-                  onClick={() => setFilter(f)}
+            
+            <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-center lg:justify-end">
+              {/* Visibility Toggles */}
+              <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-100">
+                <button 
+                  onClick={() => setShowLocked(!showLocked)}
                   className={cn(
-                    "px-6 py-2 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all",
-                    filter === f ? "bg-white text-indigo-600 shadow-sm" : "text-gray-400 hover:text-gray-600"
+                    "p-2 rounded-lg transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest",
+                    showLocked ? "bg-white text-red-500 shadow-sm" : "text-gray-400"
                   )}
                 >
-                  {f}
+                  {showLocked ? <Eye size={14} /> : <EyeOff size={14} />} Locked
                 </button>
-              ))}
+                <button 
+                  onClick={() => setShowUnlocked(!showUnlocked)}
+                  className={cn(
+                    "p-2 rounded-lg transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest",
+                    showUnlocked ? "bg-white text-green-500 shadow-sm" : "text-gray-400"
+                  )}
+                >
+                  {showUnlocked ? <Eye size={14} /> : <EyeOff size={14} />} Movable
+                </button>
+              </div>
+
+              {/* Sort & Filter Dropdown */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="rounded-xl h-10 px-4 font-black text-[10px] uppercase tracking-widest border-gray-100">
+                    <Filter size={14} className="mr-2" /> Sort & Filter
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="w-56 rounded-2xl p-2" align="end">
+                  <DropdownMenuLabel className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-2 py-1.5">Sort By</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={() => setSortBy('date')} className="rounded-lg font-bold text-xs">
+                    <Calendar size={14} className="mr-2" /> Date
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setSortBy('title')} className="rounded-lg font-bold text-xs">
+                    <SortAsc size={14} className="mr-2" /> Title
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setSortBy('status')} className="rounded-lg font-bold text-xs">
+                    <Lock size={14} className="mr-2" /> Status
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-2 py-1.5">Order</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={() => setSortOrder('asc')} className="rounded-lg font-bold text-xs">
+                    <SortAsc size={14} className="mr-2" /> Ascending
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setSortOrder('desc')} className="rounded-lg font-bold text-xs">
+                    <SortDesc size={14} className="mr-2" /> Descending
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-2 py-1.5">Provider</DropdownMenuLabel>
+                  <DropdownMenuCheckboxItem 
+                    checked={selectedProvider === 'all'} 
+                    onCheckedChange={() => setSelectedProvider('all')}
+                    className="rounded-lg font-bold text-xs"
+                  >
+                    All Providers
+                  </DropdownMenuCheckboxItem>
+                  {providers.map(p => (
+                    <DropdownMenuCheckboxItem 
+                      key={p}
+                      checked={selectedProvider === p} 
+                      onCheckedChange={() => setSelectedProvider(p)}
+                      className="rounded-lg font-bold text-xs capitalize"
+                    >
+                      {p}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              {/* Bulk Actions */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="rounded-xl h-10 px-4 font-black text-[10px] uppercase tracking-widest border-gray-100">
+                    Bulk Actions
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="w-48 rounded-2xl p-2" align="end">
+                  <DropdownMenuItem onClick={() => bulkAction('lock_all')} className="rounded-lg font-bold text-xs text-red-600">
+                    <Lock size={14} className="mr-2" /> Lock Visible
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => bulkAction('unlock_all')} className="rounded-lg font-bold text-xs text-green-600">
+                    <Unlock size={14} className="mr-2" /> Unlock Visible
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
 
@@ -207,12 +315,12 @@ const Vet = () => {
               filteredEvents.map((event) => (
                 <div key={event.event_id} className={cn(
                   "p-6 flex items-center justify-between transition-all group hover:bg-gray-50/50",
-                  event.is_locked ? "opacity-60" : "bg-indigo-50/10"
+                  event.is_locked ? "bg-red-50/5" : "bg-indigo-50/10"
                 )}>
                   <div className="flex items-center gap-6">
                     <div className={cn(
                       "w-14 h-14 rounded-2xl flex items-center justify-center transition-all",
-                      event.is_locked ? "bg-gray-100 text-gray-400" : "bg-white text-indigo-600 shadow-md"
+                      event.is_locked ? "bg-red-50 text-red-400" : "bg-white text-indigo-600 shadow-md"
                     )}>
                       {event.is_locked ? <Lock size={24} /> : <Unlock size={24} />}
                     </div>
@@ -231,7 +339,7 @@ const Vet = () => {
                   <div className="flex items-center gap-4">
                     <span className={cn(
                       "text-[10px] font-black uppercase tracking-widest",
-                      event.is_locked ? "text-gray-400" : "text-indigo-600"
+                      event.is_locked ? "text-red-400" : "text-indigo-600"
                     )}>
                       {event.is_locked ? 'Locked' : 'Movable'}
                     </span>
@@ -245,7 +353,15 @@ const Vet = () => {
               ))
             ) : (
               <div className="p-20 text-center">
-                <p className="text-gray-400 font-bold">No tasks found matching your search.</p>
+                <p className="text-gray-400 font-bold">No tasks found matching your filters.</p>
+                <Button variant="link" onClick={() => {
+                  setSearchQuery('');
+                  setShowLocked(true);
+                  setShowUnlocked(true);
+                  setSelectedProvider('all');
+                }} className="text-indigo-600 font-black text-xs uppercase tracking-widest mt-2">
+                  Clear all filters
+                </Button>
               </div>
             )}
           </div>

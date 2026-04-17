@@ -135,6 +135,36 @@ const Plan = () => {
     finally { setIsProcessing(false); }
   };
 
+  const handleFullReset = async () => {
+    setIsProcessing(true);
+    setStatusText('Performing full system reset...');
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      // 1. Clear Cache
+      await supabase.from('calendar_events_cache').delete().eq('user_id', user.id);
+      
+      // 2. Clear History
+      await supabase.from('optimisation_history').delete().eq('user_id', user.id);
+
+      // 3. Reset State
+      setEvents([]);
+      setProposal(null);
+      setAppliedChanges([]);
+      setCurrentStep('initial');
+
+      // 4. Trigger Fresh Sync
+      await runAnalysis(false);
+      
+      showSuccess("System reset complete. Everything is fresh!");
+    } catch (err: any) {
+      showError("Reset failed: " + err.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const runOptimisation = async (isResuggest = false) => {
     if (selectedDays.length === 0) { showError("Select at least one day."); return; }
     setIsProcessing(true);
@@ -307,6 +337,7 @@ const Plan = () => {
         onVetTasks={() => navigate('/vet')}
         onResync={() => runAnalysis(false)}
         onReset={handleResetPlan}
+        onFullReset={handleFullReset}
         renderRequirementsForm={renderRequirementsForm}
       />
 
