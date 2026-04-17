@@ -70,6 +70,10 @@ serve(async (req) => {
     const end = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
     const eventMap = new Map();
 
+    // Shared locking logic
+    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|gig|work session|q & a|weekly/i;
+    const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i, /[\u{1F300}-\u{1F9FF}]/u];
+
     for (const cal of enabled) {
       const encodedId = encodeURIComponent(cal.calendar_id);
       const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodedId}/events?timeMin=${now.toISOString()}&timeMax=${end.toISOString()}&singleEvents=true&orderBy=startTime`, { headers: { Authorization: `Bearer ${googleAccessToken}` } })
@@ -81,7 +85,14 @@ serve(async (req) => {
           const end = new Date(event.end.dateTime || event.end.date)
           
           const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
-          const isLocked = !isExplicitlyMovable && (!!event.recurringEventId || (event.attendees?.length > 1));
+          
+          // Enhanced locking logic: check keywords, attendees, and recurring status
+          const isLocked = !isExplicitlyMovable && (
+            !!event.recurringEventId || 
+            (event.attendees?.length > 1) ||
+            fixedKeywords.test(title) ||
+            fixedPatterns.some(p => p.test(title))
+          );
           
           eventMap.set(event.id, {
             user_id: user.id,
