@@ -37,6 +37,12 @@ serve(async (req) => {
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
     const baseUrl = "https://caldav.icloud.com";
 
+    // Helper to build full URLs from potentially relative paths
+    const getFullUrl = (path: string) => {
+      if (path.startsWith('http')) return path;
+      return `${baseUrl}${path.startsWith('/') ? '' : '/'}${path}`;
+    };
+
     // 1. Find the Principal URL
     console.log("[sync-apple-calendar] Step 1: Finding Principal...");
     const principalRes = await fetch(baseUrl, {
@@ -56,18 +62,19 @@ serve(async (req) => {
     }
 
     const principalXml = await principalRes.text();
-    // More robust regex to handle namespaces like <D:href> or <href>
     const principalPath = principalXml.match(/current-user-principal[^>]*>\s*<[^>]*href[^>]*>([^<]+)/i)?.[1];
 
     if (!principalPath) {
       console.error("[sync-apple-calendar] XML Response Snippet:", principalXml.substring(0, 500));
       throw new Error("Could not find Principal path in Apple response.");
     }
-    console.log("[sync-apple-calendar] Principal found:", principalPath);
+    
+    const principalUrl = getFullUrl(principalPath);
+    console.log("[sync-apple-calendar] Principal URL:", principalUrl);
 
     // 2. Find the Calendar Home Set
     console.log("[sync-apple-calendar] Step 2: Finding Calendar Home Set...");
-    const homeSetRes = await fetch(`${baseUrl}${principalPath}`, {
+    const homeSetRes = await fetch(principalUrl, {
       method: 'PROPFIND',
       headers: {
         'Authorization': `Basic ${auth}`,
@@ -84,7 +91,9 @@ serve(async (req) => {
       console.error("[sync-apple-calendar] Home Set XML Snippet:", homeSetXml.substring(0, 500));
       throw new Error("Could not find Calendar Home Set.");
     }
-    console.log("[sync-apple-calendar] Home Set found:", homeSetPath);
+    
+    const homeSetUrl = getFullUrl(homeSetPath);
+    console.log("[sync-apple-calendar] Home Set URL:", homeSetUrl);
 
     // 3. Fetch events from the home set
     console.log("[sync-apple-calendar] Step 3: Fetching events...");
@@ -108,7 +117,7 @@ serve(async (req) => {
       </c:calendar-query>
     `;
 
-    const response = await fetch(`${baseUrl}${homeSetPath}`, {
+    const response = await fetch(homeSetUrl, {
       method: 'REPORT',
       headers: {
         'Authorization': `Basic ${auth}`,
