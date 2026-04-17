@@ -11,8 +11,6 @@ interface VisualScheduleProps {
 }
 
 const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: VisualScheduleProps) => {
-  console.log("[VisualSchedule] Rendering with:", { events: events.length, changes: changes.length });
-
   const allVisualEvents = [
     ...events.filter(e => e && e.is_locked).map(e => ({ ...e, type: 'locked' })),
     ...changes.map(c => ({
@@ -41,8 +39,8 @@ const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: Visu
 
   if (sortedDayKeys.length === 0) {
     return (
-      <div className="p-12 text-center bg-white rounded-[2rem] border border-dashed border-gray-200">
-        <p className="text-gray-500">No events to display in the visual timeline.</p>
+      <div className="p-12 text-center bg-white/50 rounded-[2rem] border border-dashed border-gray-200">
+        <p className="text-gray-500 font-bold">No events to display in the visual timeline.</p>
       </div>
     );
   }
@@ -66,52 +64,27 @@ const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: Visu
 
     if (event.type === 'locked') {
       if (t.includes('lunch') || t.includes('dinner')) return "bg-blue-50/50 border-blue-100 text-blue-700";
-      return "bg-gray-50/50 border-gray-100 text-gray-500";
+      return "bg-white border-gray-100 text-gray-500 shadow-sm";
     }
     
     if (t.includes('piano') || t.includes('music') || t.includes('assessment')) {
-      return "bg-orange-50 border-orange-100 text-orange-800";
+      return "bg-orange-50 border-orange-100 text-orange-800 shadow-sm";
     }
     
-    return "bg-indigo-50 border-indigo-100 text-indigo-800";
+    return "bg-indigo-50 border-indigo-100 text-indigo-800 shadow-sm";
   };
 
   return (
-    <div className="w-full overflow-x-auto pb-8 scrollbar-thin scrollbar-thumb-gray-200 scrollbar-track-transparent">
-      <div className="inline-grid grid-flow-col auto-cols-[320px] gap-px bg-gray-100 border border-gray-100 rounded-3xl overflow-hidden shadow-sm">
+    <div className="w-full overflow-x-auto pb-8 scrollbar-hide">
+      <div className="inline-grid grid-flow-col auto-cols-[320px] gap-4">
         {sortedDayKeys.map(dayKey => {
           const isDayToday = isToday(parseISO(dayKey));
           const dayEvents = days[dayKey].sort((a: any, b: any) => parseISO(a.start_time).getTime() - parseISO(b.start_time).getTime());
           
           return (
-            <div key={`col-${dayKey}`} className={cn(
-              "flex flex-col min-h-full transition-colors",
-              isDayToday ? "bg-indigo-50/30" : "bg-[#F8F9FC]"
-            )}>
-              <div className={cn(
-                "p-6 text-center border-b border-gray-100 sticky top-0 z-20 transition-colors",
-                isDayToday ? "bg-indigo-600 text-white" : "bg-white text-gray-900"
-              )}>
-                <h3 className="text-lg font-bold">
-                  {format(parseISO(dayKey), 'EEE d')}
-                </h3>
-                <p className={cn(
-                  "text-[10px] font-bold uppercase tracking-wider mt-1",
-                  isDayToday ? "text-indigo-100" : "text-gray-400"
-                )}>
-                  {isDayToday ? 'TODAY' : format(parseISO(dayKey), 'MMMM')}
-                </p>
-              </div>
-
-              <div className="p-4 space-y-3 relative flex-1 min-h-[800px]">
-                {/* Dynamic Grid Lines */}
-                <div className="absolute inset-0 pointer-events-none overflow-hidden">
-                  {[...Array(20)].map((_, i) => (
-                    <div key={i} className="h-20 border-b border-gray-50/50 w-full" />
-                  ))}
-                </div>
-
-                <div className="relative z-10 space-y-3">
+            <div key={`col-${dayKey}`} className="flex flex-col min-h-full">
+              <div className="p-4 space-y-2 relative flex-1">
+                <div className="relative z-10 space-y-2">
                   {dayEvents.map((event: any, idx: number) => {
                     const isApplied = appliedChanges.includes(event.event_id);
                     const styles = getEventStyles(event);
@@ -121,7 +94,7 @@ const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: Visu
                       <div 
                         key={`${dayKey}-${idx}`}
                         className={cn(
-                          "p-4 rounded-xl border transition-all duration-300 group relative",
+                          "p-3 rounded-2xl border transition-all duration-300 group relative",
                           styles,
                           isApplied && "opacity-40 grayscale",
                           event.is_surplus && "scale-[0.98] hover:scale-100"
@@ -129,7 +102,7 @@ const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: Visu
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1">
+                            <div className="flex items-center gap-2 mb-0.5">
                               {event.is_surplus ? (
                                 <Inbox size={12} className="text-amber-500 shrink-0" />
                               ) : (
@@ -137,34 +110,32 @@ const VisualSchedule = ({ events = [], changes = [], appliedChanges = [] }: Visu
                               )}
                               <h4 className={cn(
                                 "font-black leading-tight",
-                                event.is_surplus ? "text-xs" : "text-sm"
+                                event.is_surplus ? "text-[10px]" : "text-xs"
                               )}>
                                 {event.title}
                               </h4>
                             </div>
                             
-                            <div className="space-y-1">
-                              <div className="flex items-center gap-1.5 text-[10px] font-bold opacity-60">
-                                <Clock size={10} />
-                                {format(parseISO(event.start_time), 'HH:mm')} – {format(parseISO(event.end_time), 'HH:mm')}
-                              </div>
+                            <div className="flex items-center gap-1.5 text-[9px] font-bold opacity-60">
+                              <Clock size={10} />
+                              {format(parseISO(event.start_time), 'HH:mm')} – {format(parseISO(event.end_time), 'HH:mm')}
                             </div>
                           </div>
 
                           <div className="flex flex-col items-end gap-2">
                             {event.is_surplus ? (
-                              <Badge variant="outline" className="text-[8px] font-black border-amber-200 text-amber-600 bg-white px-1.5 py-0">BACKLOG</Badge>
+                              <Badge variant="outline" className="text-[7px] font-black border-amber-200 text-amber-600 bg-white px-1 py-0">BACKLOG</Badge>
                             ) : event.type === 'proposed' ? (
-                              <Sparkles size={14} className="text-indigo-500" />
+                              <Sparkles size={12} className="text-indigo-500" />
                             ) : (
-                              <Lock size={12} className="opacity-30" />
+                              <Lock size={10} className="opacity-30" />
                             )}
                           </div>
                         </div>
 
                         {event.type === 'proposed' && !isApplied && !event.is_surplus && (
                           <div className="absolute -right-1 -top-1">
-                            <div className="w-3 h-3 bg-indigo-500 rounded-full border-2 border-white shadow-sm animate-pulse" />
+                            <div className="w-2 h-2 bg-indigo-500 rounded-full border-2 border-white shadow-sm animate-pulse" />
                           </div>
                         )}
                       </div>

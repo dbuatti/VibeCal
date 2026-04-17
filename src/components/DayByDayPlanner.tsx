@@ -48,7 +48,6 @@ const DayByDayPlanner = ({
     changes.forEach(c => dates.add(format(parseISO(c.new_start), 'yyyy-MM-dd')));
     events.filter(e => e.is_locked).forEach(e => dates.add(format(parseISO(e.start_time), 'yyyy-MM-dd')));
     const sorted = Array.from(dates).sort();
-    console.log("[DayByDayPlanner] Calculated all dates in plan:", sorted.length);
     return sorted;
   }, [changes, events]);
 
@@ -61,27 +60,20 @@ const DayByDayPlanner = ({
   const currentDate = currentDateStr ? parseISO(currentDateStr) : new Date();
 
   const dayChanges = useMemo(() => {
-    const filtered = changes.filter(c => format(parseISO(c.new_start), 'yyyy-MM-dd') === currentDateStr);
-    console.log(`[DayByDayPlanner] Changes for ${currentDateStr}:`, filtered.length);
-    return filtered;
+    return changes.filter(c => format(parseISO(c.new_start), 'yyyy-MM-dd') === currentDateStr);
   }, [changes, currentDateStr]);
 
   const dayLockedEvents = useMemo(() => {
-    const filtered = events.filter(e => e.is_locked && format(parseISO(e.start_time), 'yyyy-MM-dd') === currentDateStr);
-    console.log(`[DayByDayPlanner] Locked events for ${currentDateStr}:`, filtered.length);
-    return filtered;
+    return events.filter(e => e.is_locked && format(parseISO(e.start_time), 'yyyy-MM-dd') === currentDateStr);
   }, [events, currentDateStr]);
 
   const stats = useMemo(() => {
-    // Only count non-surplus changes and locked events for capacity
     const activeChanges = dayChanges.filter(c => !c.is_surplus);
     const surplusCount = dayChanges.filter(c => c.is_surplus).length;
     
     const totalTasks = activeChanges.length + dayLockedEvents.filter(e => !e.title.toLowerCase().includes('break')).length;
     const totalMinutes = [...activeChanges, ...dayLockedEvents].reduce((acc, e) => acc + (e.duration || e.duration_minutes || 0), 0);
     const totalHours = totalMinutes / 60;
-    
-    console.log(`[DayByDayPlanner] Stats for ${currentDateStr}:`, { totalTasks, totalHours, surplusCount, maxTasks, maxHours });
     
     return {
       tasks: totalTasks,
@@ -94,7 +86,6 @@ const DayByDayPlanner = ({
   }, [dayChanges, dayLockedEvents, maxTasks, maxHours, currentDateStr]);
 
   const handleSyncDay = async () => {
-    console.log(`[DayByDayPlanner] Syncing day: ${currentDateStr}`);
     setIsSyncing(true);
     try {
       await onApplyDay(dayChanges);
@@ -112,7 +103,6 @@ const DayByDayPlanner = ({
   };
 
   const handleSyncAll = async () => {
-    console.log("[DayByDayPlanner] Syncing all remaining changes...");
     if (!confirm("This will sync all remaining proposed changes to your calendar. Continue?")) return;
     setIsSyncing(true);
     try {
@@ -369,14 +359,14 @@ const DayByDayPlanner = ({
         </div>
 
         <div className="lg:col-span-2">
-          <Card className="border-none shadow-sm rounded-[2.5rem] bg-white overflow-hidden h-full flex flex-col">
-            <CardHeader className="border-b border-gray-50 flex flex-row items-center justify-between p-8">
-              <CardTitle className="flex items-center gap-3 text-xl font-black">
+          <div className="h-full flex flex-col">
+            <div className="flex flex-row items-center justify-between p-8 pb-4">
+              <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
                   <CalendarIcon className="text-indigo-600" size={20} />
                 </div>
-                Visual Map
-              </CardTitle>
+                <h3 className="text-xl font-black text-gray-900">Visual Map</h3>
+              </div>
               <div className="flex gap-3">
                 <Badge variant="outline" className="rounded-xl border-gray-100 text-gray-400 font-black px-4 py-1.5">
                   {dayLockedEvents.length} FIXED
@@ -385,17 +375,15 @@ const DayByDayPlanner = ({
                   {dayChanges.length} PROPOSED
                 </Badge>
               </div>
-            </CardHeader>
-            <CardContent className="p-0 flex-1 overflow-hidden">
-              <div className="h-[800px] overflow-y-auto scrollbar-hide">
-                <VisualSchedule 
-                  events={events.filter(e => format(parseISO(e.start_time), 'yyyy-MM-dd') === currentDateStr)} 
-                  changes={dayChanges} 
-                  appliedChanges={appliedChanges} 
-                />
-              </div>
-            </CardContent>
-          </Card>
+            </div>
+            <div className="flex-1">
+              <VisualSchedule 
+                events={events.filter(e => format(parseISO(e.start_time), 'yyyy-MM-dd') === currentDateStr)} 
+                changes={dayChanges} 
+                appliedChanges={appliedChanges} 
+              />
+            </div>
+          </div>
         </div>
       </div>
     </div>
