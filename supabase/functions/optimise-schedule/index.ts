@@ -34,10 +34,16 @@ serve(async (req) => {
     const userTimezone = profileRes.data?.timezone || 'UTC';
     const allEvents = eventsRes.data || [];
 
+    console.log(`[optimise-schedule] Fetched ${allEvents.length} total events from cache.`);
+    
     const fixedEvents = allEvents.filter(e => e.is_locked);
     const movableEvents = allEvents.filter(e => !e.is_locked);
 
+    console.log(`[optimise-schedule] Fixed events:`, fixedEvents.map(e => `${e.title} (${e.start_time})`));
+    console.log(`[optimise-schedule] Movable events:`, movableEvents.map(e => e.title));
+
     if (movableEvents.length === 0) {
+      console.log("[optimise-schedule] No movable events found. Exiting.");
       return new Response(JSON.stringify({ message: 'No movable events found.', changes: [] }), { headers: corsHeaders });
     }
 
@@ -48,6 +54,9 @@ serve(async (req) => {
     const offsetMs = tzDate.getTime() - now.getTime();
     const offsetHours = Math.round(offsetMs / 3600000);
 
+    console.log(`[optimise-schedule] User Timezone: ${userTimezone}, Estimated Offset: ${offsetHours}h`);
+
+    // Start from tomorrow
     let currentDay = new Date();
     currentDay.setDate(currentDay.getDate() + 1);
     currentDay.setHours(0, 0, 0, 0);
@@ -56,10 +65,12 @@ serve(async (req) => {
     const [startH, startM] = settings.day_start_time.split(':').map(Number);
     const [endH, endM] = settings.day_end_time.split(':').map(Number);
 
-    // Track tasks and hours per day
+    console.log(`[optimise-schedule] Workday: ${settings.day_start_time} to ${settings.day_end_time}`);
+
     const dailyStats = new Map();
 
     for (const event of movableEvents) {
+      console.log(`[optimise-schedule] Processing movable event: ${event.title}`);
       const durationMs = event.duration_minutes * 60000;
       let foundSlot = false;
       let attempts = 0;
@@ -68,6 +79,8 @@ serve(async (req) => {
         const dayKey = currentPointer.toISOString().split('T')[0];
         if (!dailyStats.has(dayKey)) {
           dailyStats.set(dayKey, { tasks: 0, hours: 0 });
+          // Reset pointer to start of workday for the new day
+          currentPointer.setUTCHours(startH - offsetHours, startM, 0, 0);
         }
         const stats = dailyStats.get(dayKey);
 
@@ -77,27 +90,38 @@ serve(async (req) => {
         const potentialEnd = new Date(currentPointer.getTime() + durationMs);
         const potentialHours = stats.hours + (event.duration_minutes / 60);
 
-        // Check limits: Workday end, Max Hours, and Max Tasks
+        console.log(`[optimise-schedule] Checking slot: ${currentPointer.toISOString()} to ${potentialEnd.toISOString()} on ${dayKey}`);
+
+        // Check limits
         const pastWorkday = potentialEnd > dayEnd;
         const pastHoursLimit = potentialHours > (settings.max_hours_per_day || 24);
         const pastTasksLimit = stats.tasks >= (settings.max_tasks_per_day || 999);
 
         if (pastWorkday || pastHoursLimit || pastTasksLimit) {
+          console.log(`[optimise-schedule] Day ${dayKey} full or past workday. Moving to next day.`);
           currentPointer.setUTCDate(currentPointer.getUTCDate() + 1);
           currentPointer.setUTCHours(startH - offsetHours, startM, 0, 0);
           attempts++;
           continue;
         }
 
+        // Collision detection
         const collision = fixedEvents.find(f => {
           const fStart = new Date(f.start_time);
           const fEnd = new Date(f.end_time);
-          return (currentPointer < fEnd && potentialEnd > fStart);
+          const overlaps = (currentPointer < fEnd && potentialEnd > fStart);
+          if (overlaps) {
+            console.log(`[optimise-schedule] Collision detected with fixed event: ${f.title} (${f.start_time} - ${f.end_time})`);
+          }
+          return overlaps;
         });
 
         if (collision) {
+          // Move pointer to after the collision
           currentPointer = new Date(new Date(collision.end_time).getTime() + 10 * 60000);
+          console.log(`[optimise-schedule] Retrying after collision at: ${currentPointer.toISOString()}`);
         } else {
+          console.log(`[optimise-schedule] Slot found!`);
           foundSlot = true;
           stats.tasks += 1;
           stats.hours += (event.duration_minutes / 60);
@@ -114,9 +138,14 @@ serve(async (req) => {
           duration: event.duration_minutes
         });
 
+        // Move pointer for next task (add 10m buffer)
         currentPointer = new Date(currentPointer.getTime() + durationMs + 10 * 60000);
+      } else {
+        console.log(`[optimise-schedule] Could not find slot for ${event.title} after 14 days.`);
       }
     }
+
+    console.log(`[optimise-schedule] Optimisation complete. Proposed ${proposedChanges.length} changes.`);
 
     return new Response(
       JSON.stringify({ 
