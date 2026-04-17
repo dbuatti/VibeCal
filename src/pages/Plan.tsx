@@ -5,7 +5,7 @@ import Layout from '@/components/Layout';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import DayByDayPlanner from '@/components/DayByDayPlanner';
-import { Brain, RefreshCw, Trash2, Eye, EyeOff, Sparkles, Calendar, Clock, ListOrdered, ChevronRight, BrainCircuit, Inbox, Unlock, Lock, History, RotateCcw, Settings2 } from 'lucide-react';
+import { Brain, RefreshCw, Trash2, Eye, EyeOff, Sparkles, Calendar, Clock, ListOrdered, ChevronRight, BrainCircuit, Inbox, Unlock, Lock, History, RotateCcw, Settings2, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
@@ -102,9 +102,15 @@ const Plan = () => {
     try {
       if (!skipSync) {
         const { data: { session } } = await supabase.auth.getSession();
+        
         if (session?.provider_token) {
+          console.log("[Plan] Calling sync-calendar with token");
           await supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: session.provider_token } });
+        } else {
+          console.warn("[Plan] No Google provider_token found. Skipping Google sync.");
+          showError("Google session expired. Please sign out and back in to sync Google Calendar.");
         }
+        
         await supabase.functions.invoke('sync-apple-calendar');
       }
       

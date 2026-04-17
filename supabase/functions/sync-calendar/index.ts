@@ -13,14 +13,14 @@ serve(async (req) => {
   }
 
   try {
-    console.log("[sync-calendar] START - Google Sync");
+    console.log("[sync-calendar] HEARTBEAT - Function Invoked");
     
     const authHeader = req.headers.get('Authorization')
     const { googleAccessToken } = await req.json();
 
     if (!googleAccessToken) {
-      console.error("[sync-calendar] ERROR: Missing Google Access Token");
-      throw new Error("Missing Google Access Token");
+      console.error("[sync-calendar] ERROR: Missing Google Access Token in request body");
+      return new Response(JSON.stringify({ error: "Missing Google Access Token" }), { status: 400, headers: corsHeaders });
     }
 
     const supabaseAdmin = createClient(
@@ -88,19 +88,29 @@ serve(async (req) => {
         data.items.forEach(event => {
           const title = event.summary || 'Untitled';
           
-          // DEEP LOGGING FOR TIME DEBUGGING
+          // Handle All-Day events or Tasks without specific times
+          let start, end;
+          if (event.start.date) {
+            // All-day event: Google sends "YYYY-MM-DD"
+            // We default to 9 AM in the user's local time (which is roughly 11 PM UTC previous day for AEST)
+            // But for now, let's just log it clearly.
+            start = new Date(event.start.date + "T09:00:00"); 
+            end = new Date(event.end.date + "T09:30:00");
+          } else {
+            start = new Date(event.start.dateTime);
+            end = new Date(event.end.dateTime);
+          }
+
           if (title.includes("Pay Fine") || title.includes("Fine")) {
             console.log(`[sync-calendar] DEBUG EVENT: "${title}"`, {
               id: event.id,
-              start: event.start,
-              end: event.end,
-              status: event.status
+              rawStart: event.start,
+              rawEnd: event.end,
+              parsedStart: start.toISOString(),
+              parsedEnd: end.toISOString()
             });
           }
 
-          const start = new Date(event.start.dateTime || event.start.date)
-          const end = new Date(event.end.dateTime || event.end.date)
-          
           const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
           const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
           
@@ -117,7 +127,7 @@ serve(async (req) => {
             title: title,
             start_time: start.toISOString(),
             end_time: end.toISOString(),
-            duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000),
+            duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000) || 30, // Default to 30m if 0
             is_locked: isLocked,
             provider: 'google',
             source_calendar: cal.calendar_name,
