@@ -1,28 +1,25 @@
 "use client";
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { format, parseISO, isBefore, isAfter, startOfDay } from 'date-fns';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { format, parseISO, isBefore, isAfter } from 'date-fns';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { 
   ChevronLeft, 
   ChevronRight, 
-  Clock, 
-  ListOrdered, 
   Sparkles, 
   RefreshCw, 
   Zap, 
   Trophy, 
   LayoutDashboard, 
   RotateCcw, 
-  ArrowUpRight,
   Calendar as CalendarIcon,
-  Wand2,
-  AlertCircle
+  Wand2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import VisualSchedule from './VisualSchedule';
+import PlannerStats from './PlannerStats';
+import PlannerChanges from './PlannerChanges';
 import { Link } from 'react-router-dom';
 
 interface DayByDayPlannerProps {
@@ -115,7 +112,6 @@ const DayByDayPlanner = ({
       if (firstUnvettedIndex !== -1) {
         setCurrentIndex(firstUnvettedIndex);
       } else {
-        // If everything is vetted, just start at today or the first available date
         const todayIndex = allDates.findIndex(d => d >= todayStr);
         if (todayIndex !== -1) setCurrentIndex(todayIndex);
       }
@@ -175,29 +171,16 @@ const DayByDayPlanner = ({
   const handleResuggest = async () => {
     if (!onResuggestDay) return;
     setIsResuggesting(true);
-    try {
-      await onResuggestDay();
-    } finally {
-      setIsResuggesting(false);
-    }
+    try { await onResuggestDay(); } 
+    finally { setIsResuggesting(false); }
   };
 
   const handleUndoAndResuggest = async () => {
     setIsSyncing(true);
     try {
       await onUndoApplyDay(dayChanges);
-      if (onResuggestDay) {
-        await onResuggestDay();
-      }
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  const getDayStatus = () => {
-    if (dayChanges.length === 0) return "No Changes";
-    if (isDayVetted) return "Vetted";
-    return "Vetting";
+      if (onResuggestDay) await onResuggestDay();
+    } finally { setIsSyncing(false); }
   };
 
   if (isFinished) {
@@ -235,7 +218,7 @@ const DayByDayPlanner = ({
               "border-none px-3 py-0.5 rounded-full font-black text-[8px] uppercase tracking-widest", 
               dayChanges.length === 0 ? "bg-gray-100 text-gray-400" : isDayVetted ? "bg-green-500 text-white" : "bg-indigo-100 text-indigo-600"
             )}>
-              {getDayStatus()}
+              {dayChanges.length === 0 ? "No Changes" : isDayVetted ? "Vetted" : "Vetting"}
             </Badge>
             {dayChanges.length > 0 && !isDayVetted && onResuggestDay && (
               <button 
@@ -254,58 +237,21 @@ const DayByDayPlanner = ({
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="space-y-6">
-          <Card className="border-none shadow-md rounded-2xl overflow-hidden bg-white">
-            <CardContent className="p-6 space-y-6">
-              <div className="space-y-3">
-                <div className="flex justify-between text-[9px] font-black uppercase tracking-widest">
-                  <span className="flex items-center gap-1.5 text-gray-500"><Clock size={14} className="text-indigo-500" /> Hours</span>
-                  <span className={cn(stats.isOverHours ? "text-red-500" : "text-gray-900")}>{stats.hours.toFixed(1)} / {maxHours}h</span>
-                </div>
-                <div className="h-1.5 w-full bg-gray-50 rounded-full overflow-hidden"><div className={cn("h-full transition-all duration-700", stats.isOverHours ? "bg-red-400" : "bg-indigo-500")} style={{ width: `${Math.min((stats.hours / maxHours) * 100, 100)}%` }} /></div>
-              </div>
-              <div className="space-y-3">
-                <div className="flex justify-between text-[9px] font-black uppercase tracking-widest">
-                  <span className="flex items-center gap-1.5 text-gray-500"><ListOrdered size={14} className="text-indigo-500" /> Tasks</span>
-                  <span className={cn(stats.isOverTasks ? "text-red-500" : "text-gray-900")}>{stats.tasks} / {maxTasks}</span>
-                </div>
-                <div className="h-1.5 w-full bg-gray-50 rounded-full overflow-hidden"><div className={cn("h-full transition-all duration-700", stats.isOverTasks ? "bg-red-400" : "bg-indigo-500")} style={{ width: `${Math.min((stats.tasks / maxTasks) * 100, 100)}%` }} /></div>
-              </div>
-            </CardContent>
-          </Card>
+          <PlannerStats 
+            hours={stats.hours} 
+            maxHours={maxHours} 
+            tasks={stats.tasks} 
+            maxTasks={maxTasks} 
+            isOverHours={stats.isOverHours} 
+            isOverTasks={stats.isOverTasks} 
+          />
 
-          <Card className="border-none shadow-md rounded-2xl overflow-hidden bg-white">
-            <CardHeader className="px-6 pt-6 pb-2"><CardTitle className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Changes</CardTitle></CardHeader>
-            <CardContent className="space-y-3 px-6 pb-6 max-h-[300px] overflow-y-auto">
-              {dayChanges.length > 0 ? dayChanges.map((change, i) => {
-                const isMovingAway = format(parseISO(change.old_start), 'yyyy-MM-dd') === currentDateStr && format(parseISO(change.new_start), 'yyyy-MM-dd') !== currentDateStr;
-                return (
-                  <div key={i} className={cn("p-4 rounded-xl border flex items-center justify-between transition-all", appliedChanges.includes(change.event_id) ? "bg-green-50 border-green-100 opacity-60" : isMovingAway ? "bg-red-50/30 border-red-100" : "bg-gray-50/50 border-gray-100")}>
-                    <div className="flex items-center gap-3">
-                      <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center", isMovingAway ? "bg-red-100 text-red-600" : "bg-white text-indigo-600 shadow-sm")}>
-                        {isMovingAway ? <ArrowUpRight size={16} /> : <Sparkles size={16} />}
-                      </div>
-                      <div>
-                        <p className="text-xs font-black text-gray-900 tracking-tight truncate max-w-[120px]">{change.title}</p>
-                        <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest">{isMovingAway ? `To ${format(parseISO(change.new_start), 'EEE')}` : `To ${format(parseISO(change.new_start), 'HH:mm')}`}</p>
-                      </div>
-                    </div>
-                  </div>
-                );
-              }) : (
-                <div className="space-y-4 py-4">
-                  <div className="text-center text-gray-300 font-black uppercase tracking-widest text-[9px]">No changes</div>
-                  {(stats.isOverTasks || stats.isOverHours) && (
-                    <div className="p-4 bg-amber-50 rounded-xl border border-amber-100 flex gap-3">
-                      <AlertCircle className="text-amber-500 shrink-0" size={16} />
-                      <p className="text-[10px] font-bold text-amber-800 leading-tight">
-                        This day is over capacity, but all tasks are **Locked**. Click "Vet Tasks" to unlock some so the AI can move them.
-                      </p>
-                    </div>
-                  )}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          <PlannerChanges 
+            dayChanges={dayChanges} 
+            appliedChanges={appliedChanges} 
+            currentDateStr={currentDateStr} 
+            isOverCapacity={stats.isOverTasks || stats.isOverHours} 
+          />
 
           <div className="space-y-3">
             {dayChanges.length === 0 ? (
