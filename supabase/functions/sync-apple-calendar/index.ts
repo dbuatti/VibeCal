@@ -42,7 +42,7 @@ serve(async (req) => {
       return `${urlObj.origin}${path.startsWith('/') ? '' : '/'}${path}`;
     };
 
-    // 1. Discovery - Principal & Home Set (Combined for efficiency)
+    // 1. Discovery - Principal & Home Set
     console.log("[sync-apple-calendar] Discovering Principal and Home Set...");
     const discoveryRes = await fetch(initialBase, { 
       method: 'PROPFIND', 
@@ -57,16 +57,12 @@ serve(async (req) => {
     });
     const discoveryXml = await discoveryRes.text();
     
-    // Try to find Home Set directly first
     let homeSetPath = discoveryXml.match(/calendar-home-set[\s\S]*?href[^>]*>([^<]+)/i)?.[1];
     
     if (!homeSetPath) {
-      // Fallback: Find Principal first, then query it
       const principalPath = discoveryXml.match(/current-user-principal[\s\S]*?href[^>]*>([^<]+)/i)?.[1];
       if (principalPath) {
         const principalUrl = getFullUrl(principalPath, discoveryRes.url);
-        console.log("[sync-apple-calendar] Home Set not in initial response. Querying Principal:", principalUrl);
-        
         const homeSetRes = await fetch(principalUrl, { 
           method: 'PROPFIND', 
           headers: { 'Authorization': `Basic ${auth}`, 'Depth': '0' }, 
@@ -80,15 +76,10 @@ serve(async (req) => {
       }
     }
 
-    if (!homeSetPath) {
-      console.error("[sync-apple-calendar] Discovery XML Response:", discoveryXml);
-      throw new Error("Could not find Calendar Home Set. Please verify your App-Specific Password.");
-    }
-    
+    if (!homeSetPath) throw new Error("Could not find Calendar Home Set.");
     const homeSetUrl = getFullUrl(homeSetPath, discoveryRes.url);
-    console.log("[sync-apple-calendar] Home Set URL found:", homeSetUrl);
 
-    // 2. Get Enabled Calendars from DB
+    // 2. Get Enabled Calendars
     const { data: enabled } = await supabaseAdmin
       .from('user_calendars')
       .select('calendar_id, calendar_name')
@@ -96,54 +87,14 @@ serve(async (req) => {
       .eq('is_enabled', true)
       .eq('provider', 'apple');
 
-    // Clear Apple cache for this user before re-syncing
+    // Clear Apple cache for this user
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
 
     if (!enabled || enabled.length === 0) {
-      // If no calendars are enabled, we should still try to discover them for the settings page
-      console.log("[sync-apple-calendar] No enabled calendars. Discovering available calendars...");
-      const calListRes = await fetch(homeSetUrl, {
-        method: 'PROPFIND',
-        headers: { 'Authorization': `Basic ${auth}`, 'Depth': '1' },
-        body: `<?xml version="1.0" encoding="utf-8" ?>
-          <d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
-            <d:prop>
-              <d:displayname />
-              <d:resourcetype />
-            </d:prop>
-          </d:propfind>`
-      });
-      const calListXml = await calListRes.text();
-      
-      // Simple parser for calendar collections
-      const responses = calListXml.split(/<[^>]*response[^>]*>/i).slice(1);
-      const discovered = [];
-      
-      for (const resp of responses) {
-        const isCalendar = /calendar/i.test(resp.match(/<[^>]*resourcetype[^>]*>([\s\S]*?)<\/[^>]*resourcetype[^>]*>/i)?.[1] || '');
-        if (isCalendar) {
-          const href = resp.match(/<[^>]*href[^>]*>([^<]+)/i)?.[1];
-          const name = resp.match(/<[^>]*displayname[^>]*>([^<]+)/i)?.[1] || 'Unnamed Calendar';
-          if (href) {
-            discovered.push({
-              user_id: user.id,
-              calendar_id: href,
-              calendar_name: name,
-              provider: 'apple',
-              is_enabled: false
-            });
-          }
-        }
-      }
-      
-      if (discovered.length > 0) {
-        await supabaseAdmin.from('user_calendars').upsert(discovered, { onConflict: 'user_id, calendar_id' });
-      }
-      
-      return new Response(JSON.stringify({ count: 0, message: "Discovery complete. Enable calendars in settings." }), { headers: corsHeaders });
+      return new Response(JSON.stringify({ count: 0, message: "No Apple calendars enabled." }), { headers: corsHeaders });
     }
 
-    // 3. Fetch Events with EXPANSION
+    // 3. Fetch Events
     const now = new Date();
     const startStr = now.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endStr = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
@@ -166,7 +117,7 @@ serve(async (req) => {
       </c:calendar-query>
     `;
 
-    const allEvents = [];
+    const eventMap = new Map();
     for (const cal of enabled) {
       console.log(`[sync-apple-calendar] Fetching events for: ${cal.calendar_name}`);
       const res = await fetch(getFullUrl(cal.calendar_id, homeSetUrl), {
@@ -188,7 +139,9 @@ serve(async (req) => {
         if (dtStart && dtEnd) {
           const start = parseIcsDate(dtStart);
           const end = parseIcsDate(dtEnd);
-          allEvents.push({
+          
+          // Use Map to ensure unique event_id per user
+          eventMap.set(uid, {
             user_id: user.id,
             event_id: uid,
             title: summary,
@@ -199,17 +152,18 @@ serve(async (req) => {
             provider: 'apple',
             source_calendar: cal.calendar_name,
             last_synced_at: new Date().toISOString()
-          })
+          });
         }
       }
     }
 
-    if (allEvents.length > 0) {
-      const { error: insertError } = await supabaseAdmin.from('calendar_events_cache').upsert(allEvents, { onConflict: 'user_id, event_id' });
+    const uniqueEvents = Array.from(eventMap.values());
+    if (uniqueEvents.length > 0) {
+      const { error: insertError } = await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
       if (insertError) throw insertError;
     }
 
-    return new Response(JSON.stringify({ count: allEvents.length }), { headers: corsHeaders });
+    return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders });
   } catch (error) {
     console.error("[sync-apple-calendar] Error:", error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });

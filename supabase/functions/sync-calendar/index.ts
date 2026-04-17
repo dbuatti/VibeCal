@@ -56,8 +56,6 @@ serve(async (req) => {
       .eq('is_enabled', true)
       .eq('provider', 'google')
 
-    console.log(`[sync-calendar] Found ${enabled?.length || 0} enabled Google calendars.`);
-
     // Clear Google cache for this user
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google');
 
@@ -68,7 +66,7 @@ serve(async (req) => {
     // 3. Fetch Events
     const now = new Date()
     const end = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
-    const allEvents = []
+    const eventMap = new Map();
 
     for (const cal of enabled) {
       console.log(`[sync-calendar] Fetching events for: ${cal.calendar_name}`);
@@ -82,7 +80,9 @@ serve(async (req) => {
         data.items.forEach(event => {
           const start = new Date(event.start.dateTime || event.start.date)
           const end = new Date(event.end.dateTime || event.end.date)
-          allEvents.push({
+          
+          // Use Map to ensure unique event_id per user
+          eventMap.set(event.id, {
             user_id: user.id,
             event_id: event.id,
             title: event.summary || 'Untitled',
@@ -93,17 +93,18 @@ serve(async (req) => {
             provider: 'google',
             source_calendar: cal.calendar_name,
             last_synced_at: new Date().toISOString()
-          })
-        })
+          });
+        });
       }
     }
 
-    if (allEvents.length > 0) {
-      const { error: insertError } = await supabaseAdmin.from('calendar_events_cache').upsert(allEvents, { onConflict: 'user_id, event_id' })
+    const uniqueEvents = Array.from(eventMap.values());
+    if (uniqueEvents.length > 0) {
+      const { error: insertError } = await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' })
       if (insertError) throw insertError;
     }
 
-    return new Response(JSON.stringify({ count: allEvents.length }), { headers: corsHeaders })
+    return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders })
   } catch (error) {
     console.error("[sync-calendar] Error:", error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders })
