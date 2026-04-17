@@ -3,6 +3,7 @@ import Layout from '@/components/Layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Sparkles, ArrowRight, Calendar as CalendarIcon, Clock, CheckCircle2 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 const Dashboard = () => {
   return (
