@@ -8,15 +8,19 @@ import DayThemesSettings from '@/components/settings/DayThemesSettings';
 import OptimisationLogicSettings from '@/components/settings/OptimisationLogicSettings';
 import CalendarSettings from '@/components/settings/CalendarSettings';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { cn } from '@/lib/utils';
-import { Save, Sparkles, Ban, Briefcase, RefreshCw } from 'lucide-react';
+import { Save, Sparkles, Ban, Briefcase, RefreshCw, Link2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 const Settings = () => {
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [isTesting, setIsTesting] = useState(false);
   const [calendars, setCalendars] = useState<any[]>([]);
+  const [googleStatus, setGoogleStatus] = useState<'connected' | 'expired' | 'disconnected'>('disconnected');
   
   const [settings, setSettings] = useState<any>({
     day_start_time: '09:00',
@@ -45,6 +49,33 @@ const Settings = () => {
     { day_of_week: 5, label: 'Friday', theme: '' },
     { day_of_week: 6, label: 'Saturday', theme: '' },
   ]);
+
+  const checkGoogleConnection = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.provider_token) {
+        setGoogleStatus('connected');
+        return;
+      }
+
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
+      
+      if (profile?.google_access_token) {
+        // Try a lightweight API call to check if token is still valid
+        const res = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1', {
+          headers: { Authorization: `Bearer ${profile.google_access_token}` }
+        });
+        setGoogleStatus(res.ok ? 'connected' : 'expired');
+      } else {
+        setGoogleStatus('disconnected');
+      }
+    } catch (err) {
+      setGoogleStatus('expired');
+    }
+  };
 
   useEffect(() => {
     const fetchData = async () => {
@@ -77,6 +108,8 @@ const Settings = () => {
           });
           setThemes(updatedThemes);
         }
+
+        await checkGoogleConnection();
       } catch (err) {
         console.error("Error fetching settings:", err);
       } finally {
@@ -129,6 +162,11 @@ const Settings = () => {
     } catch (err: any) {
       showError(err.message);
     }
+  };
+
+  const handleReconnect = async () => {
+    await supabase.auth.signOut();
+    navigate('/login');
   };
 
   const handleAddKeyword = async (keyword: string, type: 'movable' | 'locked' | 'work') => {
@@ -185,8 +223,13 @@ const Settings = () => {
 
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.provider_token) {
+        await supabase.from('profiles').update({ google_access_token: session.provider_token }).eq('id', user.id);
         await supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: session.provider_token } });
+      } else {
+        // Try with cached token
+        await supabase.functions.invoke('sync-calendar', { body: {} });
       }
+
       if (profile.apple_id && profile.apple_app_password) {
         await supabase.functions.invoke('sync-apple-calendar');
       }
@@ -194,8 +237,12 @@ const Settings = () => {
       const { data: newCals } = await supabase.from('user_calendars').select('*').eq('user_id', user.id).order('provider', { ascending: true });
       if (newCals) setCalendars(newCals);
       showSuccess('Calendar list refreshed!');
+      await checkGoogleConnection();
     } catch (err: any) {
       showError(`Discovery failed: ${err.message}`);
+      if (err.message.includes('401') || err.message.includes('Unauthorized')) {
+        setGoogleStatus('expired');
+      }
     } finally {
       setIsTesting(false);
     }
@@ -223,6 +270,52 @@ const Settings = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-8">
+          {/* Google Connection Status Card */}
+          <Card className={cn(
+            "border-none shadow-sm rounded-2xl transition-all",
+            googleStatus === 'expired' ? "bg-amber-50 border border-amber-100" : "bg-white"
+          )}>
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <Link2 className="text-indigo-600" size={20} />
+                Google Connection
+              </CardTitle>
+              <CardDescription>Manage your Google Calendar integration status.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between p-4 rounded-xl bg-white/50 border border-gray-100">
+                <div className="flex items-center gap-4">
+                  <div className={cn(
+                    "w-10 h-10 rounded-full flex items-center justify-center",
+                    googleStatus === 'connected' ? "bg-green-100 text-green-600" : 
+                    googleStatus === 'expired' ? "bg-amber-100 text-amber-600" : "bg-gray-100 text-gray-400"
+                  )}>
+                    {googleStatus === 'connected' ? <CheckCircle2 size={20} /> : 
+                     googleStatus === 'expired' ? <AlertCircle size={20} /> : <Link2 size={20} />}
+                  </div>
+                  <div>
+                    <p className="font-bold text-sm capitalize">{googleStatus}</p>
+                    <p className="text-xs text-gray-500">
+                      {googleStatus === 'connected' ? 'Your calendar is syncing correctly.' : 
+                       googleStatus === 'expired' ? 'Your session has expired. Please reconnect.' : 
+                       'No Google account connected.'}
+                    </p>
+                  </div>
+                </div>
+                <Button 
+                  variant={googleStatus === 'expired' ? "default" : "outline"}
+                  onClick={handleReconnect}
+                  className={cn(
+                    "rounded-xl font-bold text-xs",
+                    googleStatus === 'expired' && "bg-indigo-600 hover:bg-indigo-700"
+                  )}
+                >
+                  {googleStatus === 'connected' ? 'Switch Account' : 'Reconnect Google'}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
           <WorkWindowSettings settings={settings} setSettings={setSettings} />
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
