@@ -2,22 +2,25 @@
 
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Sparkles, ArrowUpRight, AlertCircle } from 'lucide-react';
+import { Sparkles, ArrowUpRight, AlertCircle, PlusCircle } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 
 interface PlannerChangesProps {
   dayChanges: any[];
   appliedChanges: string[];
   currentDateStr: string;
   isOverCapacity: boolean;
+  onReinsert?: (eventId: string) => void;
 }
 
 const PlannerChanges = ({ 
   dayChanges, 
   appliedChanges, 
   currentDateStr,
-  isOverCapacity
+  isOverCapacity,
+  onReinsert
 }: PlannerChangesProps) => {
   return (
     <Card className="border-none shadow-md rounded-2xl overflow-hidden bg-white">
@@ -26,28 +29,30 @@ const PlannerChanges = ({
           Changes
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3 px-6 pb-6 max-h-[300px] overflow-y-auto">
+      <CardContent className="space-y-3 px-6 pb-6 max-h-[400px] overflow-y-auto">
         {dayChanges.length > 0 ? dayChanges.map((change, i) => {
           const isMovingAway = format(parseISO(change.old_start), 'yyyy-MM-dd') === currentDateStr && 
                                format(parseISO(change.new_start), 'yyyy-MM-dd') !== currentDateStr;
+          const isApplied = appliedChanges.includes(change.event_id);
+
           return (
             <div 
               key={i} 
               className={cn(
-                "p-4 rounded-xl border flex items-center justify-between transition-all", 
-                appliedChanges.includes(change.event_id) ? "bg-green-50 border-green-100 opacity-60" : 
+                "p-4 rounded-xl border flex items-center justify-between transition-all group", 
+                isApplied ? "bg-green-50 border-green-100 opacity-60" : 
                 isMovingAway ? "bg-red-50/30 border-red-100" : "bg-gray-50/50 border-gray-100"
               )}
             >
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 min-w-0">
                 <div className={cn(
-                  "w-8 h-8 rounded-lg flex items-center justify-center", 
+                  "w-8 h-8 rounded-lg flex items-center justify-center shrink-0", 
                   isMovingAway ? "bg-red-100 text-red-600" : "bg-white text-indigo-600 shadow-sm"
                 )}>
                   {isMovingAway ? <ArrowUpRight size={16} /> : <Sparkles size={16} />}
                 </div>
-                <div>
-                  <p className="text-xs font-black text-gray-900 tracking-tight truncate max-w-[120px]">
+                <div className="min-w-0">
+                  <p className="text-xs font-black text-gray-900 tracking-tight truncate">
                     {change.title}
                   </p>
                   <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest">
@@ -55,6 +60,18 @@ const PlannerChanges = ({
                   </p>
                 </div>
               </div>
+
+              {isMovingAway && !isApplied && onReinsert && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => onReinsert(change.event_id)}
+                  className="h-8 w-8 rounded-lg text-indigo-600 hover:bg-indigo-50 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                  title="Reinsert into today"
+                >
+                  <PlusCircle size={16} />
+                </Button>
+              )}
             </div>
           );
         }) : (

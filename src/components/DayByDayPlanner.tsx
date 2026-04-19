@@ -26,6 +26,7 @@ interface DayByDayPlannerProps {
   onApplyDay: (dateChanges: any[]) => Promise<void>;
   onUndoApplyDay: (dateChanges: any[]) => Promise<void>;
   onResuggestDay?: () => Promise<void>;
+  onReinsertTask?: (eventId: string, targetDateStr: string) => Promise<void>;
   maxHours: number;
   maxTasks: number;
   workKeywords?: string[];
@@ -38,6 +39,7 @@ const DayByDayPlanner = ({
   onApplyDay, 
   onUndoApplyDay,
   onResuggestDay,
+  onReinsertTask,
   maxHours, 
   maxTasks,
   workKeywords = ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt', 'program', 'ceremony']
@@ -180,6 +182,12 @@ const DayByDayPlanner = ({
     } finally { setIsSyncing(false); }
   };
 
+  const handleReinsert = async (eventId: string) => {
+    if (onReinsertTask && currentDateStr) {
+      await onReinsertTask(eventId, currentDateStr);
+    }
+  };
+
   if (isFinished) {
     return (
       <div className="max-w-md mx-auto text-center py-16 animate-in zoom-in-95 duration-500">
@@ -224,6 +232,7 @@ const DayByDayPlanner = ({
             appliedChanges={appliedChanges} 
             currentDateStr={currentDateStr} 
             isOverCapacity={stats.isOverTasks || stats.isOverHours} 
+            onReinsert={handleReinsert}
           />
 
           <div className="space-y-3">

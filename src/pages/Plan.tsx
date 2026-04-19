@@ -11,7 +11,7 @@ import PlanPageHeader from '@/components/plan/PlanPageHeader';
 import PlanInitialView from '@/components/plan/PlanInitialView';
 import PlanLoadingView from '@/components/plan/PlanLoadingView';
 import { Card } from '@/components/ui/card';
-import { format, nextSaturday, parseISO, addMinutes } from 'date-fns';
+import { format, nextSaturday, parseISO, addMinutes, startOfDay, endOfDay, isAfter, isBefore } from 'date-fns';
 import { AlertCircle, LogIn } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -112,7 +112,6 @@ const Plan = () => {
           body: { googleAccessToken: token } 
         });
 
-        // Enhanced error detection for 401/Unauthorized
         if (syncError || syncData?.error) {
           const errorMsg = syncError?.message || syncData?.error || "";
           const isAuthError = errorMsg.includes("401") || 
@@ -149,7 +148,6 @@ const Plan = () => {
   };
 
   const handleReauth = async () => {
-    // Sign out first to ensure a clean slate for the OAuth flow
     await supabase.auth.signOut();
     navigate('/login');
   };
@@ -358,6 +356,59 @@ const Plan = () => {
     }
   };
 
+  const handleReinsertTask = async (eventId: string, targetDateStr: string) => {
+    if (!proposal) return;
+    
+    const changeIdx = proposal.proposed_changes.findIndex((c: any) => c.event_id === eventId);
+    if (changeIdx === -1) return;
+
+    const change = proposal.proposed_changes[changeIdx];
+    const targetDate = parseISO(targetDateStr);
+    
+    // Find a slot on the target day
+    // We'll look at existing events on that day to find the last end time
+    const dayEvents = [
+      ...events.filter(e => format(parseISO(e.start_time), 'yyyy-MM-dd') === targetDateStr),
+      ...proposal.proposed_changes.filter((c: any) => 
+        c.event_id !== eventId && 
+        format(parseISO(c.new_start), 'yyyy-MM-dd') === targetDateStr
+      )
+    ];
+
+    let lastEnd = new Date(targetDate);
+    // Default to work start time if no events
+    const [startH, startM] = (settings?.day_start_time || '09:00').split(':').map(Number);
+    lastEnd.setHours(startH, startM, 0, 0);
+
+    dayEvents.forEach(e => {
+      const end = parseISO(e.end_time || e.new_end);
+      if (isAfter(end, lastEnd)) lastEnd = end;
+    });
+
+    // Add a small buffer
+    const newStart = addMinutes(lastEnd, 5);
+    const newEnd = addMinutes(newStart, change.duration);
+
+    const updatedChanges = [...proposal.proposed_changes];
+    updatedChanges[changeIdx] = {
+      ...change,
+      new_start: newStart.toISOString(),
+      new_end: newEnd.toISOString(),
+      is_surplus: false
+    };
+
+    try {
+      await supabase.from('optimisation_history')
+        .update({ proposed_changes: updatedChanges })
+        .eq('id', proposal.id);
+      
+      setProposal({ ...proposal, proposed_changes: updatedChanges });
+      showSuccess(`Reinserted "${change.title}" into today`);
+    } catch (err) {
+      showError("Failed to reinsert task");
+    }
+  };
+
   const renderRequirementsForm = () => (
     <RequirementsForm 
       durationOverride={durationOverride}
@@ -431,6 +482,7 @@ const Plan = () => {
               onApplyDay={handleApplyDay}
               onUndoApplyDay={handleUndoApplyDay}
               onResuggestDay={() => runOptimisation(true)} 
+              onReinsertTask={handleReinsertTask}
               maxHours={maxHoursOverride}
               maxTasks={maxTasksOverride}
               workKeywords={settings?.work_keywords}
