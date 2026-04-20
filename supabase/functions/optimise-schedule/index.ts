@@ -48,12 +48,18 @@ serve(async (req) => {
       max_hours_per_day: 6, 
       max_tasks_per_day: 5,
       group_similar_tasks: true,
-      work_keywords: ['meeting', 'call', 'lesson', 'audition', 'rehearsal']
+      work_keywords: [],
+      movable_keywords: [],
+      locked_keywords: []
     };
+    
     const userTimezone = profileRes.data?.timezone || 'Australia/Melbourne';
     const allEvents = eventsRes.data || [];
     const dayThemes = themesRes.data || [];
+    
     const workKeywords = settings.work_keywords || [];
+    const movableKeywords = settings.movable_keywords || [];
+    const lockedKeywords = settings.locked_keywords || [];
 
     const maxTasks = maxTasksOverride || settings.max_tasks_per_day || 5;
     const maxWorkHours = settings.max_hours_per_day || 24;
@@ -64,7 +70,6 @@ serve(async (req) => {
 
     console.log(`[${functionName}] --- DIAGNOSTIC START ---`);
     console.log(`[${functionName}] TODAY: ${todayStr} | TZ: ${userTimezone}`);
-    console.log(`[${functionName}] TOTAL EVENTS IN CACHE: ${allEvents.length}`);
 
     const seenIds = new Set();
     const uniqueEvents = allEvents.filter(e => {
@@ -73,8 +78,21 @@ serve(async (req) => {
       return new Date(e.start_time) >= localTodayStart;
     });
 
-    const fixedEvents = uniqueEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
-    const movableEvents = uniqueEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
+    // Real-time keyword override
+    const processedEvents = uniqueEvents.map(e => {
+      const title = (e.title || '').toLowerCase();
+      const isExplicitlyLocked = lockedKeywords.some(kw => title.includes(kw.toLowerCase()));
+      const isExplicitlyMovable = movableKeywords.some(kw => title.includes(kw.toLowerCase()));
+      
+      let finalLocked = e.is_locked;
+      if (isExplicitlyLocked) finalLocked = true;
+      if (isExplicitlyMovable) finalLocked = false;
+      
+      return { ...e, is_locked: finalLocked };
+    });
+
+    const fixedEvents = processedEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
+    const movableEvents = processedEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
 
     console.log(`[${functionName}] FIXED: ${fixedEvents.length} | MOVABLE: ${movableEvents.length}`);
 
