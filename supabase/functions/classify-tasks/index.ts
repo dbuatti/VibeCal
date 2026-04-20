@@ -26,19 +26,22 @@ function isSemanticMatch(title: string, pattern: string) {
 }
 
 // Expanded local patterns to minimize AI usage
-const HARD_FIXED_PATTERNS = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|clinic|surgery|medical|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary|appointment|appt|interview|vs|meeting with|call with|zoom|teams|google meet|skype|facetime|session with|coaching|lesson|rehearsal|audition|workshop|seminar|webinar|conference|travel to|commute|drive to/i;
+const HARD_FIXED_PATTERNS = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|clinic|surgery|medical|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary|appointment|appt|interview|vs|meeting with|call with|zoom|teams|google meet|skype|facetime|session with|coaching|lesson|rehearsal|audition|workshop|seminar|webinar|conference|travel to|commute|drive to|dentist|physio|therapy|vet|haircut|dinner with|lunch with|brunch with|coffee with/i;
+
+const HARD_MOVABLE_PATTERNS = /solo|draft|research|tidy|clean|practice|read|study|admin|email|gym|workout|run|walk|meditate|yoga|journal|laundry|groceries|shopping|vacuum|mop|dust|organize|filing|backup|update|coding|programming|writing|blog|post|social media/i;
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   const functionName = "classify-tasks";
+  let isLocalMode = false;
 
   try {
     const { events, tasks, movableKeywords = [], lockedKeywords = [], naturalLanguageRules = '', persist = false } = await req.json();
     const authHeader = req.headers.get('Authorization');
     
     const taskList = events ? events.map(e => e.title) : (tasks || []);
-    if (taskList.length === 0) return new Response(JSON.stringify({ classifications: [] }), { headers: corsHeaders });
+    if (taskList.length === 0) return new Response(JSON.stringify({ classifications: [], isLocalMode: false }), { headers: corsHeaders });
 
     const supabaseAdmin = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
     const supabaseUser = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_ANON_KEY') ?? '', { global: { headers: { Authorization: authHeader } } });
@@ -70,6 +73,16 @@ serve(async (req) => {
           isMovable: false,
           explanation: "Local Heuristic: Detected high-priority event pattern (Travel/Medical/Meeting).",
           confidence: 0.9,
+          isPredefined: true
+        };
+      }
+
+      // Check hard-coded movable patterns
+      if (HARD_MOVABLE_PATTERNS.test(title)) {
+        return {
+          isMovable: true,
+          explanation: "Local Heuristic: Detected flexible solo task pattern.",
+          confidence: 0.8,
           isPredefined: true
         };
       }
@@ -112,7 +125,7 @@ serve(async (req) => {
 
         const geminiKey = Deno.env.get('GEMINI_API_KEY');
         const genAI = new GoogleGenerativeAI(geminiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
         
         const result = await model.generateContent(prompt);
         const response = await result.response;
@@ -126,7 +139,7 @@ serve(async (req) => {
           });
         }
       } catch (aiError) {
-        // Check if it's a quota error (429)
+        isLocalMode = true;
         const isQuotaError = aiError.message?.includes('429') || aiError.message?.includes('quota');
         
         if (isQuotaError) {
@@ -138,11 +151,11 @@ serve(async (req) => {
         // 3. STAGE 3: SMART HEURISTIC FALLBACK (AI Busy/Quota)
         indicesToAI.forEach(idx => {
           const title = taskList[idx].toLowerCase();
-          // If it wasn't caught by Stage 1, we do a slightly more aggressive check here
-          const likelyFixed = /with|call|meeting|vs|interview|appointment|doctor|dentist|flight|zoom|teams|rehearsal|lesson|performance|gig|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i.test(title);
+          const likelyFixed = HARD_FIXED_PATTERNS.test(title);
+          const likelyMovable = HARD_MOVABLE_PATTERNS.test(title);
           
           results[idx] = {
-            isMovable: !likelyFixed,
+            isMovable: likelyMovable || !likelyFixed,
             explanation: isQuotaError ? "Local Mode: Classified via heuristic (AI Quota Exceeded)." : "Local Mode: Classified via heuristic (AI Unavailable).",
             confidence: 0.6,
             dependsOn: null
@@ -161,11 +174,11 @@ serve(async (req) => {
       await supabaseAdmin.from('calendar_events_cache').upsert(updates, { onConflict: 'user_id, event_id' });
     }
 
-    return new Response(JSON.stringify({ classifications: results }), { 
+    return new Response(JSON.stringify({ classifications: results, isLocalMode }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
   } catch (error) {
     console.error(`[${functionName}] FATAL ERROR:`, error.message);
-    return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
+    return new Response(JSON.stringify({ error: error.message, isLocalMode: true }), { status: 400, headers: corsHeaders });
   }
 })

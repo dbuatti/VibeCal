@@ -18,7 +18,8 @@ import {
   Brain, 
   MessageSquare,
   Clock,
-  Globe
+  Globe,
+  ShieldAlert
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -58,6 +59,7 @@ const Vet = () => {
   const [events, setEvents] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [aiMetadata, setAiMetadata] = useState<Record<string, { explanation: string, confidence: number }>>({});
+  const [isLocalMode, setIsLocalMode] = useState(false);
   
   const [showLocked, setShowLocked] = useState(true);
   const [showUnlocked, setShowUnlocked] = useState(true);
@@ -86,11 +88,9 @@ const Vet = () => {
     setIsProcessing(true);
     setStatusText('Performing full system sync...');
     try {
-      // 1. Deep reset
       const { error: resetError } = await supabase.rpc('full_reset_user_data');
       if (resetError) throw resetError;
 
-      // 2. Auth & Tokens
       const { data: { session } } = await supabase.auth.getSession();
       const { data: { user } } = await supabase.auth.getUser();
       
@@ -100,7 +100,6 @@ const Vet = () => {
         token = profile?.google_access_token;
       }
 
-      // 3. Fresh pull
       setStatusText('Syncing calendars...');
       await Promise.allSettled([
         supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: token } }),
@@ -122,6 +121,7 @@ const Vet = () => {
 
     setIsProcessing(true);
     setStatusText('AI is vetting your schedule...');
+    setIsLocalMode(false);
     
     try {
       const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, natural_language_rules').single();
@@ -137,6 +137,10 @@ const Vet = () => {
       });
 
       if (error) throw error;
+
+      if (data?.isLocalMode) {
+        setIsLocalMode(true);
+      }
 
       if (data?.classifications) {
         const updatedEvents = [...events];
@@ -158,7 +162,7 @@ const Vet = () => {
 
         setEvents(updatedEvents);
         setAiMetadata(newMetadata);
-        showSuccess("AI vetting complete!");
+        showSuccess(data?.isLocalMode ? "Local vetting complete (AI Quota reached)" : "AI vetting complete!");
       }
 
     } catch (err: any) {
@@ -228,7 +232,12 @@ const Vet = () => {
           </div>
           
           <div className="flex items-center gap-3">
-            {/* Rainbow Full Sync Button */}
+            {isLocalMode && (
+              <Badge variant="outline" className="bg-amber-50 text-amber-600 border-amber-200 px-4 py-2 rounded-xl font-black text-[10px] uppercase tracking-widest flex gap-2 shadow-sm">
+                <ShieldAlert size={14} /> Local Intelligence Mode
+              </Badge>
+            )}
+
             <button
               onClick={handleFullSync}
               disabled={isProcessing}
