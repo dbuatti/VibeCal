@@ -121,8 +121,13 @@ serve(async (req) => {
       }).length;
 
       let currentTime = dayStart;
-      const maxDailyMinutes = (maxHoursOverride || settings.max_hours_per_day || 6) * 60;
-      const maxDailyTasks = maxTasksOverride || settings.max_tasks_per_day || 5;
+      
+      // CRITICAL FIX: Ensure maxDailyMinutes is a valid number
+      const rawMaxHours = maxHoursOverride !== undefined && maxHoursOverride !== null ? maxHoursOverride : settings.max_hours_per_day;
+      const maxDailyMinutes = (Number(rawMaxHours) || 6) * 60;
+      
+      const rawMaxTasks = maxTasksOverride !== undefined && maxTasksOverride !== null ? maxTasksOverride : settings.max_tasks_per_day;
+      const maxDailyTasks = Number(rawMaxTasks) || 5;
 
       // Try to fit movable events into slots
       while (currentTime < dayEnd && currentMovableIdx < movableEvents.length) {

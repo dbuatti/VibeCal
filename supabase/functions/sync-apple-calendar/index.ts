@@ -131,7 +131,7 @@ Deno.serve(async (req) => {
     
     const allEvents = [];
     const now = new Date();
-    const startRange = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    const startRange = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endRange = new Date(now.getTime() + 180 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
     for (const cal of enabledCalendars) {
@@ -212,15 +212,25 @@ Deno.serve(async (req) => {
             if (parsedCount === currentParsedCount) {
               const summary = icsData.match(/SUMMARY:(.*)/i)?.[1]?.trim() || 'Untitled';
               const uid = icsData.match(/UID:(.*)/i)?.[1]?.trim();
-              const dtstart = icsData.match(/DTSTART(?:;TZID=.*?)?:(.*)/i)?.[1]?.trim();
-              const dtend = icsData.match(/DTEND(?:;TZID=.*?)?:(.*)/i)?.[1]?.trim();
+              
+              // Handle DTSTART;TZID=Australia/Melbourne:20260310T112800
+              const dtstartMatch = icsData.match(/DTSTART(?:;[^:]*)?:(.*)/i);
+              const dtendMatch = icsData.match(/DTEND(?:;[^:]*)?:(.*)/i);
+              
+              const dtstart = dtstartMatch?.[1]?.trim();
+              const dtend = dtendMatch?.[1]?.trim();
 
               if (uid && dtstart && dtend) {
                 const parseIcalDate = (str) => {
                   // Handle 20260310T120000 format
+                  if (str.length >= 15) {
+                    const y = str.substring(0, 4), m = str.substring(4, 6), d = str.substring(6, 8);
+                    const h = str.substring(9, 11), min = str.substring(11, 13), s = str.substring(13, 15);
+                    return new Date(`${y}-${m}-${d}T${h}:${min}:${s}`).toISOString();
+                  }
+                  // Handle 20260310 (All day)
                   const y = str.substring(0, 4), m = str.substring(4, 6), d = str.substring(6, 8);
-                  const h = str.substring(9, 11), min = str.substring(11, 13), s = str.substring(13, 15);
-                  return new Date(`${y}-${m}-${d}T${h}:${min}:${s}`).toISOString();
+                  return new Date(`${y}-${m}-${d}T00:00:00`).toISOString();
                 };
 
                 try {
