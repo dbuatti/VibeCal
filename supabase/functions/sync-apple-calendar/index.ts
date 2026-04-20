@@ -28,6 +28,7 @@ serve(async (req) => {
     const { data: profile } = await supabaseAdmin.from('profiles').select('apple_id, apple_app_password, timezone').eq('id', user.id).single();
     
     if (!profile?.apple_id || !profile?.apple_app_password) {
+      console.log(`[${functionName}] No Apple credentials found for user.`);
       return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
     }
 
@@ -100,6 +101,8 @@ serve(async (req) => {
     const enabledPaths = (enabledCals || []).filter(c => c.is_enabled);
     const enabledIds = enabledPaths.map(c => c.calendar_id);
 
+    console.log(`[${functionName}] Syncing events for ${enabledIds.length} enabled Apple calendars.`);
+
     if (enabledPaths.length === 0) {
       await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
       return new Response(JSON.stringify({ count: 0, message: "No calendars enabled" }), { headers: corsHeaders });
@@ -129,19 +132,6 @@ serve(async (req) => {
     const eventMap = new Map();
     const syncTimestamp = new Date().toISOString();
 
-    const { data: settings } = await supabaseAdmin.from('user_settings').select('movable_keywords, locked_keywords, work_keywords').eq('user_id', user.id).single();
-    const movableKeywords = settings?.movable_keywords || [];
-    const lockedKeywords = settings?.locked_keywords || [];
-    const workKeywords = settings?.work_keywords || ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session', 'work session'];
-    
-    const hardFixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
-
-    const interpretToUtc = (icalTime, timeZone) => {
-      const iso = icalTime.toString(); // e.g. "2026-05-19T15:15:00"
-      if (icalTime.isUtc) return new Date(iso).toISOString();
-      return toDate(iso, { timeZone }).toISOString();
-    };
-
     for (const cal of enabledPaths) {
       const eventsRes = await fetch(cal.calendar_id, { method: 'REPORT', headers: { ...headers, 'Depth': '1' }, body: reportQuery });
       if (!eventsRes.ok) continue;
@@ -158,18 +148,8 @@ serve(async (req) => {
           for (const vevent of vevents) {
             const event = new ICAL.Event(vevent);
             const title = event.summary || 'Untitled';
-            const startIso = interpretToUtc(event.startDate, userTimezone);
-            const endIso = interpretToUtc(event.endDate, userTimezone);
-
-            const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
-            const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
-            
-            let isLocked = isExplicitlyLocked;
-            if (!isExplicitlyMovable && !isLocked && hardFixedKeywords.test(title)) {
-              isLocked = true;
-            }
-
-            const isWork = workKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
+            const startIso = event.startDate.isUtc ? new Date(event.startDate.toString()).toISOString() : toDate(event.startDate.toString(), { timeZone: userTimezone }).toISOString();
+            const endIso = event.endDate.isUtc ? new Date(event.endDate.toString()).toISOString() : toDate(event.endDate.toString(), { timeZone: userTimezone }).toISOString();
 
             eventMap.set(event.uid, {
               user_id: user.id,
@@ -180,8 +160,7 @@ serve(async (req) => {
               start_time: startIso,
               end_time: endIso,
               duration_minutes: Math.round((new Date(endIso).getTime() - new Date(startIso).getTime()) / 60000) || 30,
-              is_locked: isLocked,
-              is_work: isWork,
+              is_locked: true,
               provider: 'apple',
               source_calendar: cal.calendar_name,
               source_calendar_id: cal.calendar_id,
@@ -199,13 +178,16 @@ serve(async (req) => {
     }
 
     // 5. PURGE: Remove events from calendars that are now disabled
-    await supabaseAdmin
+    const { error: purgeError } = await supabaseAdmin
       .from('calendar_events_cache')
       .delete()
       .eq('user_id', user.id)
       .eq('provider', 'apple')
       .not('source_calendar_id', 'in', `(${enabledIds.map(id => `"${id}"`).join(',')})`);
 
+    if (purgeError) console.error(`[${functionName}] Purge Error:`, purgeError);
+
+    console.log(`[${functionName}] SUCCESS - Synced ${uniqueEvents.length} Apple events.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
     console.error(`[${functionName}] FATAL ERROR:`, error.message);

@@ -62,9 +62,11 @@ serve(async (req) => {
     // 1. Fetch user's calendar preferences from DB
     const { data: dbCalendars } = await supabaseAdmin
       .from('user_calendars')
-      .select('calendar_id, is_enabled')
+      .select('calendar_id, is_enabled, calendar_name')
       .eq('user_id', user.id)
       .eq('provider', 'google');
+
+    console.log(`[${functionName}] Found ${dbCalendars?.length || 0} Google calendars in DB preferences.`);
 
     // 2. Fetch current list from Google
     const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { 
@@ -72,6 +74,7 @@ serve(async (req) => {
     });
     
     if (listRes.status === 401 && refreshToken) {
+      console.log(`[${functionName}] Token expired, refreshing...`);
       token = await refreshGoogleToken(refreshToken, functionName);
       await supabaseAdmin.from('profiles').update({ google_access_token: token }).eq('id', user.id);
     }
@@ -80,22 +83,23 @@ serve(async (req) => {
     const googleCalendars = (listData.items || []).filter(cal => !cal.id.includes('@import.calendar.google.com'));
 
     // 3. Discovery: Upsert new calendars to DB
-    const discoveryPayload = googleCalendars.map(cal => ({
-      user_id: user.id,
-      calendar_id: cal.id,
-      calendar_name: cal.summary,
-      provider: 'google',
-      is_enabled: dbCalendars && dbCalendars.length > 0 
-        ? (dbCalendars.find(db => db.calendar_id === cal.id)?.is_enabled ?? false)
-        : true // Default to true only if this is the first time we see any calendars
-    }));
+    const discoveryPayload = googleCalendars.map(cal => {
+      const existing = dbCalendars?.find(db => db.calendar_id === cal.id);
+      return {
+        user_id: user.id,
+        calendar_id: cal.id,
+        calendar_name: cal.summary,
+        provider: 'google',
+        is_enabled: existing ? existing.is_enabled : true // Default to true for new discoveries
+      };
+    });
 
     if (discoveryPayload.length > 0) {
       await supabaseAdmin.from('user_calendars').upsert(discoveryPayload, { onConflict: 'user_id, calendar_id' });
     }
 
-    // Re-calculate enabled IDs after discovery
     const finalEnabledIds = discoveryPayload.filter(p => p.is_enabled).map(p => p.calendar_id);
+    console.log(`[${functionName}] Syncing events for ${finalEnabledIds.length} enabled calendars:`, finalEnabledIds);
 
     // 4. Sync Events for ENABLED calendars only
     const syncStartTime = new Date();
@@ -138,14 +142,15 @@ serve(async (req) => {
 
     // 5. PURGE: Remove events from calendars that are now disabled
     if (finalEnabledIds.length > 0) {
-      await supabaseAdmin
+      const { error: purgeError } = await supabaseAdmin
         .from('calendar_events_cache')
         .delete()
         .eq('user_id', user.id)
         .eq('provider', 'google')
         .not('source_calendar_id', 'in', `(${finalEnabledIds.map(id => `"${id}"`).join(',')})`);
+      
+      if (purgeError) console.error(`[${functionName}] Purge Error:`, purgeError);
     } else {
-      // If no calendars are enabled, wipe all Google events for this user
       await supabaseAdmin
         .from('calendar_events_cache')
         .delete()
@@ -153,9 +158,10 @@ serve(async (req) => {
         .eq('provider', 'google');
     }
 
+    console.log(`[${functionName}] SUCCESS - Synced ${allEvents.length} events.`);
     return new Response(JSON.stringify({ count: allEvents.length }), { headers: corsHeaders });
   } catch (error) {
-    console.error(`[${functionName}] Error:`, error.message);
+    console.error(`[${functionName}] FATAL ERROR:`, error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })
