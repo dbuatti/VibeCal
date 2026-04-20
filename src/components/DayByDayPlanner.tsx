@@ -31,6 +31,7 @@ interface DayByDayPlannerProps {
   maxHours: number;
   maxTasks: number;
   workKeywords?: string[];
+  selectedDays?: number[];
 }
 
 const DayByDayPlanner = ({ 
@@ -43,7 +44,8 @@ const DayByDayPlanner = ({
   onReinsertTask,
   maxHours, 
   maxTasks,
-  workKeywords = ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt', 'program', 'ceremony']
+  workKeywords = ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt', 'program', 'ceremony'],
+  selectedDays = [1, 2, 3, 4, 5]
 }: DayByDayPlannerProps) => {
   const timezone = 'Australia/Melbourne';
 
@@ -89,9 +91,19 @@ const DayByDayPlanner = ({
   }, [events, currentDateStr]);
 
   const isDayVetted = useMemo(() => {
-    if (dayChanges.length === 0) return true;
-    return dayChanges.every(c => appliedChanges.includes(c.event_id));
-  }, [dayChanges, appliedChanges]);
+    // If there are changes, they must all be applied
+    if (dayChanges.length > 0) {
+      return dayChanges.every(c => appliedChanges.includes(c.event_id));
+    }
+    
+    // If there are NO changes, but it's a work day, it's only "vetted" if it's not empty due to a bug
+    // We'll assume it's vetted if it's a weekend or if the user has explicitly accepted the empty state
+    const dayOfWeek = currentDate.getDay();
+    if (!selectedDays.includes(dayOfWeek)) return true;
+    
+    // If it's a work day and empty, we'll show it as "Vetting" to encourage a resuggest
+    return false;
+  }, [dayChanges, appliedChanges, currentDate, selectedDays]);
 
   const isWorkEvent = (event: any) => {
     if (event.is_work === true) return true;
@@ -243,9 +255,16 @@ const DayByDayPlanner = ({
 
           <div className="space-y-3">
             {dayChanges.length === 0 ? (
-              <Button disabled className="w-full bg-gray-100 text-gray-400 rounded-2xl py-8 text-lg font-black cursor-not-allowed">
-                No Sync Required
-              </Button>
+              <div className="space-y-3">
+                <Button disabled className="w-full bg-gray-100 text-gray-400 rounded-2xl py-8 text-lg font-black cursor-not-allowed">
+                  No Sync Required
+                </Button>
+                {onResuggestDay && selectedDays.includes(currentDate.getDay()) && (
+                  <Button onClick={handleResuggest} disabled={isResuggesting} variant="ghost" className="w-full rounded-2xl py-4 text-xs font-black uppercase tracking-widest text-indigo-600 hover:bg-indigo-50">
+                    {isResuggesting ? <RefreshCw className="animate-spin mr-2" size={14} /> : <><Wand2 className="mr-2" size={14} /> Resuggest Tasks</>}
+                  </Button>
+                )}
+              </div>
             ) : isDayVetted ? (
               <div className="space-y-3">
                 <Button onClick={handleUndoDay} disabled={isSyncing} variant="outline" className="w-full rounded-2xl py-8 text-lg font-black border-gray-100 text-gray-400">

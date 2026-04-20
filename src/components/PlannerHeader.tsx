@@ -77,11 +77,11 @@ const PlannerHeader = ({
           <div className="flex items-center gap-2 mt-1">
             <Badge className={cn(
               "border-none px-3 py-0.5 rounded-full font-black text-[8px] uppercase tracking-widest", 
-              !hasChanges ? "bg-gray-100 text-gray-400" : isDayVetted ? "bg-green-500 text-white" : "bg-indigo-100 text-indigo-600"
+              !hasChanges && isDayVetted ? "bg-gray-100 text-gray-400" : isDayVetted ? "bg-green-500 text-white" : "bg-indigo-100 text-indigo-600"
             )}>
-              {!hasChanges ? "No Changes" : isDayVetted ? "Vetted" : "Vetting"}
+              {!hasChanges && isDayVetted ? "No Changes" : isDayVetted ? "Vetted" : "Vetting"}
             </Badge>
-            {hasChanges && !isDayVetted && onResuggest && (
+            {!isDayVetted && onResuggest && (
               <button 
                 onClick={onResuggest}
                 disabled={isResuggesting}

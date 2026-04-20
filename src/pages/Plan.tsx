@@ -605,6 +605,7 @@ const Plan = () => {
               maxHours={maxHoursOverride}
               maxTasks={maxTasksOverride}
               workKeywords={settings?.work_keywords}
+              selectedDays={selectedDays}
             />
           )}
           
