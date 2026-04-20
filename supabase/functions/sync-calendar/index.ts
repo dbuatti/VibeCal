@@ -37,26 +37,51 @@ async function refreshGoogleToken(refreshToken: string, functionName: string) {
 }
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
-
   const functionName = "sync-calendar";
+
+  if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   try {
     const authHeader = req.headers.get('Authorization')
-    let { googleAccessToken } = await req.json();
+    if (!authHeader) {
+      console.error(`[${functionName}] Missing Authorization header`);
+      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: corsHeaders });
+    }
 
-    const supabaseAdmin = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '')
-    const supabaseUser = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_ANON_KEY') ?? '', { global: { headers: { Authorization: authHeader } } })
+    const body = await req.json().catch(() => ({}));
+    let { googleAccessToken } = body;
+
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+    const supabaseUser = createClient(supabaseUrl, supabaseAnonKey, { 
+      global: { headers: { Authorization: authHeader } } 
+    });
     
-    const { data: { user } } = await supabaseUser.auth.getUser()
-    if (!user) throw new Error("Unauthorized");
+    const { data: { user }, error: authError } = await supabaseUser.auth.getUser();
+    if (authError || !user) {
+      console.error(`[${functionName}] Auth error:`, authError?.message || "User not found");
+      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: corsHeaders });
+    }
 
-    const { data: profile } = await supabaseAdmin.from('profiles').select('google_access_token, google_refresh_token, timezone').eq('id', user.id).single();
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('google_access_token, google_refresh_token, timezone')
+      .eq('id', user.id)
+      .single();
+    
+    if (profileError) {
+      console.error(`[${functionName}] Profile fetch error:`, profileError.message);
+    }
+
     let token = googleAccessToken || profile?.google_access_token;
     const refreshToken = profile?.google_refresh_token;
 
     if (!token && !refreshToken) {
-      return new Response(JSON.stringify({ error: "No tokens found." }), { status: 401, headers: corsHeaders });
+      console.log(`[${functionName}] No Google tokens for user ${user.id}`);
+      return new Response(JSON.stringify({ error: "No Google tokens found. Please connect your Google Calendar." }), { status: 401, headers: corsHeaders });
     }
 
     // 1. Fetch user's calendar preferences
@@ -72,6 +97,7 @@ serve(async (req) => {
     });
     
     if (listRes.status === 401 && refreshToken) {
+      console.log(`[${functionName}] Token expired, refreshing...`);
       token = await refreshGoogleToken(refreshToken, functionName);
       await supabaseAdmin.from('profiles').update({ google_access_token: token }).eq('id', user.id);
       listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { 
@@ -80,11 +106,14 @@ serve(async (req) => {
     }
 
     const listData = await listRes.json();
-    if (!listRes.ok) throw new Error(`Google API Error: ${listData.error?.message || 'Unknown'}`);
+    if (!listRes.ok) {
+      console.error(`[${functionName}] Google API Error (Calendar List):`, JSON.stringify(listData));
+      throw new Error(`Google API Error: ${listData.error?.message || 'Unknown'}`);
+    }
 
     const googleCalendars = (listData.items || []).filter(cal => !cal.id.includes('@import.calendar.google.com'));
 
-    // 3. Discovery
+    // 3. Discovery & Upsert
     const discoveryPayload = googleCalendars.map(cal => {
       const existing = dbCalendars?.find(db => db.calendar_id === cal.id || (cal.primary && db.calendar_id === 'primary'));
       return {
@@ -102,7 +131,13 @@ serve(async (req) => {
 
     const finalEnabledIds = discoveryPayload.filter(p => p.is_enabled).map(p => p.calendar_id);
 
-    // 4. Sync Events - INCREASED WINDOW TO 2 YEARS
+    if (finalEnabledIds.length === 0) {
+      console.log(`[${functionName}] No Google calendars enabled for user ${user.id}`);
+      await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google');
+      return new Response(JSON.stringify({ count: 0, message: "No calendars enabled" }), { headers: corsHeaders });
+    }
+
+    // 4. Sync Events
     const syncStartTime = new Date();
     syncStartTime.setDate(syncStartTime.getDate() - 7); // 1 week back
     const syncEndTime = new Date();
@@ -121,41 +156,56 @@ serve(async (req) => {
     const eventPromises = googleCalendars
       .filter(cal => finalEnabledIds.includes(cal.id))
       .map(async (cal) => {
-        const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.id)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`;
-        const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-        if (!res.ok) return [];
-        const data = await res.json();
-        return (data.items || []).map(event => {
-          // PRESERVE LOCK STATUS: If we already have this event, keep its lock status
-          const existingLock = lockMap.get(event.id);
-          
-          return {
-            user_id: user.id, 
-            event_id: event.id, 
-            title: event.summary || 'Untitled', 
-            description: event.description || null,
-            location: event.location || null,
-            start_time: event.start.dateTime || toDate(event.start.date, { timeZone: profile?.timezone || 'UTC' }).toISOString(), 
-            end_time: event.end.dateTime || toDate(event.end.date, { timeZone: profile?.timezone || 'UTC' }).toISOString(),
-            duration_minutes: Math.round((new Date(event.end.dateTime || event.end.date).getTime() - new Date(event.start.dateTime || event.start.date).getTime()) / 60000) || 30, 
-            is_locked: existingLock !== undefined ? existingLock : true, // Default to locked for new events
-            provider: 'google', 
-            source_calendar: cal.summary, 
-            source_calendar_id: cal.id, 
-            last_synced_at: syncTimestamp, 
-            last_seen_at: syncTimestamp
-          };
-        });
+        try {
+          const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.id)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`;
+          const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+          if (!res.ok) {
+            console.error(`[${functionName}] Error fetching events for ${cal.summary}: ${res.status}`);
+            return [];
+          }
+          const data = await res.json();
+          return (data.items || []).map(event => {
+            const existingLock = lockMap.get(event.id);
+            
+            const start = event.start.dateTime || toDate(event.start.date, { timeZone: profile?.timezone || 'UTC' }).toISOString();
+            const end = event.end.dateTime || toDate(event.end.date, { timeZone: profile?.timezone || 'UTC' }).toISOString();
+
+            return {
+              user_id: user.id, 
+              event_id: event.id, 
+              title: event.summary || 'Untitled', 
+              description: event.description || null,
+              location: event.location || null,
+              start_time: start, 
+              end_time: end,
+              duration_minutes: Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000) || 30, 
+              is_locked: existingLock !== undefined ? existingLock : true, 
+              provider: 'google', 
+              source_calendar: cal.summary, 
+              source_calendar_id: cal.id, 
+              last_synced_at: syncTimestamp, 
+              last_seen_at: syncTimestamp
+            };
+          });
+        } catch (e) {
+          console.error(`[${functionName}] Error fetching calendar ${cal.summary}:`, e.message);
+          return [];
+        }
       });
 
     const results = await Promise.all(eventPromises);
     const allEvents = results.flat();
 
     if (allEvents.length > 0) {
-      await supabaseAdmin.from('calendar_events_cache').upsert(allEvents, { onConflict: 'user_id, event_id' });
+      // Batch upsert
+      const chunkSize = 100;
+      for (let i = 0; i < allEvents.length; i += chunkSize) {
+        const chunk = allEvents.slice(i, i + chunkSize);
+        await supabaseAdmin.from('calendar_events_cache').upsert(chunk, { onConflict: 'user_id, event_id' });
+      }
     }
 
-    // 5. PURGE
+    // 5. PURGE events from calendars that are no longer enabled
     if (finalEnabledIds.length > 0) {
       await supabaseAdmin
         .from('calendar_events_cache')
@@ -165,8 +215,8 @@ serve(async (req) => {
         .not('source_calendar_id', 'in', `(${finalEnabledIds.map(id => `"${id}"`).join(',')})`);
     }
 
-    console.log(`[${functionName}] SUCCESS - Synced ${allEvents.length} events.`);
-    return new Response(JSON.stringify({ count: allEvents.length }), { headers: corsHeaders });
+    console.log(`[${functionName}] SUCCESS - Synced ${allEvents.length} Google events for user ${user.id}.`);
+    return new Response(JSON.stringify({ count: allEvents.length }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
     console.error(`[${functionName}] FATAL ERROR:`, error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });

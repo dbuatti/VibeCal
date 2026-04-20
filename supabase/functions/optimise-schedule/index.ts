@@ -9,14 +9,20 @@ const corsHeaders = {
 }
 
 serve(async (req) => {
+  const functionName = "optimise-schedule";
+
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
   }
 
-  const functionName = "optimise-schedule";
-
   try {
     const authHeader = req.headers.get('Authorization')
+    if (!authHeader) {
+      console.error(`[${functionName}] Missing Authorization header`);
+      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: corsHeaders });
+    }
+
+    const body = await req.json().catch(() => ({}));
     const { 
       durationOverride, 
       maxTasksOverride, 
@@ -24,19 +30,26 @@ serve(async (req) => {
       selectedDays = [1, 2, 3, 4, 5], 
       placeholderDate,
       vettedEventIds = [] 
-    } = await req.json();
+    } = body;
     
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: authHeader } } }
-    )
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
 
-    const { data: { user } } = await supabaseClient.auth.getUser()
-    
+    const supabaseClient = createClient(supabaseUrl, supabaseAnonKey, { 
+      global: { headers: { Authorization: authHeader } } 
+    });
+
+    const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
+    if (authError || !user) {
+      console.error(`[${functionName}] Auth error:`, authError?.message || "User not found");
+      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: corsHeaders });
+    }
+
+    console.log(`[${functionName}] START - Optimizing schedule for user ${user.id}`);
+
     const [settingsRes, profileRes, eventsRes] = await Promise.all([
-      supabaseClient.from('user_settings').select('*').eq('user_id', user.id).single(),
-      supabaseClient.from('profiles').select('timezone').eq('id', user.id).single(),
+      supabaseClient.from('user_settings').select('*').eq('user_id', user.id).maybeSingle(),
+      supabaseClient.from('profiles').select('timezone').eq('id', user.id).maybeSingle(),
       supabaseClient.from('calendar_events_cache').select('*').eq('user_id', user.id).order('start_time', { ascending: true })
     ]);
 
@@ -51,17 +64,27 @@ serve(async (req) => {
     const todayStr = formatInTimeZone(now, userTimezone, 'yyyy-MM-dd');
     const localTodayStart = toDate(`${todayStr}T00:00:00`, { timeZone: userTimezone });
 
-    // 1. CLASSIFY TASKS (Including Dependencies)
-    const { data: classificationData } = await supabaseClient.functions.invoke('classify-tasks', {
-      body: {
-        tasks: allEvents.map(e => e.title),
-        movableKeywords: settings.movable_keywords || [],
-        lockedKeywords: settings.locked_keywords || [],
-        naturalLanguageRules: settings.natural_language_rules || ''
-      }
-    });
+    // 1. CLASSIFY TASKS
+    let classifications = [];
+    try {
+      console.log(`[${functionName}] Invoking classify-tasks for ${allEvents.length} events`);
+      const { data: classificationData, error: invokeError } = await supabaseClient.functions.invoke('classify-tasks', {
+        body: {
+          tasks: allEvents.map(e => e.title),
+          movableKeywords: settings.movable_keywords || [],
+          lockedKeywords: settings.locked_keywords || [],
+          naturalLanguageRules: settings.natural_language_rules || ''
+        }
+      });
 
-    const classifications = classificationData?.classifications || [];
+      if (invokeError) {
+        console.warn(`[${functionName}] classify-tasks invocation error:`, invokeError.message);
+      } else {
+        classifications = classificationData?.classifications || [];
+      }
+    } catch (e) {
+      console.warn(`[${functionName}] Failed to classify tasks, falling back to defaults:`, e.message);
+    }
 
     const processedEvents = allEvents.map((e, i) => {
       const classification = classifications[i];
@@ -77,6 +100,8 @@ serve(async (req) => {
 
     const fixedEvents = processedEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
     const movableEvents = processedEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
+
+    console.log(`[${functionName}] Fixed: ${fixedEvents.length}, Movable: ${movableEvents.length}`);
 
     // 2. SORT MOVABLE TASKS (Prerequisites first)
     const sortedMovable = [...movableEvents].sort((a, b) => {
@@ -114,6 +139,7 @@ serve(async (req) => {
         }
       }
 
+      // Try to find a slot in the next 14 days
       for (let pass = 0; pass <= 2; pass++) {
         if (foundSlot) break;
         
@@ -217,6 +243,7 @@ serve(async (req) => {
       }
     }
 
+    console.log(`[${functionName}] SUCCESS - Generated ${proposedChanges.length} proposed changes.`);
     return new Response(JSON.stringify({ changes: proposedChanges }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
     console.error(`[${functionName}] Error:`, error.message);

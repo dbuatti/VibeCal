@@ -28,29 +28,48 @@ function isSemanticMatch(title: string, pattern: string) {
   return false;
 }
 
-// Added 'statement' and 'foundations' to fixed patterns based on user feedback
 const HARD_FIXED_PATTERNS = /flight|train|hotel|reservation|doctor|dentist|hospital|clinic|surgery|medical|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary|appointment|appt|interview|vs|meeting with|call with|zoom|teams|google meet|skype|facetime|session with|coaching|lesson|rehearsal|audition|workshop|seminar|webinar|conference|travel to|commute|drive to|dentist|physio|therapy|vet|haircut|dinner with|lunch with|brunch with|coffee with|statement|foundations|q & a/i;
 
 const HARD_MOVABLE_PATTERNS = /solo|draft|research|tidy|clean|practice|read|study|admin|email|gym|workout|run|walk|meditate|yoga|journal|laundry|groceries|shopping|vacuum|mop|dust|organize|filing|backup|update|coding|programming|writing|blog|post|social media/i;
 
 serve(async (req) => {
+  const functionName = "classify-tasks";
+
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
-  const functionName = "classify-tasks";
   let isLocalMode = false;
 
   try {
-    const { events, tasks, movableKeywords = [], lockedKeywords = [], naturalLanguageRules = '', persist = false } = await req.json();
     const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
+      console.error(`[${functionName}] Missing Authorization header`);
+      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: corsHeaders });
+    }
+
+    const body = await req.json().catch(() => ({}));
+    const { events, tasks, movableKeywords = [], lockedKeywords = [], naturalLanguageRules = '', persist = false } = body;
     
     const taskList = events ? events.map(e => e.title) : (tasks || []);
-    if (taskList.length === 0) return new Response(JSON.stringify({ classifications: [], isLocalMode: false }), { headers: corsHeaders });
+    if (taskList.length === 0) {
+      return new Response(JSON.stringify({ classifications: [], isLocalMode: false }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
 
-    const supabaseAdmin = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
-    const supabaseUser = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_ANON_KEY') ?? '', { global: { headers: { Authorization: authHeader } } });
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
 
-    const { data: { user } } = await supabaseUser.auth.getUser();
-    if (!user) throw new Error("Unauthorized");
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+    const supabaseUser = createClient(supabaseUrl, supabaseAnonKey, { 
+      global: { headers: { Authorization: authHeader } } 
+    });
+
+    const { data: { user }, error: authError } = await supabaseUser.auth.getUser();
+    if (authError || !user) {
+      console.error(`[${functionName}] Auth error:`, authError?.message || "User not found");
+      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: corsHeaders });
+    }
+
+    console.log(`[${functionName}] START - Classifying ${taskList.length} tasks for user ${user.id}`);
 
     // 1. STAGE 1: SEMANTIC MEMORY & USER RULES
     const { data: feedback } = await supabaseAdmin
@@ -64,7 +83,7 @@ serve(async (req) => {
     const results = taskList.map(title => {
       const t = title.toLowerCase();
 
-      // A. Check manual feedback first (This is the "Memory" that ensures it remembers your choices)
+      // A. Check manual feedback first
       const match = sortedFeedback.find(f => isSemanticMatch(title, f.task_name));
       if (match) {
         return { 
@@ -136,9 +155,11 @@ serve(async (req) => {
           indicesToAI.forEach((originalIdx, aiIdx) => {
             results[originalIdx] = aiClassifications[aiIdx];
           });
+        } else {
+          throw new Error("Invalid AI response format");
         }
       } catch (aiError) {
-        console.warn(`[${functionName}] Quota Exceeded or AI Error. Switching to Local Power-Saving Mode.`, aiError.message);
+        console.warn(`[${functionName}] AI Error. Switching to Local Mode.`, aiError.message);
         isLocalMode = true;
         indicesToAI.forEach(idx => {
           const title = taskList[idx].toLowerCase();
@@ -163,6 +184,7 @@ serve(async (req) => {
       await supabaseAdmin.from('calendar_events_cache').upsert(updates, { onConflict: 'user_id, event_id' });
     }
 
+    console.log(`[${functionName}] SUCCESS - Classified ${taskList.length} tasks.`);
     return new Response(JSON.stringify({ classifications: results, isLocalMode }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });

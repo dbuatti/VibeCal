@@ -10,24 +10,43 @@ const corsHeaders = {
 }
 
 serve(async (req) => {
+  const functionName = "sync-apple-calendar";
+
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
   }
 
-  const functionName = "sync-apple-calendar";
-
   try {
     const authHeader = req.headers.get('Authorization')
-    const supabaseAdmin = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '')
-    const supabaseUser = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_ANON_KEY') ?? '', { global: { headers: { Authorization: authHeader } } })
-    
-    const { data: { user } } = await supabaseUser.auth.getUser()
-    if (!user) throw new Error("Unauthorized");
+    if (!authHeader) {
+      console.error(`[${functionName}] Missing Authorization header`);
+      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: corsHeaders });
+    }
 
-    const { data: profile } = await supabaseAdmin.from('profiles').select('apple_id, apple_app_password, timezone').eq('id', user.id).single();
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+    const supabaseUser = createClient(supabaseUrl, supabaseAnonKey, { 
+      global: { headers: { Authorization: authHeader } } 
+    });
     
-    if (!profile?.apple_id || !profile?.apple_app_password) {
-      return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
+    const { data: { user }, error: authError } = await supabaseUser.auth.getUser();
+    if (authError || !user) {
+      console.error(`[${functionName}] Auth error:`, authError?.message || "User not found");
+      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: corsHeaders });
+    }
+
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('apple_id, apple_app_password, timezone')
+      .eq('id', user.id)
+      .single();
+    
+    if (profileError || !profile?.apple_id || !profile?.apple_app_password) {
+      console.log(`[${functionName}] No Apple credentials for user ${user.id}`);
+      return new Response(JSON.stringify({ count: 0, message: "No Apple credentials found. Please set them up in settings." }), { headers: corsHeaders });
     }
 
     const userTimezone = profile.timezone || 'Australia/Melbourne';
@@ -45,22 +64,31 @@ serve(async (req) => {
     // 1. Discover Principal
     const propfindPrincipal = `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:"><D:prop><D:current-user-principal/></D:prop></D:propfind>`;
     const principalRes = await fetch(`${baseUrl}/`, { method: 'PROPFIND', headers, body: propfindPrincipal });
+    if (!principalRes.ok) {
+      throw new Error(`Failed to fetch principal: ${principalRes.status} ${principalRes.statusText}`);
+    }
     const principalText = await principalRes.text();
     const principalMatch = principalText.match(/<[^:]*:?current-user-principal[^>]*>\s*<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i);
-    if (!principalMatch) throw new Error("Could not find principal href");
+    if (!principalMatch) throw new Error("Could not find principal href in Apple response");
     const principalHref = principalMatch[1].startsWith('/') ? `${baseUrl}${principalMatch[1]}` : principalMatch[1];
 
     // 2. Discover Calendar Home Set
     const propfindHome = `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><C:calendar-home-set/></D:prop></D:propfind>`;
     const homeRes = await fetch(principalHref, { method: 'PROPFIND', headers, body: propfindHome });
+    if (!homeRes.ok) {
+      throw new Error(`Failed to fetch calendar home set: ${homeRes.status} ${homeRes.statusText}`);
+    }
     const homeText = await homeRes.text();
     const homeMatch = homeText.match(/<[^:]*:?calendar-home-set[^>]*>\s*<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i);
-    if (!homeMatch) throw new Error("Could not find calendar home set");
+    if (!homeMatch) throw new Error("Could not find calendar home set in Apple response");
     const homeHref = homeMatch[1].startsWith('/') ? `${baseUrl}${homeMatch[1]}` : homeMatch[1];
 
     // 3. Discover Calendars
     const propfindCals = `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><D:displayname/><D:resourcetype/></D:prop></D:propfind>`;
     const calsRes = await fetch(homeHref, { method: 'PROPFIND', headers: { ...headers, 'Depth': '1' }, body: propfindCals });
+    if (!calsRes.ok) {
+      throw new Error(`Failed to fetch calendars: ${calsRes.status} ${calsRes.statusText}`);
+    }
     const calsText = await calsRes.text();
     
     const discoveredCalendarsMap = new Map();
@@ -89,16 +117,21 @@ serve(async (req) => {
       await supabaseAdmin.from('user_calendars').upsert(discoveredCalendars, { onConflict: 'user_id, calendar_id' });
     }
 
-    const { data: enabledCals } = await supabaseAdmin.from('user_calendars').select('calendar_id, calendar_name, is_enabled').eq('user_id', user.id).eq('provider', 'apple');
+    const { data: enabledCals } = await supabaseAdmin
+      .from('user_calendars')
+      .select('calendar_id, calendar_name, is_enabled')
+      .eq('user_id', user.id)
+      .eq('provider', 'apple');
+    
     const enabledPaths = (enabledCals || []).filter(c => c.is_enabled);
-    const enabledIds = enabledPaths.map(c => c.calendar_id);
 
     if (enabledPaths.length === 0) {
+      console.log(`[${functionName}] No Apple calendars enabled for user ${user.id}`);
       await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
       return new Response(JSON.stringify({ count: 0, message: "No calendars enabled" }), { headers: corsHeaders });
     }
 
-    // 4. Fetch Events - INCREASED WINDOW TO 2 YEARS
+    // 4. Fetch Events
     const syncStartTime = new Date();
     syncStartTime.setDate(syncStartTime.getDate() - 7);
     const syncEndTime = new Date();
@@ -131,54 +164,71 @@ serve(async (req) => {
     const eventMap = new Map();
     const syncTimestamp = new Date().toISOString();
 
-    for (const cal of enabledPaths) {
-      const eventsRes = await fetch(cal.calendar_id, { method: 'REPORT', headers: { ...headers, 'Depth': '1' }, body: reportQuery });
-      if (!eventsRes.ok) continue;
-      
-      const eventsText = await eventsRes.text();
-      const icsDatas = eventsText.match(/BEGIN:VCALENDAR.*?END:VCALENDAR/gs) || [];
-      
-      for (const icsData of icsDatas) {
-        try {
-          const jcalData = ICAL.parse(icsData);
-          const vcalendar = new ICAL.Component(jcalData);
-          const vevents = vcalendar.getAllSubcomponents('vevent');
+    // Fetch events in parallel for all enabled calendars
+    const calendarPromises = enabledPaths.map(async (cal) => {
+      try {
+        const eventsRes = await fetch(cal.calendar_id, { method: 'REPORT', headers: { ...headers, 'Depth': '1' }, body: reportQuery });
+        if (!eventsRes.ok) {
+          console.error(`[${functionName}] Error fetching events for ${cal.calendar_name}: ${eventsRes.status}`);
+          return;
+        }
+        
+        const eventsText = await eventsRes.text();
+        const icsDatas = eventsText.match(/BEGIN:VCALENDAR.*?END:VCALENDAR/gs) || [];
+        
+        for (const icsData of icsDatas) {
+          try {
+            const jcalData = ICAL.parse(icsData);
+            const vcalendar = new ICAL.Component(jcalData);
+            const vevents = vcalendar.getAllSubcomponents('vevent');
 
-          for (const vevent of vevents) {
-            const event = new ICAL.Event(vevent);
-            const title = event.summary || 'Untitled';
-            const startIso = event.startDate.isUtc ? new Date(event.startDate.toString()).toISOString() : toDate(event.startDate.toString(), { timeZone: userTimezone }).toISOString();
-            const endIso = event.endDate.isUtc ? new Date(event.endDate.toString()).toISOString() : toDate(event.endDate.toString(), { timeZone: userTimezone }).toISOString();
+            for (const vevent of vevents) {
+              const event = new ICAL.Event(vevent);
+              const title = event.summary || 'Untitled';
+              const startIso = event.startDate.isUtc ? new Date(event.startDate.toString()).toISOString() : toDate(event.startDate.toString(), { timeZone: userTimezone }).toISOString();
+              const endIso = event.endDate.isUtc ? new Date(event.endDate.toString()).toISOString() : toDate(event.endDate.toString(), { timeZone: userTimezone }).toISOString();
 
-            const existingLock = lockMap.get(event.uid);
+              const existingLock = lockMap.get(event.uid);
 
-            eventMap.set(event.uid, {
-              user_id: user.id,
-              event_id: event.uid,
-              title: title,
-              description: event.description || null,
-              location: event.location || null,
-              start_time: startIso,
-              end_time: endIso,
-              duration_minutes: Math.round((new Date(endIso).getTime() - new Date(startIso).getTime()) / 60000) || 30,
-              is_locked: existingLock !== undefined ? existingLock : true,
-              provider: 'apple',
-              source_calendar: cal.calendar_name,
-              source_calendar_id: cal.calendar_id,
-              last_synced_at: syncTimestamp,
-              last_seen_at: syncTimestamp
-            });
+              eventMap.set(event.uid, {
+                user_id: user.id,
+                event_id: event.uid,
+                title: title,
+                description: event.description || null,
+                location: event.location || null,
+                start_time: startIso,
+                end_time: endIso,
+                duration_minutes: Math.round((new Date(endIso).getTime() - new Date(startIso).getTime()) / 60000) || 30,
+                is_locked: existingLock !== undefined ? existingLock : true,
+                provider: 'apple',
+                source_calendar: cal.calendar_name,
+                source_calendar_id: cal.calendar_id,
+                last_synced_at: syncTimestamp,
+                last_seen_at: syncTimestamp
+              });
+            }
+          } catch (e) { 
+            console.error(`[${functionName}] Error parsing event in ${cal.calendar_name}:`, e.message); 
           }
-        } catch (e) { console.error(`[${functionName}] Error parsing event:`, e.message); }
+        }
+      } catch (e) {
+        console.error(`[${functionName}] Error fetching calendar ${cal.calendar_name}:`, e.message);
       }
-    }
+    });
+
+    await Promise.all(calendarPromises);
 
     const uniqueEvents = Array.from(eventMap.values());
     if (uniqueEvents.length > 0) {
-      await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
+      // Batch upsert in chunks if there are many events
+      const chunkSize = 100;
+      for (let i = 0; i < uniqueEvents.length; i += chunkSize) {
+        const chunk = uniqueEvents.slice(i, i + chunkSize);
+        await supabaseAdmin.from('calendar_events_cache').upsert(chunk, { onConflict: 'user_id, event_id' });
+      }
     }
 
-    console.log(`[${functionName}] SUCCESS - Synced ${uniqueEvents.length} Apple events.`);
+    console.log(`[${functionName}] SUCCESS - Synced ${uniqueEvents.length} Apple events for user ${user.id}.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
     console.error(`[${functionName}] FATAL ERROR:`, error.message);
