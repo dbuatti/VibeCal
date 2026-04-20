@@ -31,7 +31,6 @@ Deno.serve(async (req) => {
     const profile = profiles[0];
     
     if (!profile?.apple_id || !profile?.apple_app_password) {
-      console.log(`[${functionName}] No Apple credentials found for user ${user.id}`);
       return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
     }
 
@@ -45,7 +44,6 @@ Deno.serve(async (req) => {
 
     const baseUrl = 'https://caldav.icloud.com';
     
-    // Helper to extract href from XML
     const extractHref = (xml, tag) => {
       const regex = new RegExp(`<[^:]*:?${tag}[^>]*>\\s*<[^:]*:?href[^>]*>([^<]+)<\\/[^:]*:?href>\\s*<\\/[^:]*:?${tag}>`, 'i');
       return xml.match(regex)?.[1];
@@ -57,15 +55,12 @@ Deno.serve(async (req) => {
       headers, 
       body: `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:"><D:prop><D:current-user-principal/></D:prop></D:propfind>` 
     });
-    
     const principalText = await principalRes.text();
     let principalPath = extractHref(principalText, 'current-user-principal');
-    
     if (!principalPath || principalPath === '/') {
       principalPath = principalText.match(/href="([^"]*\/\d+\/principal\/)"/i)?.[1] || 
                       principalText.match(/>(\/\d+\/principal\/)</i)?.[1];
     }
-
     if (!principalPath) throw new Error("Could not find iCloud principal path.");
     const principalUrl = principalPath.startsWith('http') ? principalPath : `${baseUrl}${principalPath}`;
 
@@ -75,7 +70,6 @@ Deno.serve(async (req) => {
       headers,
       body: `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><C:calendar-home-set/></D:prop></D:propfind>`
     });
-    
     const homeText = await homeRes.text();
     let homePath = extractHref(homeText, 'calendar-home-set');
     if (!homePath) {
@@ -83,7 +77,6 @@ Deno.serve(async (req) => {
       if (dsidMatch) homePath = `/${dsidMatch[1]}/calendars/`;
       else homePath = principalPath;
     }
-
     const homeUrl = homePath.startsWith('http') ? homePath : `${baseUrl}${homePath}`;
 
     // 5. Discover Calendars
@@ -93,15 +86,12 @@ Deno.serve(async (req) => {
       body: `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><D:displayname/><D:resourcetype/></D:prop></D:propfind>`
     });
     const calsText = await calsRes.text();
-    
     const discoveredCalendars = [];
     const responses = calsText.split(/<[^:]*:?response/i).slice(1);
-    
     for (const resp of responses) {
       const href = resp.match(/<[^:]*:?href[^>]*>([^<]+)<\/[^:]*:?href>/i)?.[1];
       const name = resp.match(/<[^:]*:?displayname[^>]*>([^<]+)<\/[^:]*:?displayname>/i)?.[1];
       const isCalendar = /resourcetype[^>]*>.*?calendar/is.test(resp);
-      
       if (href && isCalendar && name && !name.includes('@')) {
         discoveredCalendars.push({
           user_id: user.id,
@@ -120,16 +110,11 @@ Deno.serve(async (req) => {
 
     const calendarsToUpsert = discoveredCalendars.map(cal => {
       const existing = existingCals.find(e => e.calendar_id === cal.calendar_id);
-      
-      // If it's a new calendar, default to DISABLED (user must check it in settings)
-      // UNLESS they have no calendars at all, then enable the first one for onboarding.
-      let isEnabled = false;
-      if (existing) {
-        isEnabled = existing.is_enabled;
-      } else if (existingCals.length === 0 && discoveredCalendars.indexOf(cal) === 0) {
+      let isEnabled = existing ? existing.is_enabled : false;
+      // If no calendars are enabled yet, enable the first one that isn't "Reminders"
+      if (!isEnabled && !existing && !existingCals.some(c => c.is_enabled) && !cal.calendar_name.toLowerCase().includes('reminders')) {
         isEnabled = true;
       }
-
       return { ...cal, is_enabled: isEnabled };
     });
 
@@ -145,11 +130,11 @@ Deno.serve(async (req) => {
     const enabledCalendars = calendarsToUpsert.filter(c => c.is_enabled);
     const disabledCalendarIds = calendarsToUpsert.filter(c => !c.is_enabled).map(c => c.calendar_id);
     
-    console.log(`[${functionName}] Syncing ${enabledCalendars.length} enabled calendars. Skipping ${disabledCalendarIds.length} disabled ones.`);
+    console.log(`[${functionName}] Syncing ${enabledCalendars.length} enabled calendars.`);
     
     const allEvents = [];
     const now = new Date();
-    const startRange = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    const startRange = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endRange = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
     for (const cal of enabledCalendars) {
@@ -171,23 +156,19 @@ Deno.serve(async (req) => {
         });
 
         if (!reportRes.ok) continue;
-
         const reportText = await reportRes.text();
         const eventResponses = reportText.split(/<[^:]*:?response/i).slice(1);
         
         for (const resp of eventResponses) {
           const icsData = resp.match(/<[^:]*:?calendar-data[^>]*>([\s\S]*?)<\/[^:]*:?calendar-data>/i)?.[1];
           if (!icsData) continue;
-
           try {
             const jcalData = ICAL.parse(icsData.trim());
             const vcalendar = new ICAL.Component(jcalData);
             const vevents = vcalendar.getAllSubcomponents('vevent');
-
             for (const vevent of vevents) {
               const event = new ICAL.Event(vevent);
               if (!event.uid || !event.startDate) continue;
-              
               allEvents.push({
                 user_id: user.id,
                 event_id: event.uid,
@@ -208,9 +189,7 @@ Deno.serve(async (req) => {
     }
 
     // 8. Cleanup and Upsert
-    // First, delete events from cache for any calendar that is now disabled
     if (disabledCalendarIds.length > 0) {
-      console.log(`[${functionName}] Cleaning up cache for ${disabledCalendarIds.length} disabled calendars`);
       for (const calId of disabledCalendarIds) {
         await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&source_calendar_id=eq.${encodeURIComponent(calId)}`, {
           method: 'DELETE',
@@ -219,7 +198,6 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Then upsert the new events
     if (allEvents.length > 0) {
       await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
         method: 'POST',
