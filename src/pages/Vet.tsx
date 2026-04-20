@@ -126,55 +126,73 @@ const Vet = () => {
     if (eventsToClassify.length === 0) return;
 
     setIsProcessing(true);
+    setStatusText('Preparing AI analysis...');
     
     try {
       const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, natural_language_rules').single();
       
-      // BATCHING LOGIC: Process in chunks of 40 to avoid timeouts and token limits
-      const BATCH_SIZE = 40;
+      // BATCHING LOGIC: Process in smaller chunks of 20 for speed and reliability
+      const BATCH_SIZE = 20;
       const totalTasks = eventsToClassify.length;
       const updatedEvents = [...eventsToClassify];
       const newExplanations = { ...aiExplanations };
 
+      // Create batches
+      const batches = [];
       for (let i = 0; i < totalTasks; i += BATCH_SIZE) {
-        const batch = eventsToClassify.slice(i, i + BATCH_SIZE);
-        const batchTitles = batch.map(e => e.title);
-        
-        setStatusText(`AI Vetting: ${i + 1} to ${Math.min(i + BATCH_SIZE, totalTasks)} of ${totalTasks}...`);
+        batches.push(eventsToClassify.slice(i, i + BATCH_SIZE));
+      }
 
-        const { data, error } = await supabase.functions.invoke('classify-tasks', {
-          body: {
-            tasks: batchTitles,
-            movableKeywords: settings?.movable_keywords || [],
-            lockedKeywords: settings?.locked_keywords || [],
-            naturalLanguageRules: settings?.natural_language_rules || ''
-          }
+      setStatusText(`Analyzing ${totalTasks} tasks in ${batches.length} parallel streams...`);
+
+      // Process batches with controlled concurrency (3 at a time)
+      const CONCURRENCY = 3;
+      for (let i = 0; i < batches.length; i += CONCURRENCY) {
+        const currentBatchGroup = batches.slice(i, i + CONCURRENCY);
+        
+        const results = await Promise.all(currentBatchGroup.map(async (batch) => {
+          const { data, error } = await supabase.functions.invoke('classify-tasks', {
+            body: {
+              tasks: batch.map(e => e.title),
+              movableKeywords: settings?.movable_keywords || [],
+              lockedKeywords: settings?.locked_keywords || [],
+              naturalLanguageRules: settings?.natural_language_rules || ''
+            }
+          });
+          if (error) throw error;
+          return { batch, classifications: data.classifications };
+        }));
+
+        // Apply results from this group of parallel batches
+        results.forEach(({ batch, classifications }) => {
+          batch.forEach((event, idx) => {
+            const classification = classifications[idx];
+            const isMovable = typeof classification === 'boolean' ? classification : classification.isMovable;
+            const explanation = typeof classification === 'object' ? classification.explanation : '';
+            
+            const eventIdx = updatedEvents.findIndex(e => e.event_id === event.event_id);
+            if (eventIdx !== -1) {
+              updatedEvents[eventIdx].is_locked = !isMovable;
+              newExplanations[event.event_id] = explanation;
+            }
+          });
         });
 
-        if (error) throw error;
-
-        // Apply batch results
-        for (let j = 0; j < batch.length; j++) {
-          const classification = data.classifications[j];
-          const isMovable = typeof classification === 'boolean' ? classification : classification.isMovable;
-          const explanation = typeof classification === 'object' ? classification.explanation : '';
-          
-          const eventIdx = updatedEvents.findIndex(e => e.event_id === batch[j].event_id);
-          if (eventIdx !== -1) {
-            updatedEvents[eventIdx].is_locked = !isMovable;
-            newExplanations[batch[j].event_id] = explanation;
-            
-            // Update DB for this specific event
-            await supabase.from('calendar_events_cache')
-              .update({ is_locked: !isMovable })
-              .eq('event_id', batch[j].event_id);
-          }
-        }
-        
-        // Update local state incrementally so user sees progress
+        // Update local state incrementally
         setEvents([...updatedEvents]);
         setAiExplanations({...newExplanations});
+        setStatusText(`Progress: ${Math.min(i + CONCURRENCY, batches.length)} / ${batches.length} streams complete...`);
       }
+
+      // Final bulk update to DB for all changes
+      const updates = updatedEvents.map(e => ({
+        event_id: e.event_id,
+        user_id: e.user_id,
+        is_locked: e.is_locked
+      }));
+
+      // Supabase upsert handles the bulk update efficiently
+      await supabase.from('calendar_events_cache').upsert(updates, { onConflict: 'user_id, event_id' });
       
       showSuccess("AI has vetted all tasks!");
     } catch (err: any) {
