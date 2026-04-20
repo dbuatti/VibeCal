@@ -164,7 +164,7 @@ Deno.serve(async (req) => {
           let icsData = icsMatch?.[1];
           
           if (icsData) {
-            // 2. Strip CDATA wrapper if present
+            // 2. Strip CDATA wrapper (CRITICAL FIX)
             if (icsData.includes('<![CDATA[')) {
               icsData = icsData.match(/<!\[CDATA\[([\s\S]*?)\]\]>/i)?.[1] || icsData;
             }
@@ -177,6 +177,7 @@ Deno.serve(async (req) => {
               .replace(/>/g, '>')
               .trim();
             
+            const currentParsedCount = parsedCount;
             try {
               // 4. Main Parser (ICAL.js)
               const jcalData = ICAL.parse(icsData);
@@ -204,7 +205,11 @@ Deno.serve(async (req) => {
                 parsedCount++;
               }
             } catch (parseErr) {
-              // 5. Fallback Parser (Regex) if ICAL.js fails
+              // Fallback to regex if ICAL.js fails
+            }
+
+            // 5. Fallback Parser (Regex) - Extremely robust for Apple format
+            if (parsedCount === currentParsedCount) {
               const summary = icsData.match(/SUMMARY:(.*)/i)?.[1]?.trim() || 'Untitled';
               const uid = icsData.match(/UID:(.*)/i)?.[1]?.trim();
               const dtstart = icsData.match(/DTSTART(?:;TZID=.*?)?:(.*)/i)?.[1]?.trim();
@@ -212,6 +217,7 @@ Deno.serve(async (req) => {
 
               if (uid && dtstart && dtend) {
                 const parseIcalDate = (str) => {
+                  // Handle 20260310T120000 format
                   const y = str.substring(0, 4), m = str.substring(4, 6), d = str.substring(6, 8);
                   const h = str.substring(9, 11), min = str.substring(11, 13), s = str.substring(13, 15);
                   return new Date(`${y}-${m}-${d}T${h}:${min}:${s}`).toISOString();
