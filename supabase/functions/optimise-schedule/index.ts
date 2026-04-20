@@ -83,9 +83,16 @@ serve(async (req) => {
 
     console.log(`[${functionName}] Timezone: ${userTimezone} | UTC Today Start: ${utcTodayStart.toISOString()}`);
 
-    const currentEvents = allEvents.filter(e => new Date(e.start_time) >= utcTodayStart);
-    const fixedEvents = currentEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
-    const movableEvents = currentEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
+    // Deduplicate events by event_id to prevent double-scheduling
+    const seenIds = new Set();
+    const uniqueEvents = allEvents.filter(e => {
+      if (seenIds.has(e.event_id)) return false;
+      seenIds.add(e.event_id);
+      return new Date(e.start_time) >= utcTodayStart;
+    });
+
+    const fixedEvents = uniqueEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
+    const movableEvents = uniqueEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
 
     if (movableEvents.length === 0) {
       return new Response(JSON.stringify({ message: 'No movable events found.', changes: [] }), { headers: corsHeaders });
@@ -175,15 +182,22 @@ serve(async (req) => {
           const stats = dailyStats.get(dayKey);
           
           if (!stats.lastPointer) {
-            // Correctly calculate local start time by adding hours to the local midnight UTC timestamp
             const dayStart = new Date(currentDayStart.getTime() + (startH * 3600000) + (startM * 60000));
-            stats.lastPointer = alignTime(dayStart, slotAlignment);
+            let initialPointer = alignTime(dayStart, slotAlignment);
+            
+            // CRITICAL: If processing "today", ensure we don't schedule in the past
+            if (dayOffset === 0) {
+              const nowAligned = alignTime(new Date(), slotAlignment);
+              if (nowAligned > initialPointer) {
+                initialPointer = nowAligned;
+              }
+            }
+            
+            stats.lastPointer = initialPointer;
           }
 
           let searchPointer = new Date(stats.lastPointer);
           const dayEnd = new Date(currentDayStart.getTime() + (endH * 3600000) + (endM * 60000));
-
-          console.log(`[${functionName}] Checking ${dayKey} | Window: ${settings.day_start_time}-${settings.day_end_time} | Pointer: ${searchPointer.toISOString()}`);
 
           while (searchPointer < dayEnd && !foundSlot) {
             const potentialEnd = new Date(searchPointer.getTime() + durationMs);
