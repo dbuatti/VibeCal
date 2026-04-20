@@ -158,39 +158,49 @@ Deno.serve(async (req) => {
         const eventResponses = reportText.split(/<[^:]*:?response/i).slice(1);
         console.log(`[${functionName}] Found ${eventResponses.length} responses in ${cal.calendar_name}`);
 
+        let parsedCount = 0;
         for (const resp of eventResponses) {
-          const icsData = resp.match(/<[^:]*:?calendar-data[^>]*>([\s\S]*?)<\/[^:]*:?calendar-data>/i)?.[1];
+          // More flexible regex for calendar-data
+          const icsMatch = resp.match(/<[^>]*calendar-data[^>]*>([\s\S]*?)<\/[^>]*calendar-data>/i);
+          let icsData = icsMatch?.[1];
+          
           if (icsData) {
+            // Decode XML entities if present
+            icsData = icsData.replace(/&quot;/g, '"').replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>').trim();
+            
             try {
-              const jcalData = ICAL.parse(icsData.trim());
+              const jcalData = ICAL.parse(icsData);
               const vcalendar = new ICAL.Component(jcalData);
               const vevents = vcalendar.getAllSubcomponents('vevent');
               
               for (const vevent of vevents) {
                 const event = new ICAL.Event(vevent);
-                if (!event.uid || !event.startDate) continue;
+                const uid = event.uid || vevent.getFirstPropertyValue('uid');
+                const summary = event.summary || vevent.getFirstPropertyValue('summary') || 'Untitled';
                 
-                // Ensure we have valid dates
-                const start = event.startDate.toJSDate();
-                const end = event.endDate.toJSDate();
+                if (!uid || !event.startDate) continue;
                 
                 allEvents.push({
                   user_id: user.id,
-                  event_id: event.uid,
-                  title: event.summary || 'Untitled',
-                  start_time: start.toISOString(),
-                  end_time: end.toISOString(),
+                  event_id: uid,
+                  title: summary,
+                  start_time: event.startDate.toJSDate().toISOString(),
+                  end_time: event.endDate.toJSDate().toISOString(),
                   provider: 'apple',
                   source_calendar: cal.calendar_name,
                   source_calendar_id: cal.calendar_id,
                   last_synced_at: new Date().toISOString()
                 });
+                parsedCount++;
               }
             } catch (parseErr) {
-              // Silent fail for individual bad ICAL records
+              if (parsedCount === 0) {
+                console.error(`[${functionName}] ICAL Parse Error sample:`, icsData.substring(0, 100));
+              }
             }
           }
         }
+        console.log(`[${functionName}] Successfully parsed ${parsedCount} events from ${cal.calendar_name}`);
       } catch (err) {
         console.error(`[${functionName}] Error in ${cal.calendar_name}:`, err.message);
       }
@@ -225,8 +235,6 @@ Deno.serve(async (req) => {
       } else {
         console.log(`[${functionName}] Successfully saved ${allEvents.length} events.`);
       }
-    } else {
-      console.log(`[${functionName}] No valid events were parsed from the responses.`);
     }
 
     return new Response(JSON.stringify({ count: allEvents.length }), { 
