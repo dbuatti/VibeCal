@@ -32,7 +32,7 @@ serve(async (req) => {
       .order('created_at', { ascending: false })
       .limit(20);
 
-    let classifications = tasks.map(() => ({ isMovable: false, explanation: "Default fallback" }));
+    let classifications = tasks.map(() => ({ isMovable: false, explanation: "Default fallback", dependsOn: null }));
 
     try {
       const geminiKey = Deno.env.get('GEMINI_API_KEY');
@@ -44,6 +44,10 @@ serve(async (req) => {
           You are a personal assistant helping to organize a calendar. 
           Classify the following tasks as either "movable" (can be rescheduled) or "fixed" (must happen at this specific time).
           
+          NEW CAPABILITY: DEPENDENCY DETECTION
+          Look for rules that imply one task must happen AFTER another.
+          Example: "Post session notes should be scheduled after the session" -> "Post session notes" depends on "session".
+
           PRIORITY 1: USER'S CUSTOM RULES (Follow these strictly)
           ${naturalLanguageRules || 'No custom rules provided.'}
           Note: Look for patterns like 'For tasks like "NAME": DESCRIPTION (Classification: TYPE)' and apply them to similar task names.
@@ -62,8 +66,9 @@ serve(async (req) => {
           Tasks to classify:
           ${tasks.map(t => `- "${t}"`).join('\n')}
           
-          Return ONLY a JSON array of objects: { "isMovable": boolean, "explanation": string }.
-          The explanation should be short (max 10 words) and explain WHY it was classified that way (e.g., "Matched custom rule for 'Grocery'" or "Based on your 'Voice Coaching' rule").
+          Return ONLY a JSON array of objects: { "isMovable": boolean, "explanation": string, "dependsOn": string | null }.
+          "dependsOn" should be the title (or partial title) of the task this one must follow.
+          The explanation should be short (max 10 words).
         `;
 
         const result = await model.generateContent(prompt);
@@ -82,7 +87,8 @@ serve(async (req) => {
         const movable = isMovable && !isLocked;
         return {
           isMovable: movable,
-          explanation: movable ? "Matched movable keyword" : "Defaulted to fixed"
+          explanation: movable ? "Matched movable keyword" : "Defaulted to fixed",
+          dependsOn: null
         };
       });
     }

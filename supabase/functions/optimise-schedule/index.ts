@@ -50,7 +50,8 @@ serve(async (req) => {
       group_similar_tasks: true,
       work_keywords: [],
       movable_keywords: [],
-      locked_keywords: []
+      locked_keywords: [],
+      natural_language_rules: ''
     };
     
     const userTimezone = profileRes.data?.timezone || 'Australia/Melbourne';
@@ -68,9 +69,6 @@ serve(async (req) => {
     const todayStr = formatInTimeZone(now, userTimezone, 'yyyy-MM-dd');
     const localTodayStart = toDate(`${todayStr}T00:00:00`, { timeZone: userTimezone });
 
-    console.log(`[${functionName}] --- DIAGNOSTIC START ---`);
-    console.log(`[${functionName}] TODAY: ${todayStr} | TZ: ${userTimezone}`);
-
     const seenIds = new Set();
     const uniqueEvents = allEvents.filter(e => {
       if (seenIds.has(e.event_id)) return false;
@@ -78,23 +76,42 @@ serve(async (req) => {
       return new Date(e.start_time) >= localTodayStart;
     });
 
-    // Real-time keyword override
-    const processedEvents = uniqueEvents.map(e => {
-      const title = (e.title || '').toLowerCase();
-      const isExplicitlyLocked = lockedKeywords.some(kw => title.includes(kw.toLowerCase()));
-      const isExplicitlyMovable = movableKeywords.some(kw => title.includes(kw.toLowerCase()));
+    // 1. CLASSIFY TASKS (Including Dependencies)
+    console.log(`[${functionName}] Requesting AI classification for ${uniqueEvents.length} tasks...`);
+    const { data: classificationData } = await supabaseClient.functions.invoke('classify-tasks', {
+      body: {
+        tasks: uniqueEvents.map(e => e.title),
+        movableKeywords,
+        lockedKeywords,
+        naturalLanguageRules: settings.natural_language_rules
+      }
+    });
+
+    const classifications = classificationData?.classifications || [];
+
+    const processedEvents = uniqueEvents.map((e, i) => {
+      const classification = classifications[i];
+      const isMovable = classification?.isMovable ?? !e.is_locked;
+      const dependsOn = classification?.dependsOn || null;
       
-      let finalLocked = e.is_locked;
-      if (isExplicitlyLocked) finalLocked = true;
-      if (isExplicitlyMovable) finalLocked = false;
-      
-      return { ...e, is_locked: finalLocked };
+      return { 
+        ...e, 
+        is_locked: !isMovable,
+        dependsOn: dependsOn
+      };
     });
 
     const fixedEvents = processedEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
     const movableEvents = processedEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
 
-    console.log(`[${functionName}] FIXED: ${fixedEvents.length} | MOVABLE: ${movableEvents.length}`);
+    // 2. SORT MOVABLE TASKS
+    // We need to ensure tasks that are dependencies are scheduled BEFORE tasks that depend on them
+    // For now, we'll do a simple sort: tasks with NO dependencies first, then others.
+    const sortedMovable = [...movableEvents].sort((a, b) => {
+      if (!a.dependsOn && b.dependsOn) return -1;
+      if (a.dependsOn && !b.dependsOn) return 1;
+      return 0;
+    });
 
     const alignTime = (date, alignmentMinutes) => {
       const ms = alignmentMinutes * 60 * 1000;
@@ -102,67 +119,30 @@ serve(async (req) => {
     };
 
     const dailyStats = new Map();
-    dailyStats.set(todayStr, { tasks: 0, hours: 0, lastPointer: null });
-
-    fixedEvents.forEach(f => {
-      const dayKey = formatInTimeZone(new Date(f.start_time), userTimezone, 'yyyy-MM-dd');
-      if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
-      const stats = dailyStats.get(dayKey);
-      
-      const isWork = workKeywords.some(kw => f.title.toLowerCase().includes(kw.toLowerCase()));
-      if (isWork) {
-        const duration = (new Date(f.end_time).getTime() - new Date(f.start_time).getTime()) / 3600000;
-        stats.hours += duration;
-      }
-      
-      const isTask = !f.title?.toLowerCase().includes('lunch') && 
-                     !f.title?.toLowerCase().includes('break') && 
-                     !f.title?.toLowerCase().includes('dinner');
-      if (isTask) stats.tasks += 1;
-    });
-
-    let categories = movableEvents.map(() => "General");
-    const themeList = dayThemes.map(t => t.theme).filter(Boolean);
-    if (themeList.length > 0 && movableEvents.length > 0) {
-      try {
-        const geminiKey = Deno.env.get('GEMINI_API_KEY');
-        if (geminiKey) {
-          const genAI = new GoogleGenerativeAI(geminiKey);
-          const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
-          const prompt = `Categorize these tasks into exactly one of these themes: [${themeList.join(', ')}]. Tasks: ${movableEvents.map(e => e.title).join(', ')}. Return ONLY a JSON array of strings.`;
-          const aiResult = await model.generateContent(prompt);
-          const text = (await aiResult.response).text();
-          const jsonMatch = text.match(/\[.*\]/s);
-          if (jsonMatch) categories = JSON.parse(jsonMatch[0]);
-        }
-      } catch (e) { 
-        categories = movableEvents.map(event => {
-          const title = event.title.toLowerCase();
-          const matchedTheme = themeList.find(theme => title.includes(theme.toLowerCase()));
-          return matchedTheme || "General";
-        });
-      }
-    }
-
-    const categorizedEvents = movableEvents.map((event, index) => ({
-      ...event,
-      temp_category: categories[index] || "General",
-      is_work: workKeywords.some(kw => event.title.toLowerCase().includes(kw.toLowerCase()))
-    }));
-
-    if (settings.group_similar_tasks !== false) {
-      categorizedEvents.sort((a, b) => a.temp_category.localeCompare(b.temp_category));
-    }
-
     const proposedChanges = [];
     let surplusCount = 0;
 
-    for (const event of categorizedEvents) {
+    for (const event of sortedMovable) {
       const effectiveDuration = durationOverride === "original" ? event.duration_minutes : (parseInt(durationOverride) || event.duration_minutes);
       const durationMs = effectiveDuration * 60000;
       let foundSlot = false;
 
-      console.log(`[${functionName}] Processing: "${event.title}" (${effectiveDuration}m)`);
+      // Find dependency end time if it exists
+      let dependencyEndTime = null;
+      if (event.dependsOn) {
+        const depTitle = event.dependsOn.toLowerCase();
+        // Check fixed events first
+        const fixedDep = fixedEvents.find(f => f.title.toLowerCase().includes(depTitle));
+        if (fixedDep) {
+          dependencyEndTime = new Date(fixedDep.end_time);
+        } else {
+          // Check already scheduled movable events
+          const scheduledDep = proposedChanges.find(p => p.title.toLowerCase().includes(depTitle));
+          if (scheduledDep) {
+            dependencyEndTime = new Date(scheduledDep.new_end);
+          }
+        }
+      }
 
       for (let pass = 0; pass <= 2; pass++) {
         if (foundSlot) break;
@@ -178,21 +158,12 @@ serve(async (req) => {
           const dayOfWeek = isoDay === 7 ? 0 : isoDay;
 
           if (pass === 0 && !isToday) break; 
-
-          if (!selectedDays.includes(dayOfWeek)) {
-            dayOffset++; continue; 
-          }
+          if (!selectedDays.includes(dayOfWeek)) { dayOffset++; continue; }
 
           if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
           const stats = dailyStats.get(dayKey);
           
-          if (stats.tasks >= maxTasks) {
-            dayOffset++; continue;
-          }
-          
-          if (stats.hours >= maxWorkHours) {
-            dayOffset++; continue;
-          }
+          if (stats.tasks >= maxTasks || stats.hours >= maxWorkHours) { dayOffset++; continue; }
 
           const dayStart = toDate(`${dayKey}T${settings.day_start_time}:00`, { timeZone: userTimezone });
           const dayEnd = toDate(`${dayKey}T${settings.day_end_time}:00`, { timeZone: userTimezone });
@@ -207,6 +178,19 @@ serve(async (req) => {
           }
 
           let searchPointer = new Date(stats.lastPointer);
+
+          // ENFORCE DEPENDENCY: If dependency is on this day or in the past, start searching after it
+          if (dependencyEndTime) {
+            const depDayKey = formatInTimeZone(dependencyEndTime, userTimezone, 'yyyy-MM-dd');
+            if (depDayKey === dayKey) {
+              if (dependencyEndTime > searchPointer) {
+                searchPointer = alignTime(dependencyEndTime, slotAlignment);
+              }
+            } else if (depDayKey > dayKey) {
+              // Dependency is in the future relative to this day, skip this day
+              dayOffset++; continue;
+            }
+          }
 
           while (searchPointer < dayEnd && !foundSlot) {
             const potentialEnd = new Date(searchPointer.getTime() + durationMs);
@@ -223,7 +207,8 @@ serve(async (req) => {
             } else {
               foundSlot = true;
               stats.tasks += 1;
-              if (event.is_work) stats.hours += (effectiveDuration / 60);
+              const isWork = workKeywords.some(kw => event.title.toLowerCase().includes(kw.toLowerCase()));
+              if (isWork) stats.hours += (effectiveDuration / 60);
               stats.lastPointer = alignTime(new Date(potentialEnd.getTime()), slotAlignment);
 
               proposedChanges.push({
@@ -234,11 +219,10 @@ serve(async (req) => {
                 new_start: searchPointer.toISOString(),
                 new_end: potentialEnd.toISOString(),
                 duration: effectiveDuration,
-                is_work: event.is_work,
+                is_work: isWork,
                 is_surplus: false,
-                category: event.temp_category
+                dependsOn: event.dependsOn
               });
-              console.log(`[${functionName}]   -> Found slot on ${dayKey} at ${searchPointer.toISOString()}`);
             }
           }
           if (!foundSlot) dayOffset++;
@@ -246,7 +230,6 @@ serve(async (req) => {
       }
 
       if (!foundSlot && placeholderDate) {
-        console.log(`[${functionName}]   -> No slot found, moving to surplus`);
         const pDate = toDate(`${placeholderDate}T${settings.day_start_time}:00`, { timeZone: userTimezone });
         const pStart = new Date(pDate.getTime() + (surplusCount * 60000));
         const pEnd = new Date(pStart.getTime() + durationMs);
@@ -259,15 +242,14 @@ serve(async (req) => {
           new_start: pStart.toISOString(),
           new_end: pEnd.toISOString(),
           duration: effectiveDuration,
-          is_work: event.is_work,
+          is_work: false,
           is_surplus: true,
-          category: event.temp_category
+          dependsOn: event.dependsOn
         });
         surplusCount++;
       }
     }
 
-    console.log(`[${functionName}] FINISHED - Total Changes: ${proposedChanges.length}`);
     return new Response(JSON.stringify({ changes: proposedChanges }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
     console.error(`[${functionName}] Error:`, error.message);
