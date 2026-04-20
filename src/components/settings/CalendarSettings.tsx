@@ -57,7 +57,7 @@ const CalendarSettings = ({ calendars, isTesting, onDiscover, onToggle }: Calend
   };
 
   return (
-    <Card className="border-none shadow-sm rounded-2xl border-l-4 border-l-indigo-600 h-full flex flex-col">
+    <Card className="border-none shadow-sm rounded-2xl border-l-4 border-l-indigo-600 h-full flex flex-col overflow-hidden">
       <CardHeader className="pb-4 shrink-0">
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2 text-lg">
@@ -76,9 +76,9 @@ const CalendarSettings = ({ calendars, isTesting, onDiscover, onToggle }: Calend
           </Button>
         </div>
       </CardHeader>
-      <CardContent className="flex-1 min-h-0 p-0">
-        <ScrollArea className="h-[500px] px-6 pb-6">
-          <div className="space-y-8">
+      <CardContent className="flex-1 min-h-0 p-0 flex flex-col">
+        <ScrollArea className="flex-1 w-full">
+          <div className="px-6 pb-6 space-y-8">
             {providers.length > 0 ? providers.map((provider) => (
               <div key={provider} className="space-y-4">
                 <div className="flex items-center justify-between sticky top-0 bg-white py-2 z-10 border-b border-gray-50">
@@ -120,7 +120,7 @@ const CalendarSettings = ({ calendars, isTesting, onDiscover, onToggle }: Calend
                 </div>
               </div>
             )) : (
-              <div className="py-10 text-center bg-gray-50 rounded-2xl border border-dashed border-gray-200">
+              <div className="py-10 text-center bg-gray-50 rounded-2xl border border-dashed border-gray-200 mx-6 mt-4">
                 <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">No calendars found</p>
                 <Button variant="link" onClick={onDiscover} className="text-indigo-600 text-[10px] font-black uppercase tracking-widest mt-2">
                   Discover Now
