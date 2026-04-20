@@ -468,20 +468,20 @@ const Plan = () => {
         foundStart = searchPointer;
         break;
       } else {
-        // Move pointer to after the colliding event
+        // Move pointer to after the colliding event (Removed 1-minute buffer)
         const collisionEnd = parseISO(collision.end_time || collision.new_end);
-        searchPointer = alignTime(addMinutes(collisionEnd, 1));
+        searchPointer = alignTime(collisionEnd);
       }
     }
 
-    // Fallback: if no gap found, append to the end of the day's events (even if outside window)
+    // Fallback: if no gap found, append to the end of the day's events (Removed 5-minute buffer)
     if (!foundStart) {
       let lastEnd = searchPointer;
       dayEvents.forEach(e => {
         const end = parseISO(e.end_time || e.new_end);
         if (isAfter(end, lastEnd)) lastEnd = end;
       });
-      foundStart = alignTime(addMinutes(lastEnd, 5));
+      foundStart = alignTime(lastEnd);
     }
 
     const newStart = foundStart;

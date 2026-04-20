@@ -196,12 +196,14 @@ serve(async (req) => {
             });
 
             if (collision) {
-              searchPointer = alignTime(new Date(new Date(collision.end_time).getTime() + 1 * 60000), slotAlignment);
+              // Removed 1-minute buffer
+              searchPointer = alignTime(new Date(new Date(collision.end_time).getTime()), slotAlignment);
             } else {
               foundSlot = true;
               stats.tasks += 1;
               stats.hours += taskWorkHours;
-              stats.lastPointer = alignTime(new Date(potentialEnd.getTime() + 5 * 60000), slotAlignment);
+              // Removed 5-minute buffer
+              stats.lastPointer = alignTime(new Date(potentialEnd.getTime()), slotAlignment);
 
               proposedChanges.push({
                 event_id: event.event_id,
