@@ -8,20 +8,31 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-async function refreshGoogleToken(refreshToken: string) {
+async function refreshGoogleToken(refreshToken: string, functionName: string) {
+  const clientId = Deno.env.get('GOOGLE_CLIENT_ID');
+  const clientSecret = Deno.env.get('GOOGLE_CLIENT_SECRET');
+
+  if (!clientId || !clientSecret) {
+    console.error(`[${functionName}] CRITICAL: GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET is not set in Supabase secrets.`);
+    throw new Error("Server configuration error: Missing Google API credentials");
+  }
+
   const res = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      client_id: Deno.env.get('GOOGLE_CLIENT_ID') || '',
-      client_secret: Deno.env.get('GOOGLE_CLIENT_SECRET') || '',
+      client_id: clientId,
+      client_secret: clientSecret,
       grant_type: 'refresh_token',
       refresh_token: refreshToken,
     }),
   });
 
   const data = await res.json();
-  if (!res.ok) throw new Error("Failed to refresh Google token");
+  if (!res.ok) {
+    console.error(`[${functionName}] Google Token Refresh Error:`, JSON.stringify(data));
+    throw new Error(`Failed to refresh Google token: ${data.error_description || data.error || 'Unknown error'}`);
+  }
   return data.access_token;
 }
 
@@ -37,7 +48,7 @@ serve(async (req) => {
     const authHeader = req.headers.get('Authorization')
     let { googleAccessToken } = await req.json();
 
-    const supabaseAdmin = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '')
+    const supabaseAdmin = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_ANON_KEY') ?? '')
     const supabaseUser = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_ANON_KEY') ?? '', { global: { headers: { Authorization: authHeader } } })
     
     const { data: { user } } = await supabaseUser.auth.getUser()
@@ -50,23 +61,41 @@ serve(async (req) => {
     const refreshToken = profile?.google_refresh_token;
 
     if (!token && !refreshToken) {
+      console.warn(`[${functionName}] No tokens found for user ${user.id}`);
       return new Response(JSON.stringify({ error: "Missing Google Access Token" }), { status: 401, headers: corsHeaders });
     }
 
-    // Refresh token if needed
+    // Check if token is valid by doing a lightweight request
     let listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1', { 
       headers: { Authorization: `Bearer ${token}` } 
     });
 
     if (listRes.status === 401 && refreshToken) {
-      token = await refreshGoogleToken(refreshToken);
-      await supabaseAdmin.from('profiles').update({ google_access_token: token }).eq('id', user.id);
+      console.log(`[${functionName}] Token expired, attempting refresh...`);
+      try {
+        token = await refreshGoogleToken(refreshToken, functionName);
+        await supabaseAdmin.from('profiles').update({ google_access_token: token }).eq('id', user.id);
+        console.log(`[${functionName}] Token refreshed successfully`);
+      } catch (refreshErr) {
+        console.error(`[${functionName}] Refresh failed:`, refreshErr.message);
+        throw refreshErr;
+      }
+    } else if (listRes.status === 401 && !refreshToken) {
+      console.error(`[${functionName}] Token expired and no refresh token available`);
+      throw new Error("Session expired. Please log in again.");
     }
 
     // Discover calendars
     const fullListRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { 
       headers: { Authorization: `Bearer ${token}` } 
     });
+    
+    if (!fullListRes.ok) {
+      const errData = await fullListRes.json();
+      console.error(`[${functionName}] Calendar List Error:`, JSON.stringify(errData));
+      throw new Error("Failed to fetch calendar list from Google");
+    }
+
     const listData = await fullListRes.json();
     if (listData.items) {
       const discovered = listData.items.filter(cal => !cal.id.includes('@import.calendar.google.com')).map(cal => ({
@@ -101,18 +130,19 @@ serve(async (req) => {
     const hardFixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
 
     const interpretToUtc = (isoStr, timeZone) => {
-      // If it's already UTC or has an explicit offset, parse it directly
       if (isoStr.includes('Z') || isoStr.includes('+') || (isoStr.includes('-') && isoStr.includes('T') && isoStr.length > 10)) {
         return new Date(isoStr).toISOString();
       }
-      // Floating time: parse as if it were in the target timezone (e.g. Melbourne)
       return toDate(isoStr, { timeZone }).toISOString();
     };
 
     for (const cal of enabledCalendars) {
       const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.calendar_id)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`;
       let res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) continue;
+      if (!res.ok) {
+        console.warn(`[${functionName}] Failed to fetch events for calendar ${cal.calendar_id}`);
+        continue;
+      }
       
       const data = await res.json();
       const items = data.items || [];
@@ -128,7 +158,6 @@ serve(async (req) => {
           startIso = interpretToUtc(event.start.dateTime, eventTimeZone);
           endIso = interpretToUtc(event.end.dateTime, eventTimeZone);
         } else {
-          // All-day events: treat as starting at the user's day start time in their timezone
           const [h, min] = dayStartStr.split(':').map(Number);
           const floatingStart = `${event.start.date}T${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}:00`;
           startIso = interpretToUtc(floatingStart, eventTimeZone);
@@ -175,6 +204,7 @@ serve(async (req) => {
     const cleanupThreshold = new Date(new Date(syncTimestamp).getTime() - 60000).toISOString();
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google').gte('start_time', syncStartTime.toISOString()).lt('last_seen_at', cleanupThreshold);
     
+    console.log(`[${functionName}] SUCCESS - Synced ${uniqueEvents.length} events`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
     console.error(`[${functionName}] FATAL ERROR:`, error.message);
