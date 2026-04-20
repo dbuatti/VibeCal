@@ -44,25 +44,26 @@ serve(async (req) => {
           You are a personal assistant helping to organize a calendar. 
           Classify the following tasks as either "movable" (can be rescheduled) or "fixed" (must happen at this specific time).
           
-          STRICT KEYWORD RULES:
+          PRIORITY 1: USER'S CUSTOM RULES (Follow these strictly)
+          ${naturalLanguageRules || 'No custom rules provided.'}
+          Note: Look for patterns like 'For tasks like "NAME": DESCRIPTION (Classification: TYPE)' and apply them to similar task names.
+
+          PRIORITY 2: USER'S PAST CORRECTIONS
+          ${feedback?.map(f => `- "${f.task_name}" is ${f.is_movable ? 'movable' : 'fixed'}`).join('\n') || 'No past corrections.'}
+
+          PRIORITY 3: STRICT KEYWORD RULES
           - FIXED: Any task containing these keywords: ${lockedKeywords?.join(', ') || 'none'}.
           - MOVABLE: Any task containing these keywords: ${movableKeywords?.join(', ') || 'none'}.
           
-          USER'S CUSTOM RULES:
-          ${naturalLanguageRules || 'No custom rules provided.'}
-
-          General Rules:
+          GENERAL GUIDELINES (Use only if no specific rules apply):
           - Fixed: Meetings with others, appointments, live classes, rehearsals, ceremonies, specific deadlines.
           - Movable: Solo work, drafting, chores, practice, exploration, personal projects.
-          
-          User's Past Corrections:
-          ${feedback?.map(f => `- "${f.task_name}" is ${f.is_movable ? 'movable' : 'fixed'}`).join('\n') || 'No past corrections.'}
           
           Tasks to classify:
           ${tasks.map(t => `- "${t}"`).join('\n')}
           
           Return ONLY a JSON array of objects: { "isMovable": boolean, "explanation": string }.
-          The explanation should be short (max 10 words) and explain WHY it was classified that way (e.g., "Matched keyword 'meeting'" or "Based on your custom rule").
+          The explanation should be short (max 10 words) and explain WHY it was classified that way (e.g., "Matched custom rule for 'Grocery'" or "Based on your 'Voice Coaching' rule").
         `;
 
         const result = await model.generateContent(prompt);
