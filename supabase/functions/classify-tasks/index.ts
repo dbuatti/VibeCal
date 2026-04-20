@@ -8,6 +8,13 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+// Helper for fuzzy matching titles
+function isFuzzyMatch(title: string, pattern: string) {
+  const t = title.toLowerCase();
+  const p = pattern.toLowerCase();
+  return t.includes(p) || p.includes(t);
+}
+
 async function generateWithRetry(model, prompt, functionName, maxRetries = 3) {
   let lastError;
   for (let i = 0; i < maxRetries; i++) {
@@ -21,7 +28,7 @@ async function generateWithRetry(model, prompt, functionName, maxRetries = 3) {
       const isRetryable = errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('503') || errorMsg.includes('500');
       
       if (isRetryable && i < maxRetries - 1) {
-        const delay = 1500 * (i + 1);
+        const delay = 1000 * (i + 1);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
@@ -49,43 +56,56 @@ serve(async (req) => {
     const { data: { user } } = await supabaseUser.auth.getUser();
     if (!user) throw new Error("Unauthorized");
 
-    // 1. MEMORY LOOKUP (Exact & Pattern Match)
+    // 1. LAYER 1: FUZZY MEMORY LOOKUP
     const { data: feedback } = await supabaseAdmin
       .from('task_classification_feedback')
       .select('task_name, is_movable')
       .eq('user_id', user.id);
 
-    const feedbackMap = new Map(feedback?.map(f => [f.task_name.toLowerCase(), f.is_movable]));
-
     const results = taskList.map(title => {
       const lowerTitle = title.toLowerCase();
-      if (feedbackMap.has(lowerTitle)) {
+      
+      // Check exact match first
+      const exact = feedback?.find(f => f.task_name.toLowerCase() === lowerTitle);
+      if (exact) {
         return { 
-          isMovable: feedbackMap.get(lowerTitle), 
+          isMovable: exact.is_movable, 
           explanation: "Matched your previous manual correction.",
           confidence: 1.0,
           isPredefined: true 
         };
       }
+
+      // Check fuzzy match (pattern matching)
+      const fuzzy = feedback?.find(f => isFuzzyMatch(lowerTitle, f.task_name));
+      if (fuzzy) {
+        return {
+          isMovable: fuzzy.is_movable,
+          explanation: `Pattern match: Similar to "${fuzzy.task_name}" which you marked as ${fuzzy.is_movable ? 'movable' : 'fixed'}.`,
+          confidence: 0.9,
+          isPredefined: true
+        };
+      }
+
       return null;
     });
 
     const indicesToAI = results.map((r, i) => r === null ? i : null).filter(i => i !== null);
 
-    // 2. ADVANCED AI CLASSIFICATION
+    // 2. LAYER 2: ADVANCED AI REASONING
     if (indicesToAI.length > 0) {
       const tasksForAI = indicesToAI.map(i => taskList[i]);
       
       try {
         const prompt = `
-          You are an elite executive assistant. Classify these calendar tasks.
+          You are an elite executive assistant with deep context awareness. Classify these calendar tasks.
           
           CONTEXT:
-          - MOVABLE: Tasks that can be done anytime (e.g., "Draft email", "Research", "Solo practice").
-          - FIXED: Appointments with others, hard deadlines, or time-sensitive events (e.g., "Meeting with Bob", "Flight", "Live Performance").
+          - MOVABLE: Solo work, drafts, research, chores, or "flexible" blocks.
+          - FIXED: Meetings, calls, appointments, hard deadlines, travel, or events involving others.
           
-          USER RULES:
-          ${naturalLanguageRules || 'No custom rules.'}
+          USER PREFERENCES:
+          ${naturalLanguageRules || 'No custom rules provided.'}
           
           KEYWORDS:
           - FIXED: ${lockedKeywords.join(', ') || 'none'}
@@ -95,12 +115,12 @@ serve(async (req) => {
           ${tasksForAI.map((t, idx) => `${idx}: "${t}"`).join('\n')}
           
           INSTRUCTIONS:
-          1. Determine if movable.
+          1. Determine if movable based on title and common sense.
           2. Detect dependencies: If task B mentions task A (e.g., "Part 2", "Follow up on X"), note that B depends on A.
-          3. Provide a brief, logical explanation.
+          3. Provide a concise, logical explanation for your choice.
           
           Return ONLY a JSON array of objects: 
-          { "isMovable": boolean, "explanation": string, "confidence": number (0-1), "dependsOn": string | null (title of prerequisite task) }
+          { "isMovable": boolean, "explanation": string, "confidence": number (0-1), "dependsOn": string | null }
         `;
 
         const geminiKey = Deno.env.get('GEMINI_API_KEY');
@@ -118,28 +138,40 @@ serve(async (req) => {
           });
         }
       } catch (aiError) {
-        console.error(`[${functionName}] AI Quota/Error, using Smart Fallback:`, aiError.message);
+        console.error(`[${functionName}] AI Layer Failed, using Layer 3 (Heuristic Fallback):`, aiError.message);
         
-        // SMART REGEX FALLBACK
+        // 3. LAYER 3: HEURISTIC FALLBACK (Regex + Keywords)
         indicesToAI.forEach(idx => {
           const title = taskList[idx].toLowerCase();
+          
           const isMovableKeyword = movableKeywords.some(kw => title.includes(kw.toLowerCase()));
           const isLockedKeyword = lockedKeywords.some(kw => title.includes(kw.toLowerCase()));
           
-          // Heuristic: If it has "with", "call", "meeting", "vs" it's likely fixed
-          const likelyFixed = /with|call|meeting|vs|interview|appointment|doctor|dentist|flight|zoom|teams/.test(title);
+          // Heuristic: Common "Fixed" patterns
+          const fixedPatterns = /with|call|meeting|vs|interview|appointment|doctor|dentist|flight|zoom|teams|rehearsal|lesson|performance|gig|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
+          const likelyFixed = fixedPatterns.test(title);
           
+          // Heuristic: Common "Movable" patterns
+          const movablePatterns = /draft|research|solo|practice|tidy|vacuum|clean|read|study|explore|arrangement|email|outreach/i;
+          const likelyMovable = movablePatterns.test(title);
+          
+          let isMovable = true;
+          if (isLockedKeyword) isMovable = false;
+          else if (isMovableKeyword) isMovable = true;
+          else if (likelyFixed) isMovable = false;
+          else if (likelyMovable) isMovable = true;
+
           results[idx] = {
-            isMovable: isMovableKeyword || (!isLockedKeyword && !likelyFixed),
-            explanation: "Classified via Smart Fallback (AI busy).",
-            confidence: 0.7,
+            isMovable: isMovable,
+            explanation: "Classified via Heuristic Engine (AI busy).",
+            confidence: 0.6,
             dependsOn: null
           };
         });
       }
     }
 
-    // 3. PERSISTENCE
+    // 4. PERSISTENCE
     if (persist && events && events.length === results.length) {
       const updates = events.map((event, i) => ({
         event_id: event.event_id,
@@ -153,7 +185,7 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
   } catch (error) {
-    console.error(`[${functionName}] Error:`, error.message);
+    console.error(`[${functionName}] FATAL ERROR:`, error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })
