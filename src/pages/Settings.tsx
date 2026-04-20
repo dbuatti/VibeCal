@@ -64,7 +64,6 @@ const Settings = () => {
       const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
       
       if (profile?.google_access_token) {
-        // Try a lightweight API call to check if token is still valid
         const res = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1', {
           headers: { Authorization: `Bearer ${profile.google_access_token}` }
         });
@@ -226,7 +225,6 @@ const Settings = () => {
         await supabase.from('profiles').update({ google_access_token: session.provider_token }).eq('id', user.id);
         await supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: session.provider_token } });
       } else {
-        // Try with cached token
         await supabase.functions.invoke('sync-calendar', { body: {} });
       }
 
@@ -268,91 +266,97 @@ const Settings = () => {
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 space-y-8">
-          {/* Google Connection Status Card */}
-          <Card className={cn(
-            "border-none shadow-sm rounded-2xl transition-all",
-            googleStatus === 'expired' ? "bg-amber-50 border border-amber-100" : "bg-white"
-          )}>
-            <CardHeader className="pb-4">
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <Link2 className="text-indigo-600" size={20} />
-                Google Connection
-              </CardTitle>
-              <CardDescription>Manage your Google Calendar integration status.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center justify-between p-4 rounded-xl bg-white/50 border border-gray-100">
-                <div className="flex items-center gap-4">
-                  <div className={cn(
-                    "w-10 h-10 rounded-full flex items-center justify-center",
-                    googleStatus === 'connected' ? "bg-green-100 text-green-600" : 
-                    googleStatus === 'expired' ? "bg-amber-100 text-amber-600" : "bg-gray-100 text-gray-400"
-                  )}>
-                    {googleStatus === 'connected' ? <CheckCircle2 size={20} /> : 
-                     googleStatus === 'expired' ? <AlertCircle size={20} /> : <Link2 size={20} />}
+      <div className="space-y-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="lg:col-span-2 space-y-8">
+            {/* Google Connection Status Card */}
+            <Card className={cn(
+              "border-none shadow-sm rounded-2xl transition-all",
+              googleStatus === 'expired' ? "bg-amber-50 border border-amber-100" : "bg-white"
+            )}>
+              <CardHeader className="pb-4">
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <Link2 className="text-indigo-600" size={20} />
+                  Google Connection
+                </CardTitle>
+                <CardDescription>Manage your Google Calendar integration status.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center justify-between p-4 rounded-xl bg-white/50 border border-gray-100">
+                  <div className="flex items-center gap-4">
+                    <div className={cn(
+                      "w-10 h-10 rounded-full flex items-center justify-center",
+                      googleStatus === 'connected' ? "bg-green-100 text-green-600" : 
+                      googleStatus === 'expired' ? "bg-amber-100 text-amber-600" : "bg-gray-100 text-gray-400"
+                    )}>
+                      {googleStatus === 'connected' ? <CheckCircle2 size={20} /> : 
+                       googleStatus === 'expired' ? <AlertCircle size={20} /> : <Link2 size={20} />}
+                    </div>
+                    <div>
+                      <p className="font-bold text-sm capitalize">{googleStatus}</p>
+                      <p className="text-xs text-gray-500">
+                        {googleStatus === 'connected' ? 'Your calendar is syncing correctly.' : 
+                         googleStatus === 'expired' ? 'Your session has expired. Please reconnect.' : 
+                         'No Google account connected.'}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="font-bold text-sm capitalize">{googleStatus}</p>
-                    <p className="text-xs text-gray-500">
-                      {googleStatus === 'connected' ? 'Your calendar is syncing correctly.' : 
-                       googleStatus === 'expired' ? 'Your session has expired. Please reconnect.' : 
-                       'No Google account connected.'}
-                    </p>
-                  </div>
+                  <Button 
+                    variant={googleStatus === 'expired' ? "default" : "outline"}
+                    onClick={handleReconnect}
+                    className={cn(
+                      "rounded-xl font-bold text-xs",
+                      googleStatus === 'expired' && "bg-indigo-600 hover:bg-indigo-700"
+                    )}
+                  >
+                    {googleStatus === 'connected' ? 'Switch Account' : 'Reconnect Google'}
+                  </Button>
                 </div>
-                <Button 
-                  variant={googleStatus === 'expired' ? "default" : "outline"}
-                  onClick={handleReconnect}
-                  className={cn(
-                    "rounded-xl font-bold text-xs",
-                    googleStatus === 'expired' && "bg-indigo-600 hover:bg-indigo-700"
-                  )}
-                >
-                  {googleStatus === 'connected' ? 'Switch Account' : 'Reconnect Google'}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
 
-          <WorkWindowSettings settings={settings} setSettings={setSettings} />
+            <WorkWindowSettings settings={settings} setSettings={setSettings} />
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <KeywordManager 
-              title="Movable" 
-              icon={Sparkles} 
-              iconColor="text-indigo-600" 
-              keywords={settings.movable_keywords}
-              onAdd={(kw) => handleAddKeyword(kw, 'movable')}
-              onRemove={(kw) => handleRemoveKeyword(kw, 'movable')}
-              badgeVariant="indigo"
-            />
-            <KeywordManager 
-              title="Locked" 
-              icon={Ban} 
-              iconColor="text-red-500" 
-              keywords={settings.locked_keywords}
-              onAdd={(kw) => handleAddKeyword(kw, 'locked')}
-              onRemove={(kw) => handleRemoveKeyword(kw, 'locked')}
-              badgeVariant="red"
-            />
-            <KeywordManager 
-              title="Work Detection" 
-              icon={Briefcase} 
-              iconColor="text-amber-500" 
-              keywords={settings.work_keywords}
-              onAdd={(kw) => handleAddKeyword(kw, 'work')}
-              onRemove={(kw) => handleRemoveKeyword(kw, 'work')}
-              badgeVariant="amber"
-            />
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <KeywordManager 
+                title="Movable" 
+                icon={Sparkles} 
+                iconColor="text-indigo-600" 
+                keywords={settings.movable_keywords}
+                onAdd={(kw) => handleAddKeyword(kw, 'movable')}
+                onRemove={(kw) => handleRemoveKeyword(kw, 'movable')}
+                badgeVariant="indigo"
+              />
+              <KeywordManager 
+                title="Locked" 
+                icon={Ban} 
+                iconColor="text-red-500" 
+                keywords={settings.locked_keywords}
+                onAdd={(kw) => handleAddKeyword(kw, 'locked')}
+                onRemove={(kw) => handleRemoveKeyword(kw, 'locked')}
+                badgeVariant="red"
+              />
+              <KeywordManager 
+                title="Work Detection" 
+                icon={Briefcase} 
+                iconColor="text-amber-500" 
+                keywords={settings.work_keywords}
+                onAdd={(kw) => handleAddKeyword(kw, 'work')}
+                onRemove={(kw) => handleRemoveKeyword(kw, 'work')}
+                badgeVariant="amber"
+              />
+            </div>
+
+            <DayThemesSettings themes={themes} onThemeChange={handleThemeChange} />
           </div>
 
-          <DayThemesSettings themes={themes} onThemeChange={handleThemeChange} />
+          <div className="space-y-8">
+            <OptimisationLogicSettings settings={settings} setSettings={setSettings} />
+          </div>
         </div>
 
-        <div className="space-y-8">
-          <OptimisationLogicSettings settings={settings} setSettings={setSettings} />
+        {/* Full Width Calendar Settings */}
+        <div className="w-full">
           <CalendarSettings 
             calendars={calendars} 
             isTesting={isTesting} 
