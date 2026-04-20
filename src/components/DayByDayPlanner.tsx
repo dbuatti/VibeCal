@@ -24,8 +24,9 @@ interface DayByDayPlannerProps {
   events: any[];
   changes: any[];
   appliedChanges: string[];
-  onApplyDay: (dateChanges: any[]) => Promise<void>;
-  onUndoApplyDay: (dateChanges: any[]) => Promise<void>;
+  onApplyDay: (dateChanges: any[]) => Promise<any>;
+  onUndoApplyDay: (dateChanges: any[]) => Promise<any>;
+  onUndoAndResuggestDay?: (dateChanges: any[]) => Promise<any>;
   onResuggestDay?: () => Promise<void>;
   onReinsertTask?: (eventId: string, targetDateStr: string) => Promise<void>;
   maxHours: number;
@@ -40,6 +41,7 @@ const DayByDayPlanner = ({
   appliedChanges, 
   onApplyDay, 
   onUndoApplyDay,
+  onUndoAndResuggestDay,
   onResuggestDay,
   onReinsertTask,
   maxHours, 
@@ -105,7 +107,6 @@ const DayByDayPlanner = ({
     return false;
   }, [dayChanges, appliedChanges, currentDate, selectedDays]);
 
-  // Helper to identify events that contribute to "Load" (everything except restorative breaks)
   const isLoadEvent = (event: any) => {
     const title = (event.title || '').toLowerCase();
     return !title.includes('lunch') && !title.includes('dinner') && !title.includes('break');
@@ -209,10 +210,10 @@ const DayByDayPlanner = ({
   };
 
   const handleUndoAndResuggest = async () => {
+    if (!onUndoAndResuggestDay) return;
     setIsSyncing(true);
     try {
-      await onUndoApplyDay(dayChanges);
-      if (onResuggestDay) await onResuggestDay();
+      await onUndoAndResuggestDay(dayChanges);
     } finally { setIsSyncing(false); }
   };
 
@@ -287,7 +288,7 @@ const DayByDayPlanner = ({
                 <Button onClick={handleUndoDay} disabled={isSyncing} variant="outline" className="w-full rounded-2xl py-8 text-lg font-black border-gray-100 text-gray-400">
                   {isSyncing ? <RefreshCw className="animate-spin mr-2" size={20} /> : <><RotateCcw className="mr-2" size={20} /> Undo</>}
                 </Button>
-                {onResuggestDay && (
+                {onUndoAndResuggestDay && (
                   <Button onClick={handleUndoAndResuggest} disabled={isSyncing} variant="ghost" className="w-full rounded-2xl py-4 text-xs font-black uppercase tracking-widest text-indigo-600 hover:bg-indigo-50">
                     {isSyncing ? <RefreshCw className="animate-spin mr-2" size={14} /> : <><Wand2 className="mr-2" size={14} /> Undo & Resuggest</>}
                   </Button>

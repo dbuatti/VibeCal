@@ -237,7 +237,7 @@ const Plan = () => {
     }
   };
 
-  const runOptimisation = async (isResuggest = false) => {
+  const runOptimisation = async (isResuggest = false, overrideAppliedIds?: string[]) => {
     if (selectedDays.length === 0) { showError("Select at least one day."); return; }
     
     setIsProcessing(true);
@@ -259,7 +259,8 @@ const Plan = () => {
       }, { onConflict: 'user_id' });
 
       setProgress(40);
-      const currentApplied = isResuggest ? appliedChanges : [];
+      // Use override IDs if provided (crucial for Undo & Resuggest sequence)
+      const currentApplied = overrideAppliedIds !== undefined ? overrideAppliedIds : (isResuggest ? appliedChanges : []);
 
       const { data, error } = await supabase.functions.invoke('optimise-schedule', {
         body: { 
@@ -392,7 +393,6 @@ const Plan = () => {
         if (eventIdx === -1) continue;
         const eventInCache = updatedEvents[eventIdx];
         
-        // Safety check for time values
         if (!change.old_start) continue;
         const oldStart = parseISO(change.old_start);
         if (!isValid(oldStart)) continue;
@@ -424,9 +424,24 @@ const Plan = () => {
       setEvents(updatedEvents);
       setAppliedChanges(newAppliedIds);
       setProposal({ ...proposal, proposed_changes: updatedProposedChanges });
-      showSuccess("Day reverted.");
+      return newAppliedIds; // Return for sequential operations
     } catch (err: any) { 
       showError("Failed to undo: " + err.message); 
+      throw err;
+    }
+  };
+
+  const handleUndoAndResuggest = async (dateChanges: any[]) => {
+    try {
+      // 1. Perform undo and get the updated applied IDs immediately
+      const newAppliedIds = await handleUndoApplyDay(dateChanges);
+      
+      // 2. Run optimisation using these new IDs to ensure reshuffle works
+      await runOptimisation(true, newAppliedIds);
+      
+      showSuccess("Day reverted and reshuffled.");
+    } catch (err: any) {
+      console.error("[Plan] handleUndoAndResuggest error:", err);
     }
   };
 
@@ -532,6 +547,7 @@ const Plan = () => {
               appliedChanges={appliedChanges}
               onApplyDay={handleApplyDay}
               onUndoApplyDay={handleUndoApplyDay}
+              onUndoAndResuggestDay={handleUndoAndResuggest}
               onResuggestDay={() => runOptimisation(true)} 
               onReinsertTask={handleReinsertTask}
               maxHours={maxHoursOverride}
