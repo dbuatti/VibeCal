@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0'
-import { GoogleGenerativeAI } from "https://esm.sh/@google/generative-ai@0.1.0"
+import { GoogleGenerativeAI } from "https://esm.sh/@google/generative-ai@0.21.0"
 import { toDate, formatInTimeZone } from "https://esm.sh/date-fns-tz@3.1.1"
 
 const corsHeaders = {
@@ -105,8 +105,6 @@ serve(async (req) => {
     const movableEvents = processedEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
 
     // 2. SORT MOVABLE TASKS
-    // We need to ensure tasks that are dependencies are scheduled BEFORE tasks that depend on them
-    // For now, we'll do a simple sort: tasks with NO dependencies first, then others.
     const sortedMovable = [...movableEvents].sort((a, b) => {
       if (!a.dependsOn && b.dependsOn) return -1;
       if (a.dependsOn && !b.dependsOn) return 1;
@@ -131,12 +129,10 @@ serve(async (req) => {
       let dependencyEndTime = null;
       if (event.dependsOn) {
         const depTitle = event.dependsOn.toLowerCase();
-        // Check fixed events first
         const fixedDep = fixedEvents.find(f => f.title.toLowerCase().includes(depTitle));
         if (fixedDep) {
           dependencyEndTime = new Date(fixedDep.end_time);
         } else {
-          // Check already scheduled movable events
           const scheduledDep = proposedChanges.find(p => p.title.toLowerCase().includes(depTitle));
           if (scheduledDep) {
             dependencyEndTime = new Date(scheduledDep.new_end);
@@ -179,7 +175,6 @@ serve(async (req) => {
 
           let searchPointer = new Date(stats.lastPointer);
 
-          // ENFORCE DEPENDENCY: If dependency is on this day or in the past, start searching after it
           if (dependencyEndTime) {
             const depDayKey = formatInTimeZone(dependencyEndTime, userTimezone, 'yyyy-MM-dd');
             if (depDayKey === dayKey) {
@@ -187,7 +182,6 @@ serve(async (req) => {
                 searchPointer = alignTime(dependencyEndTime, slotAlignment);
               }
             } else if (depDayKey > dayKey) {
-              // Dependency is in the future relative to this day, skip this day
               dayOffset++; continue;
             }
           }
