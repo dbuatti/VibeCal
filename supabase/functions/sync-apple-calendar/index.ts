@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
+import { zonedTimeToUtc } from 'https://esm.sh/date-fns-tz@3.0.0'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -22,12 +23,13 @@ Deno.serve(async (req) => {
     const user = await userRes.json();
     if (!user?.id) throw new Error("Unauthorized");
 
-    // 2. Get Apple Credentials
-    const profileRes = await fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${user.id}&select=apple_id,apple_app_password`, {
+    // 2. Get Apple Credentials and Timezone
+    const profileRes = await fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${user.id}&select=apple_id,apple_app_password,timezone`, {
       headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
     });
     const profiles = await profileRes.json();
     const profile = profiles[0];
+    const userTimezone = profile?.timezone || 'Australia/Melbourne';
     
     if (!profile?.apple_id || !profile?.apple_app_password) {
       console.log(`[${functionName}] No Apple credentials found for user ${user.id}`);
@@ -154,28 +156,16 @@ Deno.serve(async (req) => {
         });
 
         const reportText = await reportRes.text();
-        
-        // GLOBAL EXTRACTION: Find all calendar-data blocks in the entire string
         const icsBlocks = reportText.match(/<[^>]*calendar-data[^>]*>([\s\S]*?)<\/[^>]*calendar-data>/gi) || [];
-        console.log(`[${functionName}] Global Extraction found ${icsBlocks.length} iCal blocks in ${cal.calendar_name}`);
-
-        let parsedCount = 0;
+        
         for (let i = 0; i < icsBlocks.length; i++) {
           let icsData = icsBlocks[i];
-          const isDebugEvent = i < 5;
-
-          // Strip the tags themselves from the match
           icsData = icsData.replace(/^<[^>]*calendar-data[^>]*>/i, '').replace(/<\/[^>]*calendar-data>$/i, '');
-
-          // Strip CDATA wrapper
           if (icsData.includes('<![CDATA[')) {
             icsData = icsData.match(/<!\[CDATA\[([\s\S]*?)\]\]>/i)?.[1] || icsData;
           }
 
-          // Unfold lines
           const unfolded = icsData.replace(/\r\n\s/g, '');
-          
-          // Brute Force Regex for key fields
           const summaryMatch = unfolded.match(/SUMMARY:(.*)/i);
           const uidMatch = unfolded.match(/UID:(.*)/i);
           const startMatch = unfolded.match(/DTSTART(?:;TZID=[^:]+)?[:](\d{8}T\d{6}Z?)/i);
@@ -187,11 +177,17 @@ Deno.serve(async (req) => {
           const dtend = endMatch?.[1]?.trim();
 
           if (uid && dtstart && dtend) {
-            const parseIcalDate = (str) => {
+            const parseIcalDate = (str, tz) => {
               const y = str.substring(0, 4), m = str.substring(4, 6), d = str.substring(6, 8);
               const h = str.substring(9, 11), min = str.substring(11, 13), s = str.substring(13, 15);
-              const dateStr = `${y}-${m}-${d}T${h}:${min}:${s}${str.endsWith('Z') ? 'Z' : ''}`;
-              return new Date(dateStr).toISOString();
+              const dateStr = `${y}-${m}-${d}T${h}:${min}:${s}`;
+              
+              if (str.endsWith('Z')) {
+                return new Date(dateStr + 'Z').toISOString();
+              }
+              
+              // If no 'Z', it's local time. Convert to UTC using user's timezone.
+              return zonedTimeToUtc(dateStr, tz).toISOString();
             };
 
             try {
@@ -199,20 +195,18 @@ Deno.serve(async (req) => {
                 user_id: user.id,
                 event_id: uid,
                 title: summary,
-                start_time: parseIcalDate(dtstart),
-                end_time: parseIcalDate(dtend),
+                start_time: parseIcalDate(dtstart, userTimezone),
+                end_time: parseIcalDate(dtend, userTimezone),
                 provider: 'apple',
                 source_calendar: cal.calendar_name,
                 source_calendar_id: cal.calendar_id,
                 last_synced_at: new Date().toISOString()
               });
-              parsedCount++;
             } catch (e) {
-              if (isDebugEvent) console.error(`[${functionName}] [Debug] Parsing Error for ${summary}: ${e.message}`);
+              console.error(`[${functionName}] Parsing Error for ${summary}: ${e.message}`);
             }
           }
         }
-        console.log(`[${functionName}] Successfully parsed ${parsedCount} events from ${cal.calendar_name}`);
       } catch (err) {
         console.error(`[${functionName}] Error in ${cal.calendar_name}:`, err.message);
       }
@@ -229,7 +223,6 @@ Deno.serve(async (req) => {
     }
 
     if (allEvents.length > 0) {
-      console.log(`[${functionName}] Upserting ${allEvents.length} total Apple events to database`);
       const upsertRes = await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
         method: 'POST',
         headers: { 
