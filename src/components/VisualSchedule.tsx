@@ -20,7 +20,7 @@ const VisualSchedule = ({
   changes = [], 
   appliedChanges = [], 
   isVetted = false,
-  workKeywords = ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt'],
+  workKeywords = ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt', 'program', 'ceremony', 'gig', 'meetup', 'planning', 'workshop', 'presentation'],
   timezone = 'Australia/Melbourne'
 }: VisualScheduleProps) => {
   

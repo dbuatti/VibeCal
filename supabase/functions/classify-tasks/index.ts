@@ -18,7 +18,7 @@ Deno.serve(async (req) => {
       tasks, 
       movableKeywords = [], 
       lockedKeywords = [], 
-      workKeywords = [],
+      workKeywords = ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt', 'program', 'ceremony', 'gig', 'meetup', 'planning', 'workshop', 'presentation'],
       naturalLanguageRules = '', 
       persist = false 
     } = body;
@@ -29,7 +29,7 @@ Deno.serve(async (req) => {
     console.log(`[${functionName}] Processing ${taskList.length} tasks. Persist: ${persist}`);
 
     // 1. Heuristic Classification
-    const HARD_FIXED = /flight|train|hotel|reservation|doctor|dentist|hospital|clinic|surgery|medical|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary|appointment|appt|interview|vs|meeting with|call with|zoom|teams|google meet|skype|facetime|session with|coaching|lesson|rehearsal|audition|workshop|seminar|webinar|conference|travel to|commute|drive to|haircut|dinner with|lunch with|brunch with|coffee with|statement|foundations|q & a/i;
+    const HARD_FIXED = /flight|train|hotel|reservation|doctor|dentist|hospital|clinic|surgery|medical|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary|appointment|appt|interview|vs|meeting with|call with|zoom|teams|google meet|skype|facetime|session with|coaching|lesson|rehearsal|audition|workshop|seminar|webinar|conference|travel to|commute|drive to|haircut|dinner with|lunch with|brunch with|coffee with|statement|foundations|q & a|meetup/i;
     const HARD_MOVABLE = /solo|draft|research|tidy|clean|practice|read|study|admin|email|gym|workout|run|walk|meditate|yoga|journal|laundry|groceries|shopping|vacuum|mop|dust|organize|filing|backup|update|coding|programming|writing|blog|post|social media/i;
 
     const results = taskList.map(title => {

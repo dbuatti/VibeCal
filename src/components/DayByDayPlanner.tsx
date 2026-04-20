@@ -44,7 +44,7 @@ const DayByDayPlanner = ({
   onReinsertTask,
   maxHours, 
   maxTasks,
-  workKeywords = ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt', 'program', 'ceremony'],
+  workKeywords = ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt', 'program', 'ceremony', 'gig', 'meetup', 'planning', 'workshop', 'presentation'],
   selectedDays = [1, 2, 3, 4, 5]
 }: DayByDayPlannerProps) => {
   const timezone = 'Australia/Melbourne';
@@ -134,7 +134,6 @@ const DayByDayPlanner = ({
   }, [allDates, changes, appliedChanges, hasAutoDefaulted]);
 
   const stats = useMemo(() => {
-    // DEDUPLICATION: Ensure we don't count the same event twice if it's in both lists
     const changedIds = new Set(changes.map(c => c.event_id));
     
     const eventsOnThisDay = [
@@ -186,7 +185,7 @@ const DayByDayPlanner = ({
       isOverTasks: taskEvents.length > maxTasks,
       isOverHours: (totalWorkMinutes / 60) > maxHours
     };
-  }, [dayLockedEvents, changes, currentDateStr, maxTasks, maxHours]);
+  }, [dayLockedEvents, changes, currentDateStr, maxTasks, maxHours, workKeywords]);
 
   const handleSyncDay = async () => {
     setIsSyncing(true);
