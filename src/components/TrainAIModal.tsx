@@ -57,7 +57,8 @@ const TrainAIModal = ({ isOpen, onClose, task, onSuccess }: TrainAIModalProps) =
         .single();
 
       const currentRules = settings?.natural_language_rules || '';
-      const newRuleEntry = `\n- ${rule} (Classification: ${isMovable ? 'Movable' : 'Fixed'})`;
+      // Explicitly include the task title in the rule string for AI context
+      const newRuleEntry = `\n- For tasks like "${task.title}": ${rule} (Classification: ${isMovable ? 'Movable' : 'Fixed'})`;
       const updatedRules = currentRules + newRuleEntry;
 
       await supabase
