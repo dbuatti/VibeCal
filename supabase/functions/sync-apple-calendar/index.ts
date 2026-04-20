@@ -1,6 +1,5 @@
 // @ts-nocheck
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
-import ICAL from "https://esm.sh/ical.js@1.5.0"
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -159,94 +158,62 @@ Deno.serve(async (req) => {
 
         let parsedCount = 0;
         for (const resp of eventResponses) {
-          // 1. Extract the calendar-data content
+          // 1. Brute Force Extract calendar-data
           const icsMatch = resp.match(/calendar-data[^>]*>([\s\S]*?)<\/.*?calendar-data>/i);
           let icsData = icsMatch?.[1];
           
           if (icsData) {
-            // 2. Strip CDATA wrapper (CRITICAL FIX)
+            // 2. Strip CDATA wrapper
             if (icsData.includes('<![CDATA[')) {
               icsData = icsData.match(/<!\[CDATA\[([\s\S]*?)\]\]>/i)?.[1] || icsData;
             }
 
-            // 3. Decode XML entities
-            icsData = icsData
-              .replace(/&quot;/g, '"')
-              .replace(/&/g, '&')
-              .replace(/</g, '<')
-              .replace(/>/g, '>')
-              .trim();
+            // 3. Log first 100 characters for debugging (as requested)
+            const debugSnippet = icsData.substring(0, 100).replace(/\r/g, '\\r').replace(/\n/g, '\\n');
+            console.log(`[${functionName}] Raw Snippet (100 chars): ${debugSnippet}`);
+
+            // 4. Unfold lines (iCal standard: CRLF followed by a space means the line continues)
+            const unfolded = icsData.replace(/\r\n\s/g, '');
+
+            // 5. Brute Force Regex for key fields
+            const summaryMatch = unfolded.match(/SUMMARY:(.*)/i);
+            const uidMatch = unfolded.match(/UID:(.*)/i);
             
-            const currentParsedCount = parsedCount;
-            try {
-              // 4. Main Parser (ICAL.js)
-              const jcalData = ICAL.parse(icsData);
-              const vcalendar = new ICAL.Component(jcalData);
-              const vevents = vcalendar.getAllSubcomponents('vevent');
-              
-              for (const vevent of vevents) {
-                const event = new ICAL.Event(vevent);
-                const uid = event.uid || vevent.getFirstPropertyValue('uid');
-                const summary = event.summary || vevent.getFirstPropertyValue('summary') || 'Untitled';
-                
-                if (!uid || !event.startDate) continue;
-                
+            // Specific regex for dates accounting for TZID and semicolons
+            const startMatch = unfolded.match(/DTSTART(?:;TZID=[^:]+)?[:](\d{8}T\d{6}Z?)/i);
+            const endMatch = unfolded.match(/DTEND(?:;TZID=[^:]+)?[:](\d{8}T\d{6}Z?)/i);
+
+            const summary = summaryMatch?.[1]?.trim() || 'Untitled';
+            const uid = uidMatch?.[1]?.trim();
+            const dtstart = startMatch?.[1]?.trim();
+            const dtend = endMatch?.[1]?.trim();
+
+            if (uid && dtstart && dtend) {
+              const parseIcalDate = (str) => {
+                // Handle 20260310T120000 format
+                const y = str.substring(0, 4), m = str.substring(4, 6), d = str.substring(6, 8);
+                const h = str.substring(9, 11), min = str.substring(11, 13), s = str.substring(13, 15);
+                // Note: This creates a local date object. If 'Z' is present, it's UTC.
+                // Apple usually provides local time + TZID, so we treat as local if no Z.
+                const dateStr = `${y}-${m}-${d}T${h}:${min}:${s}${str.endsWith('Z') ? 'Z' : ''}`;
+                return new Date(dateStr).toISOString();
+              };
+
+              try {
                 allEvents.push({
                   user_id: user.id,
                   event_id: uid,
                   title: summary,
-                  start_time: event.startDate.toJSDate().toISOString(),
-                  end_time: event.endDate.toJSDate().toISOString(),
+                  start_time: parseIcalDate(dtstart),
+                  end_time: parseIcalDate(dtend),
                   provider: 'apple',
                   source_calendar: cal.calendar_name,
                   source_calendar_id: cal.calendar_id,
                   last_synced_at: new Date().toISOString()
                 });
                 parsedCount++;
-              }
-            } catch (parseErr) {
-              // Fallback to regex if ICAL.js fails
-            }
-
-            // 5. Fallback Parser (Regex) - Extremely robust for Apple format
-            if (parsedCount === currentParsedCount) {
-              const summary = icsData.match(/SUMMARY:(.*)/i)?.[1]?.trim() || 'Untitled';
-              const uid = icsData.match(/UID:(.*)/i)?.[1]?.trim();
-              
-              // Handle DTSTART;TZID=Australia/Melbourne:20260310T112800
-              const dtstartMatch = icsData.match(/DTSTART(?:;[^:]*)?:(.*)/i);
-              const dtendMatch = icsData.match(/DTEND(?:;[^:]*)?:(.*)/i);
-              
-              const dtstart = dtstartMatch?.[1]?.trim();
-              const dtend = dtendMatch?.[1]?.trim();
-
-              if (uid && dtstart && dtend) {
-                const parseIcalDate = (str) => {
-                  // Handle 20260310T120000 format
-                  if (str.length >= 15) {
-                    const y = str.substring(0, 4), m = str.substring(4, 6), d = str.substring(6, 8);
-                    const h = str.substring(9, 11), min = str.substring(11, 13), s = str.substring(13, 15);
-                    return new Date(`${y}-${m}-${d}T${h}:${min}:${s}`).toISOString();
-                  }
-                  // Handle 20260310 (All day)
-                  const y = str.substring(0, 4), m = str.substring(4, 6), d = str.substring(6, 8);
-                  return new Date(`${y}-${m}-${d}T00:00:00`).toISOString();
-                };
-
-                try {
-                  allEvents.push({
-                    user_id: user.id,
-                    event_id: uid,
-                    title: summary,
-                    start_time: parseIcalDate(dtstart),
-                    end_time: parseIcalDate(dtend),
-                    provider: 'apple',
-                    source_calendar: cal.calendar_name,
-                    source_calendar_id: cal.calendar_id,
-                    last_synced_at: new Date().toISOString()
-                  });
-                  parsedCount++;
-                } catch (e) {}
+              } catch (e) {
+                console.error(`[${functionName}] Date Parse Error for ${summary}:`, e.message);
               }
             }
           }
