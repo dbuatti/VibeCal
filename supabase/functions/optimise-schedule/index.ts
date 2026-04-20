@@ -50,7 +50,7 @@ serve(async (req) => {
       group_similar_tasks: true,
       work_keywords: ['meeting', 'call', 'lesson', 'audition', 'rehearsal']
     };
-    const userTimezone = profileRes.data?.timezone || 'Australia/Melbourne';
+    const userTimezone = profileRes.data?.timezone || 'Australia/Sydney';
     const allEvents = eventsRes.data || [];
     const dayThemes = themesRes.data || [];
     const workKeywords = settings.work_keywords || [];
@@ -64,7 +64,7 @@ serve(async (req) => {
 
     console.log(`[${functionName}] --- DIAGNOSTIC START ---`);
     console.log(`[${functionName}] TODAY: ${todayStr} | TZ: ${userTimezone}`);
-    console.log(`[${functionName}] SELECTED DAYS: ${JSON.stringify(selectedDays)}`);
+    console.log(`[${functionName}] TOTAL EVENTS IN CACHE: ${allEvents.length}`);
 
     const seenIds = new Set();
     const uniqueEvents = allEvents.filter(e => {
@@ -75,6 +75,8 @@ serve(async (req) => {
 
     const fixedEvents = uniqueEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
     const movableEvents = uniqueEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
+
+    console.log(`[${functionName}] FIXED: ${fixedEvents.length} | MOVABLE: ${movableEvents.length}`);
 
     const alignTime = (date, alignmentMinutes) => {
       const ms = alignmentMinutes * 60 * 1000;
@@ -103,7 +105,7 @@ serve(async (req) => {
 
     let categories = movableEvents.map(() => "General");
     const themeList = dayThemes.map(t => t.theme).filter(Boolean);
-    if (themeList.length > 0) {
+    if (themeList.length > 0 && movableEvents.length > 0) {
       try {
         const geminiKey = Deno.env.get('GEMINI_API_KEY');
         if (geminiKey) {
@@ -142,6 +144,8 @@ serve(async (req) => {
       const durationMs = effectiveDuration * 60000;
       let foundSlot = false;
 
+      console.log(`[${functionName}] Processing: "${event.title}" (${effectiveDuration}m)`);
+
       for (let pass = 0; pass <= 2; pass++) {
         if (foundSlot) break;
         
@@ -151,8 +155,6 @@ serve(async (req) => {
           const dayKey = formatInTimeZone(currentDay, userTimezone, 'yyyy-MM-dd');
           const isToday = (dayKey === todayStr);
           
-          // FIX: Use a more robust day-of-week calculation that ignores server UTC
-          // 'i' returns 1 (Mon) to 7 (Sun). We map 7 to 0 to match [0=Sun, 1=Mon...]
           const isoDayStr = formatInTimeZone(currentDay, userTimezone, 'i');
           const isoDay = parseInt(isoDayStr);
           const dayOfWeek = isoDay === 7 ? 0 : isoDay;
@@ -160,14 +162,17 @@ serve(async (req) => {
           if (pass === 0 && !isToday) break; 
 
           if (!selectedDays.includes(dayOfWeek)) {
-            if (isToday) console.log(`[${functionName}] TODAY SKIP: Day ${dayOfWeek} (ISO: ${isoDayStr}) not in selectedDays ${JSON.stringify(selectedDays)}`);
             dayOffset++; continue; 
           }
 
           if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
           const stats = dailyStats.get(dayKey);
           
-          if (stats.tasks >= maxTasks || stats.hours >= maxWorkHours) {
+          if (stats.tasks >= maxTasks) {
+            dayOffset++; continue;
+          }
+          
+          if (stats.hours >= maxWorkHours) {
             dayOffset++; continue;
           }
 
@@ -215,6 +220,7 @@ serve(async (req) => {
                 is_surplus: false,
                 category: event.temp_category
               });
+              console.log(`[${functionName}]   -> Found slot on ${dayKey} at ${searchPointer.toISOString()}`);
             }
           }
           if (!foundSlot) dayOffset++;
@@ -222,6 +228,7 @@ serve(async (req) => {
       }
 
       if (!foundSlot && placeholderDate) {
+        console.log(`[${functionName}]   -> No slot found, moving to surplus`);
         const pDate = toDate(`${placeholderDate}T${settings.day_start_time}:00`, { timeZone: userTimezone });
         const pStart = new Date(pDate.getTime() + (surplusCount * 60000));
         const pEnd = new Date(pStart.getTime() + durationMs);
@@ -242,6 +249,7 @@ serve(async (req) => {
       }
     }
 
+    console.log(`[${functionName}] FINISHED - Total Changes: ${proposedChanges.length}`);
     return new Response(JSON.stringify({ changes: proposedChanges }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
     console.error(`[${functionName}] Error:`, error.message);
