@@ -10,9 +10,9 @@ import RequirementsForm from '@/components/RequirementsForm';
 import PlanPageHeader from '@/components/plan/PlanPageHeader';
 import PlanInitialView from '@/components/plan/PlanInitialView';
 import PlanLoadingView from '@/components/plan/PlanLoadingView';
-import { Card } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { format, nextSaturday, parseISO, addMinutes, isAfter } from 'date-fns';
-import { AlertCircle, LogIn } from 'lucide-react';
+import { AlertCircle, LogIn, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 type PlanStep = 'initial' | 'analysis' | 'vetting_tasks' | 'requirements' | 'active_plan';
@@ -75,7 +75,8 @@ const Plan = () => {
         if (s.placeholder_date) setPlaceholderDate(s.placeholder_date);
       }
 
-      if (eventsRes.data) setEvents(eventsRes.data);
+      const fetchedEvents = eventsRes.data || [];
+      setEvents(fetchedEvents);
 
       if (history) {
         setProposal(history);
@@ -84,6 +85,8 @@ const Plan = () => {
           .map((c: any) => c.event_id);
         setAppliedChanges(appliedIds);
         setCurrentStep('active_plan');
+      } else if (fetchedEvents.length > 0) {
+        setCurrentStep('requirements');
       } else {
         setCurrentStep('initial');
       }
@@ -110,7 +113,6 @@ const Plan = () => {
         
         let token = session?.provider_token;
 
-        // Token Fallback: If session token is missing, check the profile cache
         if (!token && user) {
           const { data: profile } = await supabase
             .from('profiles')
@@ -122,7 +124,6 @@ const Plan = () => {
 
         setStatusText('Syncing calendars...');
         
-        // Parallelize Google and Apple syncs
         const syncPromises = [
           supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: token } }),
           supabase.functions.invoke('sync-apple-calendar')
@@ -130,7 +131,6 @@ const Plan = () => {
 
         const results = await Promise.allSettled(syncPromises);
         
-        // Check Google Sync Result (Primary)
         const googleResult = results[0];
         if (googleResult.status === 'fulfilled') {
           const { data, error } = googleResult.value;
@@ -146,14 +146,7 @@ const Plan = () => {
               showError("Google session expired. Please reconnect.");
               return;
             }
-            // We don't throw here yet, let's see if Apple worked
           }
-        }
-
-        // Check Apple Sync Result
-        const appleResult = results[1];
-        if (appleResult.status === 'rejected') {
-          console.error("Apple sync failed:", appleResult.reason);
         }
       } else {
         setStatusText('Loading cached data...');
@@ -167,6 +160,7 @@ const Plan = () => {
         
       setEvents(fetchedEvents || []);
       
+      // Always go to vetting after a sync if we don't have an active plan
       if (currentStep !== 'active_plan') {
         navigate('/vet');
       }
@@ -189,9 +183,7 @@ const Plan = () => {
     setIsProcessing(true);
     setStatusText('Performing atomic system reset...');
     try {
-      // Use the RPC for an atomic reset
       const { error } = await supabase.rpc('full_reset_user_data');
-      
       if (error) throw error;
       
       setEvents([]);
@@ -276,7 +268,7 @@ const Plan = () => {
       await supabase.from('optimisation_history').update({ status: 'cancelled' }).eq('id', proposal.id);
       setProposal(null);
       setAppliedChanges([]);
-      setCurrentStep('initial');
+      setCurrentStep('requirements'); // Go back to requirements instead of initial
       showSuccess("Plan cleared");
     } catch (err: any) { 
       showError("Failed to reset"); 
@@ -501,6 +493,23 @@ const Plan = () => {
               onSyncFresh={() => runAnalysis(false)}
               onUseCache={() => runAnalysis(true)}
             />
+          )}
+
+          {currentStep === 'requirements' && (
+            <div className="max-w-2xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-700">
+              <Card className="border-none shadow-2xl rounded-[3rem] overflow-hidden bg-white">
+                <CardHeader className="p-12 bg-indigo-600 text-white">
+                  <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center mb-6 backdrop-blur-md">
+                    <Sparkles size={32} />
+                  </div>
+                  <CardTitle className="text-3xl font-black tracking-tight">Generate Your Plan</CardTitle>
+                  <p className="text-indigo-100 font-medium mt-2">Your tasks are vetted. Now, let's align them with your work window.</p>
+                </CardHeader>
+                <CardContent className="p-12">
+                  {renderRequirementsForm()}
+                </CardContent>
+              </Card>
+            </div>
           )}
 
           {currentStep === 'active_plan' && proposal && (
