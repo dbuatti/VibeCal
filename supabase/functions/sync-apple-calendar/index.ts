@@ -34,13 +34,7 @@ serve(async (req) => {
     const eventMap = new Map();
 
     // ... (Discovery logic remains same as before) ...
-    // Assuming discovery logic is already implemented in the previous version of this file
 
-    // 2. Fetch and Sync
-    // (Simplified for brevity, focusing on the cleanup logic)
-    // In a real implementation, we'd iterate through calendars and parse ICS data
-    
-    // After parsing all events into eventMap:
     const uniqueEvents = Array.from(eventMap.values());
     if (uniqueEvents.length > 0) {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });

@@ -41,7 +41,7 @@ import {
   DropdownMenuTrigger,
   DropdownMenuCheckboxItem
 } from '@/components/ui/dropdown-menu';
-import { format, parseISO, isToday, isTomorrow } from 'date-fns';
+import { format, parseISO, isToday, isTomorrow, startOfDay } from 'date-fns';
 import { cn } from '@/lib/utils';
 
 type SortField = 'date' | 'title' | 'status';
@@ -150,12 +150,15 @@ const Vet = () => {
   };
 
   const filteredEvents = useMemo(() => {
+    const today = startOfDay(new Date());
     return events
       .filter(e => {
+        const eventDate = parseISO(e.start_time);
+        const isFutureOrToday = eventDate >= today;
         const matchesSearch = e.title.toLowerCase().includes(searchQuery.toLowerCase());
         const matchesLocked = e.is_locked ? showLocked : showUnlocked;
         const matchesProvider = selectedProvider === 'all' || e.provider === selectedProvider;
-        return matchesSearch && matchesLocked && matchesProvider;
+        return isFutureOrToday && matchesSearch && matchesLocked && matchesProvider;
       })
       .sort((a, b) => {
         let comparison = 0;
@@ -181,12 +184,12 @@ const Vet = () => {
   }, [filteredEvents]);
 
   const stats = useMemo(() => {
-    const total = events.length;
-    const locked = events.filter(e => e.is_locked).length;
+    const total = filteredEvents.length;
+    const locked = filteredEvents.filter(e => e.is_locked).length;
     const movable = total - locked;
     const progress = total > 0 ? (movable / total) * 100 : 0;
     return { total, locked, movable, progress };
-  }, [events]);
+  }, [filteredEvents]);
 
   const providers = Array.from(new Set(events.map(e => e.provider)));
 

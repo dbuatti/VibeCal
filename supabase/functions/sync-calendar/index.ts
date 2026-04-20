@@ -85,9 +85,9 @@ serve(async (req) => {
       return new Response(JSON.stringify({ count: 0, message: "No calendars enabled" }), { headers: corsHeaders });
     }
 
-    // 3. Sync Window: Look back 30 days and forward 365 days
+    // 3. Sync Window: Look back 1 day and forward 365 days
     const syncStartTime = new Date();
-    syncStartTime.setDate(syncStartTime.getDate() - 30);
+    syncStartTime.setDate(syncStartTime.getDate() - 1);
     const syncEndTime = new Date();
     syncEndTime.setDate(syncEndTime.getDate() + 365);
     
@@ -170,7 +170,6 @@ serve(async (req) => {
     }
     
     // 4. Cleanup: Remove events that were NOT seen in this sync but are within the sync window
-    // We use a small buffer (1 minute) to avoid deleting events we just upserted due to timestamp precision
     const cleanupThreshold = new Date(new Date(syncTimestamp).getTime() - 60000).toISOString();
     
     const { error: deleteError, count: deletedCount } = await supabaseAdmin.from('calendar_events_cache')
