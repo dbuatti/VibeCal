@@ -52,7 +52,6 @@ Deno.serve(async (req) => {
     };
 
     // 3. Discover Principal
-    console.log(`[${functionName}] Step 1: Discovering principal...`);
     const principalRes = await fetch(`${baseUrl}/`, { 
       method: 'PROPFIND', 
       headers, 
@@ -71,7 +70,6 @@ Deno.serve(async (req) => {
     const principalUrl = principalPath.startsWith('http') ? principalPath : `${baseUrl}${principalPath}`;
 
     // 4. Discover Home Set
-    console.log(`[${functionName}] Step 2: Discovering home set...`);
     const homeRes = await fetch(principalUrl, {
       method: 'PROPFIND',
       headers,
@@ -89,7 +87,6 @@ Deno.serve(async (req) => {
     const homeUrl = homePath.startsWith('http') ? homePath : `${baseUrl}${homePath}`;
 
     // 5. Discover Calendars
-    console.log(`[${functionName}] Step 3: Discovering calendars...`);
     const calsRes = await fetch(homeUrl, {
       method: 'PROPFIND',
       headers: { ...headers, 'Depth': '1' },
@@ -115,9 +112,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    console.log(`[${functionName}] Discovered ${discoveredCalendars.length} Apple calendars`);
-
-    // 6. Sync Calendar List to DB
+    // 6. Sync Calendar List and Respect Settings
     const existingCalsRes = await fetch(`${supabaseUrl}/rest/v1/user_calendars?user_id=eq.${user.id}&provider=eq.apple`, {
       headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
     });
@@ -125,12 +120,17 @@ Deno.serve(async (req) => {
 
     const calendarsToUpsert = discoveredCalendars.map(cal => {
       const existing = existingCals.find(e => e.calendar_id === cal.calendar_id);
-      // Default to enabled only for the first few calendars to avoid timeout on first sync
-      // User can enable more in settings
-      return {
-        ...cal,
-        is_enabled: existing ? existing.is_enabled : (discoveredCalendars.indexOf(cal) < 5)
-      };
+      
+      // If it's a new calendar, default to DISABLED (user must check it in settings)
+      // UNLESS they have no calendars at all, then enable the first one for onboarding.
+      let isEnabled = false;
+      if (existing) {
+        isEnabled = existing.is_enabled;
+      } else if (existingCals.length === 0 && discoveredCalendars.indexOf(cal) === 0) {
+        isEnabled = true;
+      }
+
+      return { ...cal, is_enabled: isEnabled };
     });
 
     if (calendarsToUpsert.length > 0) {
@@ -141,9 +141,11 @@ Deno.serve(async (req) => {
       });
     }
 
-    // 7. Fetch Events for Enabled Calendars
+    // 7. Fetch Events ONLY for Enabled Calendars
     const enabledCalendars = calendarsToUpsert.filter(c => c.is_enabled);
-    console.log(`[${functionName}] Fetching events for ${enabledCalendars.length} enabled calendars`);
+    const disabledCalendarIds = calendarsToUpsert.filter(c => !c.is_enabled).map(c => c.calendar_id);
+    
+    console.log(`[${functionName}] Syncing ${enabledCalendars.length} enabled calendars. Skipping ${disabledCalendarIds.length} disabled ones.`);
     
     const allEvents = [];
     const now = new Date();
@@ -152,7 +154,6 @@ Deno.serve(async (req) => {
 
     for (const cal of enabledCalendars) {
       try {
-        console.log(`[${functionName}] Fetching: ${cal.calendar_name}`);
         const reportRes = await fetch(cal.calendar_id, {
           method: 'REPORT',
           headers: { ...headers, 'Content-Type': 'application/xml; charset=utf-8' },
@@ -169,14 +170,10 @@ Deno.serve(async (req) => {
             </C:calendar-query>`
         });
 
-        if (!reportRes.ok) {
-          console.warn(`[${functionName}] Failed to fetch ${cal.calendar_name}: ${reportRes.status}`);
-          continue;
-        }
+        if (!reportRes.ok) continue;
 
         const reportText = await reportRes.text();
         const eventResponses = reportText.split(/<[^:]*:?response/i).slice(1);
-        let calEventCount = 0;
         
         for (const resp of eventResponses) {
           const icsData = resp.match(/<[^:]*:?calendar-data[^>]*>([\s\S]*?)<\/[^:]*:?calendar-data>/i)?.[1];
@@ -202,39 +199,33 @@ Deno.serve(async (req) => {
                 source_calendar_id: cal.calendar_id,
                 last_synced_at: new Date().toISOString()
               });
-              calEventCount++;
             }
-          } catch (e) {
-            // Skip individual malformed events
-          }
+          } catch (e) {}
         }
-        console.log(`[${functionName}] Found ${calEventCount} events in ${cal.calendar_name}`);
       } catch (err) {
-        console.error(`[${functionName}] Error processing calendar ${cal.calendar_name}:`, err.message);
+        console.error(`[${functionName}] Error in ${cal.calendar_name}:`, err.message);
       }
     }
 
-    // 8. Upsert Events to Cache
+    // 8. Cleanup and Upsert
+    // First, delete events from cache for any calendar that is now disabled
+    if (disabledCalendarIds.length > 0) {
+      console.log(`[${functionName}] Cleaning up cache for ${disabledCalendarIds.length} disabled calendars`);
+      for (const calId of disabledCalendarIds) {
+        await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&source_calendar_id=eq.${encodeURIComponent(calId)}`, {
+          method: 'DELETE',
+          headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
+        });
+      }
+    }
+
+    // Then upsert the new events
     if (allEvents.length > 0) {
-      console.log(`[${functionName}] Total Apple events found: ${allEvents.length}. Upserting to cache...`);
-      const upsertRes = await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
+      await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
         method: 'POST',
-        headers: { 
-          'apikey': supabaseKey, 
-          'Authorization': `Bearer ${supabaseKey}`, 
-          'Content-Type': 'application/json', 
-          'Prefer': 'resolution=merge-duplicates' 
-        },
+        headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}`, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' },
         body: JSON.stringify(allEvents)
       });
-      
-      if (!upsertRes.ok) {
-        console.error(`[${functionName}] Cache Upsert Error:`, await upsertRes.text());
-      } else {
-        console.log(`[${functionName}] Successfully cached ${allEvents.length} events.`);
-      }
-    } else {
-      console.log(`[${functionName}] No events found in any enabled calendars.`);
     }
 
     return new Response(JSON.stringify({ count: allEvents.length }), { 
