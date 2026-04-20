@@ -13,7 +13,7 @@ const Login = () => {
       options: {
         queryParams: {
           access_type: 'offline',
-          prompt: 'consent',
+          prompt: 'consent', // Force consent to ensure we get a refresh token every time
         },
         scopes: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events'
       }

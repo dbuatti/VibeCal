@@ -13,10 +13,12 @@ async function refreshGoogleToken(refreshToken: string, functionName: string) {
   const clientSecret = Deno.env.get('GOOGLE_CLIENT_SECRET');
 
   if (!clientId || !clientSecret) {
-    console.error(`[${functionName}] CRITICAL: GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET is not set in Supabase secrets.`);
-    throw new Error("Server configuration error: Missing Google API credentials");
+    console.error(`[${functionName}] CRITICAL: GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET is not set in Edge Function Secrets.`);
+    throw new Error("Server configuration error: Missing Google API credentials in Edge Function Secrets");
   }
 
+  console.log(`[${functionName}] Requesting new access token from Google...`);
+  
   const res = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -30,9 +32,12 @@ async function refreshGoogleToken(refreshToken: string, functionName: string) {
 
   const data = await res.json();
   if (!res.ok) {
-    console.error(`[${functionName}] Google Token Refresh Error:`, JSON.stringify(data));
-    throw new Error(`Failed to refresh Google token: ${data.error_description || data.error || 'Unknown error'}`);
+    console.error(`[${functionName}] Google Token Refresh Error Response:`, JSON.stringify(data));
+    // If it's an invalid_grant, it means the refresh token is dead
+    const errorMsg = data.error_description || data.error || 'Unknown error';
+    throw new Error(`Google Refresh Failed (${data.error || 'error'}): ${errorMsg}`);
   }
+  
   return data.access_token;
 }
 
@@ -62,27 +67,30 @@ serve(async (req) => {
 
     if (!token && !refreshToken) {
       console.warn(`[${functionName}] No tokens found for user ${user.id}`);
-      return new Response(JSON.stringify({ error: "Missing Google Access Token" }), { status: 401, headers: corsHeaders });
+      return new Response(JSON.stringify({ error: "Missing Google Access Token. Please re-authenticate." }), { status: 401, headers: corsHeaders });
     }
 
-    // Check if token is valid by doing a lightweight request
+    // Check if token is valid
     let listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1', { 
       headers: { Authorization: `Bearer ${token}` } 
     });
 
-    if (listRes.status === 401 && refreshToken) {
-      console.log(`[${functionName}] Token expired, attempting refresh...`);
-      try {
-        token = await refreshGoogleToken(refreshToken, functionName);
-        await supabaseAdmin.from('profiles').update({ google_access_token: token }).eq('id', user.id);
-        console.log(`[${functionName}] Token refreshed successfully`);
-      } catch (refreshErr) {
-        console.error(`[${functionName}] Refresh failed:`, refreshErr.message);
-        throw refreshErr;
+    if (listRes.status === 401) {
+      if (refreshToken) {
+        console.log(`[${functionName}] Access token expired, attempting refresh with stored refresh token...`);
+        try {
+          token = await refreshGoogleToken(refreshToken, functionName);
+          await supabaseAdmin.from('profiles').update({ google_access_token: token }).eq('id', user.id);
+          console.log(`[${functionName}] Token refreshed and saved to profile`);
+        } catch (refreshErr) {
+          console.error(`[${functionName}] Refresh process failed:`, refreshErr.message);
+          // Return 401 so the frontend knows it needs a full re-login
+          return new Response(JSON.stringify({ error: "Authentication expired", details: refreshErr.message }), { status: 401, headers: corsHeaders });
+        }
+      } else {
+        console.error(`[${functionName}] Token expired and no refresh token available in profile`);
+        return new Response(JSON.stringify({ error: "Session expired. Please log in again to grant calendar access." }), { status: 401, headers: corsHeaders });
       }
-    } else if (listRes.status === 401 && !refreshToken) {
-      console.error(`[${functionName}] Token expired and no refresh token available`);
-      throw new Error("Session expired. Please log in again.");
     }
 
     // Discover calendars
@@ -93,7 +101,7 @@ serve(async (req) => {
     if (!fullListRes.ok) {
       const errData = await fullListRes.json();
       console.error(`[${functionName}] Calendar List Error:`, JSON.stringify(errData));
-      throw new Error("Failed to fetch calendar list from Google");
+      throw new Error(`Google API Error: ${errData.error?.message || 'Failed to fetch calendar list'}`);
     }
 
     const listData = await fullListRes.json();
@@ -113,6 +121,11 @@ serve(async (req) => {
     const { data: allCals } = await supabaseAdmin.from('user_calendars').select('calendar_id, calendar_name, is_enabled').eq('user_id', user.id).eq('provider', 'google');
     const enabledCalendars = (allCals || []).filter(c => c.is_enabled);
     
+    if (enabledCalendars.length === 0) {
+      console.log(`[${functionName}] No Google calendars enabled for user`);
+      return new Response(JSON.stringify({ count: 0, message: "No calendars enabled" }), { headers: corsHeaders });
+    }
+
     const syncStartTime = new Date();
     syncStartTime.setDate(syncStartTime.getDate() - 1);
     const syncEndTime = new Date();
@@ -152,8 +165,7 @@ serve(async (req) => {
         let startIso, endIso;
 
         const eventTimeZone = event.start.timeZone || userTimezone;
-        const rawStart = event.start.dateTime || event.start.date;
-
+        
         if (event.start.dateTime) {
           startIso = interpretToUtc(event.start.dateTime, eventTimeZone);
           endIso = interpretToUtc(event.end.dateTime, eventTimeZone);
