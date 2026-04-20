@@ -81,9 +81,7 @@ serve(async (req) => {
     const offsetMs = formattedMidnight.getTime() - localMidnight.getTime();
     const utcTodayStart = new Date(localMidnight.getTime() - offsetMs);
 
-    console.log(`[${functionName}] Timezone: ${userTimezone} | UTC Today Start: ${utcTodayStart.toISOString()}`);
-
-    // Deduplicate events by event_id to prevent double-scheduling
+    // Deduplicate events by event_id
     const seenIds = new Set();
     const uniqueEvents = allEvents.filter(e => {
       if (seenIds.has(e.event_id)) return false;
@@ -143,13 +141,24 @@ serve(async (req) => {
       return new Date(Math.ceil(date.getTime() / ms) * ms);
     };
 
+    // Pre-calculate stats for fixed events
     fixedEvents.forEach(f => {
       const dayKey = new Intl.DateTimeFormat('en-CA', { timeZone: userTimezone }).format(new Date(f.start_time));
+      if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
+      const stats = dailyStats.get(dayKey);
+      
       const isWork = workKeywords.some(kw => f.title.toLowerCase().includes(kw.toLowerCase()));
       if (isWork) {
-        if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
         const duration = (new Date(f.end_time).getTime() - new Date(f.start_time).getTime()) / 3600000;
-        dailyStats.get(dayKey).hours += duration;
+        stats.hours += duration;
+      }
+      
+      // Count as a task if it's not a break or meal
+      const isTask = !f.title?.toLowerCase().includes('lunch') && 
+                     !f.title?.toLowerCase().includes('break') && 
+                     !f.title?.toLowerCase().includes('dinner');
+      if (isTask) {
+        stats.tasks += 1;
       }
     });
 
@@ -185,14 +194,10 @@ serve(async (req) => {
             const dayStart = new Date(currentDayStart.getTime() + (startH * 3600000) + (startM * 60000));
             let initialPointer = alignTime(dayStart, slotAlignment);
             
-            // CRITICAL: If processing "today", ensure we don't schedule in the past
             if (dayOffset === 0) {
               const nowAligned = alignTime(new Date(), slotAlignment);
-              if (nowAligned > initialPointer) {
-                initialPointer = nowAligned;
-              }
+              if (nowAligned > initialPointer) initialPointer = nowAligned;
             }
-            
             stats.lastPointer = initialPointer;
           }
 
@@ -203,6 +208,7 @@ serve(async (req) => {
             const potentialEnd = new Date(searchPointer.getTime() + durationMs);
             const taskWorkHours = event.is_work ? (effectiveDuration / 60) : 0;
             
+            // Check if adding this task exceeds limits
             if (potentialEnd > dayEnd || (stats.hours + taskWorkHours) > maxWorkHours || stats.tasks >= maxTasks) break;
 
             const collision = fixedEvents.find(f => {
