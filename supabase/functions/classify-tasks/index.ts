@@ -8,7 +8,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-async function generateWithRetry(model, prompt, functionName, maxRetries = 2) {
+async function generateWithRetry(model, prompt, functionName, maxRetries = 3) {
   let lastError;
   for (let i = 0; i < maxRetries; i++) {
     try {
@@ -23,6 +23,7 @@ async function generateWithRetry(model, prompt, functionName, maxRetries = 2) {
       
       if (isRetryable && i < maxRetries - 1) {
         const delay = 2000 + Math.random() * 1000;
+        console.log(`[${functionName}] Retryable error. Waiting ${Math.round(delay)}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
@@ -50,7 +51,7 @@ serve(async (req) => {
     const { data: { user } } = await supabaseUser.auth.getUser();
     if (!user) throw new Error("Unauthorized");
 
-    // 1. FETCH ALL FEEDBACK FOR EXACT MATCHES
+    // 1. FETCH ALL FEEDBACK FOR EXACT MATCHES (Memory System)
     const { data: feedback } = await supabaseAdmin
       .from('task_classification_feedback')
       .select('task_name, is_movable')
@@ -96,7 +97,9 @@ serve(async (req) => {
 
         const geminiKey = Deno.env.get('GEMINI_API_KEY');
         const genAI = new GoogleGenerativeAI(geminiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        
+        // Using Gemini 2.5 Flash as the primary model
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         
         const response = await generateWithRetry(model, prompt, functionName);
         const responseText = response.text();
@@ -139,7 +142,7 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
   } catch (error) {
-    console.error(`[${functionName}] Error:`, error.message);
+    console.error(`[${functionName}] FATAL ERROR:`, error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })
