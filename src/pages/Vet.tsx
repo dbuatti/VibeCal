@@ -21,7 +21,8 @@ import {
   Globe,
   ShieldAlert,
   Send,
-  Wand2
+  Wand2,
+  RotateCcw
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -147,6 +148,34 @@ const Vet = () => {
       showSuccess("Sync and AI vetting complete!");
     } catch (err: any) {
       showError("Sync failed: " + err.message);
+    } finally {
+      setIsProcessing(false);
+      setStatusText('');
+    }
+  };
+
+  const handleResetPositions = async () => {
+    setIsProcessing(true);
+    setStatusText('Restoring original calendar times...');
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { user } } = await supabase.auth.getUser();
+      let token = session?.provider_token;
+      if (!token && user) {
+        const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
+        token = profile?.google_access_token;
+      }
+
+      // Re-syncing from providers will overwrite the local cache with original times
+      await Promise.allSettled([
+        supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: token } }),
+        supabase.functions.invoke('sync-apple-calendar')
+      ]);
+
+      await fetchEvents();
+      showSuccess("Positions reset to original calendar times!");
+    } catch (err: any) {
+      showError("Reset failed: " + err.message);
     } finally {
       setIsProcessing(false);
       setStatusText('');
@@ -409,6 +438,17 @@ const Vet = () => {
                 <ShieldAlert size={14} /> Local Intelligence Mode
               </Badge>
             )}
+
+            <Button
+              variant="outline"
+              onClick={handleResetPositions}
+              disabled={isProcessing}
+              className="rounded-2xl h-14 px-6 font-black text-xs uppercase tracking-widest flex gap-3 border-red-100 text-red-600 hover:bg-red-50 shadow-sm"
+              title="Reset all tasks to their original calendar times"
+            >
+              <RotateCcw size={20} />
+              Reset Positions
+            </Button>
 
             <button
               onClick={handleFullSync}
