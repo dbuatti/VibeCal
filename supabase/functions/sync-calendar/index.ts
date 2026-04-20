@@ -67,9 +67,6 @@ serve(async (req) => {
       .eq('provider', 'google');
 
     console.log(`[${functionName}] DB State: Found ${dbCalendars?.length || 0} Google calendars in preferences.`);
-    if (dbCalendars) {
-      dbCalendars.forEach(c => console.log(`[${functionName}] DB Entry: ${c.calendar_name} (${c.calendar_id}) - Enabled: ${c.is_enabled}`));
-    }
 
     // 2. Fetch current list from Google
     let listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { 
@@ -91,9 +88,17 @@ serve(async (req) => {
     const googleCalendars = (listData.items || []).filter(cal => !cal.id.includes('@import.calendar.google.com'));
     console.log(`[${functionName}] Google API: Found ${googleCalendars.length} calendars.`);
 
-    // 3. Discovery: Upsert new calendars to DB
+    // 3. Discovery & Smart Matching
     const discoveryPayload = googleCalendars.map(cal => {
-      const existing = dbCalendars?.find(db => db.calendar_id === cal.id);
+      // SMART MATCH: Check for exact ID match OR if this is the primary calendar, check for 'primary' in DB
+      const existing = dbCalendars?.find(db => 
+        db.calendar_id === cal.id || (cal.primary && db.calendar_id === 'primary')
+      );
+
+      if (cal.primary) {
+        console.log(`[${functionName}] Detected Primary Calendar: ${cal.summary} (${cal.id}). Match found in DB: ${!!existing}`);
+      }
+
       return {
         user_id: user.id,
         calendar_id: cal.id,
@@ -105,14 +110,13 @@ serve(async (req) => {
     });
 
     if (discoveryPayload.length > 0) {
-      const { error: upsertError } = await supabaseAdmin.from('user_calendars').upsert(discoveryPayload, { onConflict: 'user_id, calendar_id' });
-      if (upsertError) console.error(`[${functionName}] Upsert Error:`, upsertError);
+      await supabaseAdmin.from('user_calendars').upsert(discoveryPayload, { onConflict: 'user_id, calendar_id' });
     }
 
     const finalEnabledIds = discoveryPayload.filter(p => p.is_enabled).map(p => p.calendar_id);
-    console.log(`[${functionName}] Final Decision: Syncing events for ${finalEnabledIds.length} enabled calendars:`, finalEnabledIds);
+    console.log(`[${functionName}] Final Decision: Syncing events for ${finalEnabledIds.length} enabled calendars.`);
 
-    // 4. Sync Events for ENABLED calendars only
+    // 4. Sync Events
     const syncStartTime = new Date();
     syncStartTime.setDate(syncStartTime.getDate() - 1);
     const syncEndTime = new Date();
@@ -124,10 +128,7 @@ serve(async (req) => {
       .map(async (cal) => {
         const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.id)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`;
         const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-        if (!res.ok) {
-          console.error(`[${functionName}] Failed to fetch events for ${cal.summary}:`, await res.text());
-          return [];
-        }
+        if (!res.ok) return [];
         const data = await res.json();
         return (data.items || []).map(event => ({
           user_id: user.id, 
@@ -151,26 +152,19 @@ serve(async (req) => {
     const allEvents = results.flat();
 
     if (allEvents.length > 0) {
-      const { error: eventUpsertError } = await supabaseAdmin.from('calendar_events_cache').upsert(allEvents, { onConflict: 'user_id, event_id' });
-      if (eventUpsertError) console.error(`[${functionName}] Event Upsert Error:`, eventUpsertError);
+      await supabaseAdmin.from('calendar_events_cache').upsert(allEvents, { onConflict: 'user_id, event_id' });
     }
 
-    // 5. PURGE: Remove events from calendars that are now disabled
+    // 5. PURGE
     if (finalEnabledIds.length > 0) {
-      const { error: purgeError } = await supabaseAdmin
+      await supabaseAdmin
         .from('calendar_events_cache')
         .delete()
         .eq('user_id', user.id)
         .eq('provider', 'google')
         .not('source_calendar_id', 'in', `(${finalEnabledIds.map(id => `"${id}"`).join(',')})`);
-      
-      if (purgeError) console.error(`[${functionName}] Purge Error:`, purgeError);
     } else {
-      await supabaseAdmin
-        .from('calendar_events_cache')
-        .delete()
-        .eq('user_id', user.id)
-        .eq('provider', 'google');
+      await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google');
     }
 
     console.log(`[${functionName}] SUCCESS - Synced ${allEvents.length} events.`);
