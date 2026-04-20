@@ -2,6 +2,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0'
 import { format, parseISO, addMinutes, isBefore, isAfter, startOfDay, endOfDay, differenceInMinutes } from 'https://esm.sh/date-fns@2.30.0'
+import { formatInTimeZone, zonedTimeToUtc } from 'https://esm.sh/date-fns-tz@2.0.0'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -43,8 +44,11 @@ serve(async (req) => {
       day_end_time: '17:00', 
       max_hours_per_day: 6, 
       max_tasks_per_day: 5,
+      timezone: 'Australia/Melbourne',
       work_keywords: ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt']
     };
+    
+    const userTimezone = settings.timezone || 'Australia/Melbourne';
     const allEvents = eventsRes.data || [];
     const workKeywords = settings.work_keywords || [];
 
@@ -56,29 +60,31 @@ serve(async (req) => {
 
     // 3. Scheduling Logic
     const proposedChanges = [];
-    // Treat vetted events as fixed for the purpose of this run
     const fixedEvents = allEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
     const movableEvents = allEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
 
-    // We'll schedule for the next 14 days
-    const startDate = startOfDay(new Date());
+    // Start from today in user's timezone
+    const now = new Date();
+    const todayStr = formatInTimeZone(now, userTimezone, 'yyyy-MM-dd');
     
     let currentMovableIdx = 0;
 
-    // Iterate through each day
+    // Iterate through each day for the next 14 days
     for (let d = 0; d < 14; d++) {
-      const currentDay = addMinutes(startDate, d * 24 * 60);
-      const dayOfWeek = (currentDay.getDay() + 6) % 7; // 0 = Monday
+      const currentDayDate = addMinutes(zonedTimeToUtc(`${todayStr}T00:00:00`, userTimezone), d * 24 * 60);
+      const dayOfWeek = (currentDayDate.getDay() + 6) % 7; // 0 = Monday
       
       if (!selectedDays.includes(dayOfWeek)) continue;
 
-      const dayStr = format(currentDay, 'yyyy-MM-dd');
-      const dayStart = parseISO(`${dayStr}T${settings.day_start_time}:00`);
-      const dayEnd = parseISO(`${dayStr}T${settings.day_end_time}:00`);
+      const dayStr = formatInTimeZone(currentDayDate, userTimezone, 'yyyy-MM-dd');
+      
+      // Create boundaries in UTC but based on user's local time
+      const dayStart = zonedTimeToUtc(`${dayStr}T${settings.day_start_time || '09:00'}:00`, userTimezone);
+      const dayEnd = zonedTimeToUtc(`${dayStr}T${settings.day_end_time || '17:00'}:00`, userTimezone);
       
       const dayFixedEvents = fixedEvents.filter(e => {
         const start = parseISO(e.start_time);
-        return format(start, 'yyyy-MM-dd') === dayStr;
+        return formatInTimeZone(start, userTimezone, 'yyyy-MM-dd') === dayStr;
       });
 
       // Calculate existing work duration for this day
@@ -100,8 +106,8 @@ serve(async (req) => {
       }).length;
 
       let currentTime = dayStart;
-      const maxDailyMinutes = (maxHoursOverride || settings.max_hours_per_day) * 60;
-      const maxDailyTasks = maxTasksOverride || settings.max_tasks_per_day;
+      const maxDailyMinutes = (maxHoursOverride || settings.max_hours_per_day || 6) * 60;
+      const maxDailyTasks = maxTasksOverride || settings.max_tasks_per_day || 5;
 
       // Try to fit movable events into slots
       while (currentTime < dayEnd && currentMovableIdx < movableEvents.length) {
@@ -109,7 +115,7 @@ serve(async (req) => {
         if (dailyWorkMinutes >= maxDailyMinutes || dailyTaskCount >= maxDailyTasks) break;
 
         const event = movableEvents[currentMovableIdx];
-        const duration = durationOverride || event.duration_minutes || 30;
+        const duration = durationOverride === "original" || !durationOverride ? (event.duration_minutes || 30) : parseInt(durationOverride);
 
         // Find next available slot
         let slotStart = currentTime;
@@ -126,9 +132,10 @@ serve(async (req) => {
           currentTime = parseISO(collision.end_time);
           // Align to slot
           const minutes = currentTime.getMinutes();
-          const remainder = minutes % slotAlignment;
+          const alignment = parseInt(slotAlignment) || 15;
+          const remainder = minutes % alignment;
           if (remainder !== 0) {
-            currentTime = addMinutes(currentTime, slotAlignment - remainder);
+            currentTime = addMinutes(currentTime, alignment - remainder);
           }
           continue;
         }
@@ -167,7 +174,7 @@ serve(async (req) => {
         old_start: event.start_time,
         new_start: null,
         new_end: null,
-        duration: durationOverride || event.duration_minutes || 30,
+        duration: durationOverride === "original" || !durationOverride ? (event.duration_minutes || 30) : parseInt(durationOverride),
         is_surplus: true
       });
     }
