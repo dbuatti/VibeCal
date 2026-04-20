@@ -4,7 +4,8 @@ import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { Calendar, RefreshCw, Globe } from 'lucide-react';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Calendar, RefreshCw, Globe, CheckSquare, Square } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface CalendarSettingsProps {
@@ -12,6 +13,7 @@ interface CalendarSettingsProps {
   isTesting: boolean;
   onDiscover: () => void;
   onToggle: (id: string, enabled: boolean) => void;
+  onBulkToggle?: (provider: string, enabled: boolean) => void;
 }
 
 const ProviderIcon = ({ provider }: { provider: string }) => {
@@ -45,9 +47,18 @@ const CalendarSettings = ({ calendars, isTesting, onDiscover, onToggle }: Calend
 
   const providers = Object.keys(grouped).sort();
 
+  const handleBulkToggle = (provider: string, enabled: boolean) => {
+    const providerCals = grouped[provider];
+    providerCals.forEach((cal: any) => {
+      if (cal.is_enabled !== enabled) {
+        onToggle(cal.id, enabled);
+      }
+    });
+  };
+
   return (
-    <Card className="border-none shadow-sm rounded-2xl border-l-4 border-l-indigo-600">
-      <CardHeader className="pb-4">
+    <Card className="border-none shadow-sm rounded-2xl border-l-4 border-l-indigo-600 h-full flex flex-col">
+      <CardHeader className="pb-4 shrink-0">
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2 text-lg">
             <Calendar className="text-indigo-600" size={20} />
@@ -65,39 +76,59 @@ const CalendarSettings = ({ calendars, isTesting, onDiscover, onToggle }: Calend
           </Button>
         </div>
       </CardHeader>
-      <CardContent className="space-y-8">
-        {providers.length > 0 ? providers.map((provider) => (
-          <div key={provider} className="space-y-3">
-            <div className="flex items-center gap-2 px-1">
-              <ProviderIcon provider={provider} />
-              <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">
-                {provider === 'google' ? 'Google Account' : provider === 'apple' ? 'iCloud Account' : 'Other'}
-              </h3>
-            </div>
-            <div className="space-y-2">
-              {grouped[provider].map((cal: any) => (
-                <div key={cal.id} className="flex items-center justify-between p-3 bg-gray-50/50 rounded-xl border border-gray-100 hover:border-indigo-100 transition-colors">
-                  <div className="flex items-center gap-3 overflow-hidden">
-                    <div className="w-2.5 h-2.5 rounded-full shrink-0 shadow-sm" style={{ backgroundColor: cal.color || '#6366f1' }} />
-                    <span className="text-xs font-bold text-gray-700 truncate">{cal.calendar_name}</span>
+      <CardContent className="flex-1 min-h-0 p-0">
+        <ScrollArea className="h-[500px] px-6 pb-6">
+          <div className="space-y-8">
+            {providers.length > 0 ? providers.map((provider) => (
+              <div key={provider} className="space-y-4">
+                <div className="flex items-center justify-between sticky top-0 bg-white py-2 z-10 border-b border-gray-50">
+                  <div className="flex items-center gap-2">
+                    <ProviderIcon provider={provider} />
+                    <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">
+                      {provider === 'google' ? 'Google Account' : provider === 'apple' ? 'iCloud Account' : 'Other'}
+                    </h3>
                   </div>
-                  <Switch 
-                    checked={cal.is_enabled} 
-                    onCheckedChange={(val) => onToggle(cal.id, val)}
-                    className="data-[state=checked]:bg-indigo-600"
-                  />
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => handleBulkToggle(provider, true)}
+                      className="text-[8px] font-black uppercase tracking-widest text-indigo-500 hover:text-indigo-700 flex items-center gap-1"
+                    >
+                      <CheckSquare size={10} /> All
+                    </button>
+                    <button 
+                      onClick={() => handleBulkToggle(provider, false)}
+                      className="text-[8px] font-black uppercase tracking-widest text-gray-400 hover:text-gray-600 flex items-center gap-1"
+                    >
+                      <Square size={10} /> None
+                    </button>
+                  </div>
                 </div>
-              ))}
-            </div>
+                <div className="space-y-2">
+                  {grouped[provider].map((cal: any) => (
+                    <div key={cal.id} className="flex items-center justify-between p-3 bg-gray-50/50 rounded-xl border border-gray-100 hover:border-indigo-100 transition-colors">
+                      <div className="flex items-center gap-3 overflow-hidden">
+                        <div className="w-2.5 h-2.5 rounded-full shrink-0 shadow-sm" style={{ backgroundColor: cal.color || '#6366f1' }} />
+                        <span className="text-xs font-bold text-gray-700 truncate">{cal.calendar_name}</span>
+                      </div>
+                      <Switch 
+                        checked={cal.is_enabled} 
+                        onCheckedChange={(val) => onToggle(cal.id, val)}
+                        className="data-[state=checked]:bg-indigo-600"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )) : (
+              <div className="py-10 text-center bg-gray-50 rounded-2xl border border-dashed border-gray-200">
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">No calendars found</p>
+                <Button variant="link" onClick={onDiscover} className="text-indigo-600 text-[10px] font-black uppercase tracking-widest mt-2">
+                  Discover Now
+                </Button>
+              </div>
+            )}
           </div>
-        )) : (
-          <div className="py-10 text-center bg-gray-50 rounded-2xl border border-dashed border-gray-200">
-            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">No calendars found</p>
-            <Button variant="link" onClick={onDiscover} className="text-indigo-600 text-[10px] font-black uppercase tracking-widest mt-2">
-              Discover Now
-            </Button>
-          </div>
-        )}
+        </ScrollArea>
       </CardContent>
     </Card>
   );

@@ -40,20 +40,23 @@ serve(async (req) => {
       'Depth': '0'
     };
 
+    const baseUrl = 'https://caldav.icloud.com';
+
     // 1. Discover Principal
     const propfindPrincipal = `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:"><D:prop><D:current-user-principal/></D:prop></D:propfind>`;
-    const principalRes = await fetch('https://caldav.icloud.com/', { method: 'PROPFIND', headers, body: propfindPrincipal });
+    const principalRes = await fetch(`${baseUrl}/`, { method: 'PROPFIND', headers, body: propfindPrincipal });
     const principalText = await principalRes.text();
     const principalMatch = principalText.match(/<[^:]*:?current-user-principal[^>]*>\s*<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i);
     if (!principalMatch) throw new Error("Could not find principal href");
-    const principalHref = principalMatch[1];
+    const principalHref = principalMatch[1].startsWith('/') ? `${baseUrl}${principalMatch[1]}` : principalMatch[1];
 
     // 2. Discover Calendar Home Set
     const propfindHome = `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><C:calendar-home-set/></D:prop></D:propfind>`;
-    const homeRes = await fetch(`https://caldav.icloud.com${principalHref}`, { method: 'PROPFIND', headers, body: propfindHome });
+    const homeRes = await fetch(principalHref, { method: 'PROPFIND', headers, body: propfindHome });
     const homeText = await homeRes.text();
     const homeMatch = homeText.match(/<[^:]*:?calendar-home-set[^>]*>\s*<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i);
-    const homeHref = homeMatch[1];
+    if (!homeMatch) throw new Error("Could not find calendar home set");
+    const homeHref = homeMatch[1].startsWith('/') ? `${baseUrl}${homeMatch[1]}` : homeMatch[1];
 
     // 3. Discover Calendars
     const propfindCals = `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><D:displayname/><D:resourcetype/></D:prop></D:propfind>`;
@@ -68,10 +71,10 @@ serve(async (req) => {
         const nameMatch = resp.match(/<[^:]*:?displayname[^>]*>([^<]+)<\/[^>]*>/i);
         if (hrefMatch) {
           let href = hrefMatch[1];
-          if (href.startsWith('/')) {
-            const urlObj = new URL(homeHref);
-            href = `${urlObj.protocol}//${urlObj.host}${href}`;
-          }
+          if (href.startsWith('/')) href = `${baseUrl}${href}`;
+          // Normalize: remove trailing slash
+          href = href.replace(/\/$/, '');
+          
           discoveredCalendars.push({ 
             user_id: user.id,
             calendar_id: href, 
@@ -82,7 +85,7 @@ serve(async (req) => {
       }
     }
 
-    // Upsert discovered calendars so user can manage them in Settings
+    // Upsert discovered calendars
     if (discoveredCalendars.length > 0) {
       await supabaseAdmin.from('user_calendars').upsert(discoveredCalendars, { onConflict: 'user_id, calendar_id' });
     }
@@ -95,7 +98,6 @@ serve(async (req) => {
       .eq('provider', 'apple');
     
     const enabledPaths = (enabledCals || []).filter(c => c.is_enabled);
-    const enabledIds = enabledPaths.map(c => c.calendar_id);
 
     if (enabledPaths.length === 0) {
       console.log(`[${functionName}] No Apple calendars enabled. Cleaning up cache.`);
@@ -134,35 +136,18 @@ serve(async (req) => {
     
     const fixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
 
-    // Helper to interpret floating times in user's timezone
     const interpretFloating = (icalTime, timeZone) => {
-      const s = icalTime.toString(); // "2026-04-20T17:45:00"
-      if (icalTime.isUtc || icalTime.timezone) {
-        return icalTime.toJSDate().toISOString();
-      }
-      
-      // It's floating. We need to find what UTC time corresponds to this local time in Melbourne.
+      const s = icalTime.toString();
+      if (icalTime.isUtc || icalTime.timezone) return icalTime.toJSDate().toISOString();
       const [datePart, timePart] = s.split('T');
       const [y, m, d] = datePart.split('-').map(Number);
       const [h, min, sec] = timePart.split(':').map(Number);
-      
-      // Create a date object assuming these components are UTC
       const dummy = new Date(Date.UTC(y, m - 1, d, h, min, sec));
-      
-      // Find the offset of Melbourne at that specific UTC time
-      const formatter = new Intl.DateTimeFormat('en-US', {
-        timeZone,
-        year: 'numeric', month: 'numeric', day: 'numeric',
-        hour: 'numeric', minute: 'numeric', second: 'numeric',
-        hour12: false
-      });
-      
+      const formatter = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false });
       const parts = formatter.formatToParts(dummy);
       const getPart = (type) => parseInt(parts.find(p => p.type === type).value);
-      
       const tzDate = new Date(Date.UTC(getPart('year'), getPart('month') - 1, getPart('day'), getPart('hour'), getPart('minute'), getPart('second')));
       const offsetMs = tzDate.getTime() - dummy.getTime();
-      
       return new Date(dummy.getTime() - offsetMs).toISOString();
     };
 
@@ -182,13 +167,11 @@ serve(async (req) => {
           for (const vevent of vevents) {
             const event = new ICAL.Event(vevent);
             const title = event.summary || 'Untitled';
-            
             const startIso = interpretFloating(event.startDate, userTimezone);
             const endIso = interpretFloating(event.endDate, userTimezone);
 
             const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
             const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
-            
             const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && fixedKeywords.test(title));
             const isWork = workKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
 
@@ -210,9 +193,7 @@ serve(async (req) => {
               last_seen_at: syncTimestamp
             });
           }
-        } catch (e) {
-          console.error(`[${functionName}] Error parsing event:`, e.message);
-        }
+        } catch (e) { console.error(`[${functionName}] Error parsing event:`, e.message); }
       }
     }
 
@@ -221,26 +202,13 @@ serve(async (req) => {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
     }
 
-    // Cleanup: Remove events from calendars that are now disabled OR were not seen in this sync
     const cleanupThreshold = new Date(new Date(syncTimestamp).getTime() - 60000).toISOString();
-    
-    // 1. Remove events from disabled calendars
     const disabledIds = (enabledCals || []).filter(c => !c.is_enabled).map(c => c.calendar_id);
     if (disabledIds.length > 0) {
-      await supabaseAdmin.from('calendar_events_cache')
-        .delete()
-        .eq('user_id', user.id)
-        .eq('provider', 'apple')
-        .in('source_calendar_id', disabledIds);
+      await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple').in('source_calendar_id', disabledIds);
     }
 
-    // 2. Remove events that were not seen in this sync (deleted from provider)
-    await supabaseAdmin.from('calendar_events_cache')
-      .delete()
-      .eq('user_id', user.id)
-      .eq('provider', 'apple')
-      .gte('start_time', syncStartTime.toISOString())
-      .lt('last_seen_at', cleanupThreshold);
+    await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple').gte('start_time', syncStartTime.toISOString()).lt('last_seen_at', cleanupThreshold);
 
     console.log(`[${functionName}] SUCCESS - Synced ${uniqueEvents.length} events.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
