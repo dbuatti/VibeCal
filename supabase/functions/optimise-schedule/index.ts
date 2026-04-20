@@ -1,62 +1,176 @@
 // @ts-nocheck
+import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0'
+import { format, parseISO, addMinutes, isBefore, isAfter, startOfDay, endOfDay, differenceInMinutes } from 'https://esm.sh/date-fns@2.30.0'
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-Deno.serve(async (req) => {
+serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   try {
     const authHeader = req.headers.get('Authorization');
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    const supabase = createClient(supabaseUrl, supabaseKey);
 
     // 1. Get User
-    const userRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
-      headers: { 'Authorization': authHeader, 'apikey': Deno.env.get('SUPABASE_ANON_KEY') }
-    });
-    const user = await userRes.json();
-    if (!user?.id) throw new Error("Unauthorized");
+    const { data: { user }, error: userError } = await supabase.auth.getUser(authHeader.replace('Bearer ', ''));
+    if (userError || !user) throw new Error("Unauthorized");
 
     const body = await req.json().catch(() => ({}));
-    const { durationOverride, maxTasksOverride, slotAlignment = 15, selectedDays = [1, 2, 3, 4, 5] } = body;
+    const { 
+      durationOverride, 
+      maxTasksOverride, 
+      slotAlignment = 15, 
+      selectedDays = [1, 2, 3, 4, 5],
+      placeholderDate
+    } = body;
 
-    // 2. Fetch Data (Settings, Profile, Events)
-    const [settingsRes, profileRes, eventsRes] = await Promise.all([
-      fetch(`${supabaseUrl}/rest/v1/user_settings?user_id=eq.${user.id}&select=*`, { headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` } }),
-      fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${user.id}&select=timezone`, { headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` } }),
-      fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&select=*&order=start_time.asc`, { headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` } })
+    // 2. Fetch Data
+    const [settingsRes, eventsRes] = await Promise.all([
+      supabase.from('user_settings').select('*').eq('user_id', user.id).single(),
+      supabase.from('calendar_events_cache').select('*').eq('user_id', user.id).order('start_time', { ascending: true })
     ]);
 
-    const settings = (await settingsRes.json())[0] || { day_start_time: '09:00', day_end_time: '17:00', max_hours_per_day: 6, max_tasks_per_day: 5 };
-    const profile = (await profileRes.json())[0];
-    const allEvents = await eventsRes.json();
+    const settings = settingsRes.data || { 
+      day_start_time: '09:00', 
+      day_end_time: '17:00', 
+      max_hours_per_day: 6, 
+      max_tasks_per_day: 5,
+      work_keywords: ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt']
+    };
+    const allEvents = eventsRes.data || [];
+    const workKeywords = settings.work_keywords || [];
 
-    // 3. Simple Scheduling Logic (Minimal version)
+    const isWorkEvent = (event) => {
+      if (event.is_work === true) return true;
+      const title = (event.title || '').toLowerCase();
+      return workKeywords.some(kw => title.includes(kw.toLowerCase()));
+    };
+
+    // 3. Scheduling Logic
     const proposedChanges = [];
     const fixedEvents = allEvents.filter(e => e.is_locked);
     const movableEvents = allEvents.filter(e => !e.is_locked);
 
-    // For brevity in this ultra-minimal version, we'll just return the movable events 
-    // as they are, but marked for processing. In a real scenario, we'd re-calculate slots.
-    // This ensures the function deploys and returns a valid structure.
-    
-    movableEvents.forEach(event => {
+    // We'll schedule for the next 14 days
+    const startDate = startOfDay(new Date());
+    const endDate = addMinutes(startDate, 14 * 24 * 60);
+
+    let currentMovableIdx = 0;
+
+    // Iterate through each day
+    for (let d = 0; d < 14; d++) {
+      const currentDay = addMinutes(startDate, d * 24 * 60);
+      const dayOfWeek = (currentDay.getDay() + 6) % 7; // 0 = Monday
+      
+      if (!selectedDays.includes(dayOfWeek)) continue;
+
+      const dayStr = format(currentDay, 'yyyy-MM-dd');
+      const dayStart = parseISO(`${dayStr}T${settings.day_start_time}:00`);
+      const dayEnd = parseISO(`${dayStr}T${settings.day_end_time}:00`);
+      
+      const dayFixedEvents = fixedEvents.filter(e => {
+        const start = parseISO(e.start_time);
+        return format(start, 'yyyy-MM-dd') === dayStr;
+      });
+
+      // Calculate existing work duration for this day
+      let dailyWorkMinutes = 0;
+      let lastWorkEnd = new Date(0);
+      dayFixedEvents.filter(isWorkEvent).forEach(e => {
+        const start = parseISO(e.start_time);
+        const end = parseISO(e.end_time);
+        if (isAfter(end, lastWorkEnd)) {
+          const effectiveStart = isBefore(start, lastWorkEnd) ? lastWorkEnd : start;
+          dailyWorkMinutes += differenceInMinutes(end, effectiveStart);
+          lastWorkEnd = end;
+        }
+      });
+
+      let dailyTaskCount = 0;
+      let currentTime = dayStart;
+      const maxDailyMinutes = (maxHoursOverride || settings.max_hours_per_day) * 60;
+      const maxDailyTasks = maxTasksOverride || settings.max_tasks_per_day;
+
+      // Try to fit movable events into slots
+      while (currentTime < dayEnd && currentMovableIdx < movableEvents.length) {
+        // Check if we've hit limits
+        if (dailyWorkMinutes >= maxDailyMinutes || dailyTaskCount >= maxDailyTasks) break;
+
+        const event = movableEvents[currentMovableIdx];
+        const duration = durationOverride || event.duration_minutes || 30;
+
+        // Find next available slot
+        let slotStart = currentTime;
+        let slotEnd = addMinutes(slotStart, duration);
+
+        // Check for collisions with fixed events
+        const collision = dayFixedEvents.find(f => {
+          const fStart = parseISO(f.start_time);
+          const fEnd = parseISO(f.end_time);
+          return (isBefore(slotStart, fEnd) && isAfter(slotEnd, fStart));
+        });
+
+        if (collision) {
+          currentTime = parseISO(collision.end_time);
+          // Align to slot
+          const minutes = currentTime.getMinutes();
+          const remainder = minutes % slotAlignment;
+          if (remainder !== 0) {
+            currentTime = addMinutes(currentTime, slotAlignment - remainder);
+          }
+          continue;
+        }
+
+        // If slot is within day boundaries
+        if (isBefore(slotEnd, dayEnd) || slotEnd.getTime() === dayEnd.getTime()) {
+          proposedChanges.push({
+            event_id: event.event_id,
+            title: event.title,
+            old_start: event.start_time,
+            new_start: slotStart.toISOString(),
+            new_end: slotEnd.toISOString(),
+            duration: duration,
+            is_surplus: false
+          });
+
+          if (isWorkEvent(event)) {
+            dailyWorkMinutes += duration;
+          }
+          dailyTaskCount++;
+          currentMovableIdx++;
+          currentTime = slotEnd;
+        } else {
+          // No more room today
+          break;
+        }
+      }
+    }
+
+    // Mark remaining movable events as surplus
+    for (let i = currentMovableIdx; i < movableEvents.length; i++) {
+      const event = movableEvents[i];
       proposedChanges.push({
         event_id: event.event_id,
         title: event.title,
         old_start: event.start_time,
-        new_start: event.start_time, // Placeholder for actual slot logic
-        duration: event.duration_minutes || 30,
-        is_surplus: false
+        new_start: null,
+        new_end: null,
+        duration: durationOverride || event.duration_minutes || 30,
+        is_surplus: true
       });
-    });
+    }
 
     return new Response(JSON.stringify({ changes: proposedChanges }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
   } catch (error) {
+    console.error("[optimise-schedule] Error:", error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })

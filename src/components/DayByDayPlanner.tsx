@@ -139,33 +139,39 @@ const DayByDayPlanner = ({
     
     const eventsOnThisDay = [
       ...dayLockedEvents.filter(e => !changedIds.has(e.event_id)),
-      ...changes.filter(c => formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd') === currentDateStr && !c.is_surplus)
+      ...changes.filter(c => c.new_start && formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd') === currentDateStr && !c.is_surplus)
     ];
 
-    const workEvents = eventsOnThisDay
-      .filter(e => isWorkEvent(e))
-      .sort((a, b) => {
-        const aStart = a.start_time || a.new_start;
-        const bStart = b.start_time || b.new_start;
-        if (!aStart || !bStart) return 0;
-        return parseISO(aStart).getTime() - parseISO(bStart).getTime();
+    const fixedWorkEvents = dayLockedEvents
+      .filter(e => !changedIds.has(e.event_id) && isWorkEvent(e))
+      .sort((a, b) => parseISO(a.start_time).getTime() - parseISO(b.start_time).getTime());
+
+    const shuffledWorkEvents = changes
+      .filter(c => c.new_start && formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd') === currentDateStr && !c.is_surplus && isWorkEvent(c))
+      .sort((a, b) => parseISO(a.new_start).getTime() - parseISO(b.new_start).getTime());
+
+    const calculateTotalMinutes = (workEvents: any[]) => {
+      let totalMinutes = 0;
+      let lastEnd = new Date(0);
+      workEvents.forEach(e => {
+        const startStr = e.start_time || e.new_start;
+        const endStr = e.end_time || e.new_end;
+        if (!startStr || !endStr) return;
+
+        const start = parseISO(startStr);
+        const end = parseISO(endStr);
+        if (isAfter(end, lastEnd)) {
+          const effectiveStart = isBefore(start, lastEnd) ? lastEnd : start;
+          totalMinutes += (end.getTime() - effectiveStart.getTime()) / 60000;
+          lastEnd = end;
+        }
       });
+      return totalMinutes;
+    };
 
-    let totalWorkMinutes = 0;
-    let lastEnd = new Date(0);
-    workEvents.forEach(e => {
-      const startStr = e.start_time || e.new_start;
-      const endStr = e.end_time || e.new_end;
-      if (!startStr || !endStr) return;
-
-      const start = parseISO(startStr);
-      const end = parseISO(endStr);
-      if (isAfter(end, lastEnd)) {
-        const effectiveStart = isBefore(start, lastEnd) ? lastEnd : start;
-        totalWorkMinutes += (end.getTime() - effectiveStart.getTime()) / 60000;
-        lastEnd = end;
-      }
-    });
+    const fixedWorkMinutes = calculateTotalMinutes(fixedWorkEvents);
+    const shuffledWorkMinutes = calculateTotalMinutes(shuffledWorkEvents);
+    const totalWorkMinutes = fixedWorkMinutes + shuffledWorkMinutes;
 
     const taskEvents = eventsOnThisDay.filter(e => {
       const title = e.title?.toLowerCase() || '';
@@ -174,6 +180,8 @@ const DayByDayPlanner = ({
 
     return {
       tasks: taskEvents.length,
+      fixedHours: fixedWorkMinutes / 60,
+      shuffledHours: shuffledWorkMinutes / 60,
       hours: totalWorkMinutes / 60,
       isOverTasks: taskEvents.length > maxTasks,
       isOverHours: (totalWorkMinutes / 60) > maxHours
@@ -248,13 +256,14 @@ const DayByDayPlanner = ({
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="space-y-6">
-          <PlannerStats 
-            hours={stats.hours} 
-            maxHours={maxHours} 
-            tasks={stats.tasks} 
-            maxTasks={maxTasks} 
-            isOverHours={stats.isOverHours} 
-            isOverTasks={stats.isOverTasks} 
+          <PlannerStats
+            fixedHours={stats.fixedHours}
+            shuffledHours={stats.shuffledHours}
+            maxHours={maxHours}
+            tasks={stats.tasks}
+            maxTasks={maxTasks}
+            isOverHours={stats.isOverHours}
+            isOverTasks={stats.isOverTasks}
           />
 
           <PlannerChanges 

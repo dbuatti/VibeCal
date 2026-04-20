@@ -2,11 +2,13 @@
 
 import React from 'react';
 import { Card, CardContent } from '@/components/ui/card';
-import { Clock, ListOrdered } from 'lucide-react';
+import { Clock, ListOrdered, Lock, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface PlannerStatsProps {
-  hours: number;
+  fixedHours: number;
+  shuffledHours: number;
   maxHours: number;
   tasks: number;
   maxTasks: number;
@@ -15,50 +17,98 @@ interface PlannerStatsProps {
 }
 
 const PlannerStats = ({ 
-  hours, 
+  fixedHours,
+  shuffledHours,
   maxHours, 
   tasks, 
   maxTasks, 
   isOverHours, 
   isOverTasks 
 }: PlannerStatsProps) => {
+  const totalHours = fixedHours + shuffledHours;
+  const fixedWidth = Math.min((fixedHours / maxHours) * 100, 100);
+  const shuffledWidth = Math.min((shuffledHours / maxHours) * 100, 100 - fixedWidth);
+
   return (
-    <Card className="border-none shadow-md rounded-2xl overflow-hidden bg-white">
-      <CardContent className="p-6 space-y-6">
-        <div className="space-y-3">
-          <div className="flex justify-between text-[9px] font-black uppercase tracking-widest">
-            <span className="flex items-center gap-1.5 text-gray-500">
-              <Clock size={14} className="text-indigo-500" /> Hours
-            </span>
-            <span className={cn(isOverHours ? "text-red-500" : "text-gray-900")}>
-              {hours.toFixed(1)} / {maxHours}h
-            </span>
+    <TooltipProvider>
+      <Card className="border-none shadow-md rounded-2xl overflow-hidden bg-white">
+        <CardContent className="p-6 space-y-6">
+          {/* Hours Progress */}
+          <div className="space-y-3">
+            <div className="flex justify-between text-[9px] font-black uppercase tracking-widest">
+              <span className="flex items-center gap-1.5 text-gray-500">
+                <Clock size={14} className="text-indigo-500" /> Work Capacity
+              </span>
+              <span className={cn(isOverHours ? "text-red-500" : "text-gray-900")}>
+                {totalHours.toFixed(1)} / {maxHours}h
+              </span>
+            </div>
+            
+            <div className="h-2.5 w-full bg-gray-100 rounded-full overflow-hidden flex shadow-inner">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div 
+                    className={cn("h-full transition-all duration-700 bg-slate-400")} 
+                    style={{ width: `${fixedWidth}%` }} 
+                  />
+                </TooltipTrigger>
+                <TooltipContent className="font-bold text-[10px] uppercase tracking-widest">
+                  Fixed Work: {fixedHours.toFixed(1)}h
+                </TooltipContent>
+              </Tooltip>
+              
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div 
+                    className={cn("h-full transition-all duration-700 bg-indigo-500")} 
+                    style={{ width: `${shuffledWidth}%` }} 
+                  />
+                </TooltipTrigger>
+                <TooltipContent className="font-bold text-[10px] uppercase tracking-widest">
+                  Shuffled Tasks: {shuffledHours.toFixed(1)}h
+                </TooltipContent>
+              </Tooltip>
+
+              {isOverHours && (
+                <div 
+                  className="h-full bg-red-400 animate-pulse" 
+                  style={{ width: `${Math.min(((totalHours - maxHours) / maxHours) * 100, 100 - (fixedWidth + shuffledWidth))}%` }} 
+                />
+              )}
+            </div>
+
+            <div className="flex gap-4 mt-2">
+              <div className="flex items-center gap-1.5">
+                <div className="w-2 h-2 rounded-full bg-slate-400" />
+                <span className="text-[8px] font-bold text-gray-400 uppercase tracking-tighter">Fixed Work</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-2 h-2 rounded-full bg-indigo-500" />
+                <span className="text-[8px] font-bold text-gray-400 uppercase tracking-tighter">Shuffled</span>
+              </div>
+            </div>
           </div>
-          <div className="h-1.5 w-full bg-gray-50 rounded-full overflow-hidden">
-            <div 
-              className={cn("h-full transition-all duration-700", isOverHours ? "bg-red-400" : "bg-indigo-500")} 
-              style={{ width: `${Math.min((hours / maxHours) * 100, 100)}%` }} 
-            />
+
+          {/* Tasks Progress */}
+          <div className="space-y-3">
+            <div className="flex justify-between text-[9px] font-black uppercase tracking-widest">
+              <span className="flex items-center gap-1.5 text-gray-500">
+                <ListOrdered size={14} className="text-indigo-500" /> Task Count
+              </span>
+              <span className={cn(isOverTasks ? "text-red-500" : "text-gray-900")}>
+                {tasks} / {maxTasks}
+              </span>
+            </div>
+            <div className="h-1.5 w-full bg-gray-50 rounded-full overflow-hidden">
+              <div 
+                className={cn("h-full transition-all duration-700", isOverTasks ? "bg-red-400" : "bg-indigo-500")} 
+                style={{ width: `${Math.min((tasks / maxTasks) * 100, 100)}%` }} 
+              />
+            </div>
           </div>
-        </div>
-        <div className="space-y-3">
-          <div className="flex justify-between text-[9px] font-black uppercase tracking-widest">
-            <span className="flex items-center gap-1.5 text-gray-500">
-              <ListOrdered size={14} className="text-indigo-500" /> Tasks
-            </span>
-            <span className={cn(isOverTasks ? "text-red-500" : "text-gray-900")}>
-              {tasks} / {maxTasks}
-            </span>
-          </div>
-          <div className="h-1.5 w-full bg-gray-50 rounded-full overflow-hidden">
-            <div 
-              className={cn("h-full transition-all duration-700", isOverTasks ? "bg-red-400" : "bg-indigo-500")} 
-              style={{ width: `${Math.min((tasks / maxTasks) * 100, 100)}%` }} 
-            />
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+    </TooltipProvider>
   );
 };
 
