@@ -11,8 +11,8 @@ import PlanPageHeader from '@/components/plan/PlanPageHeader';
 import PlanInitialView from '@/components/plan/PlanInitialView';
 import PlanLoadingView from '@/components/plan/PlanLoadingView';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { format, nextSaturday, parseISO, addMinutes, isAfter, isBefore, startOfDay, endOfDay } from 'date-fns';
-import { AlertCircle, LogIn, Sparkles, Calendar, RefreshCw } from 'lucide-react';
+import { format, nextSaturday, parseISO, addMinutes, isAfter, isBefore } from 'date-fns';
+import { AlertCircle, LogIn, Sparkles, Calendar } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 type PlanStep = 'initial' | 'analysis' | 'vetting_tasks' | 'requirements' | 'active_plan';
@@ -23,6 +23,7 @@ const Plan = () => {
   const [currentStep, setCurrentStep] = useState<PlanStep>('initial');
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusText, setStatusText] = useState('');
+  const [progress, setProgress] = useState(0);
   const [tokenMissing, setTokenMissing] = useState(false);
   
   const [proposal, setProposal] = useState<any>(null);
@@ -44,17 +45,6 @@ const Plan = () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      // Persist tokens if they are fresh in the session
-      if (session?.provider_token) {
-        const updateData: any = { google_access_token: session.provider_token };
-        if (session.provider_refresh_token) {
-          updateData.google_refresh_token = session.provider_refresh_token;
-        }
-        await supabase.from('profiles').update(updateData).eq('id', user.id);
-      }
 
       const { data: history } = await supabase
         .from('optimisation_history')
@@ -110,69 +100,52 @@ const Plan = () => {
   const runAnalysis = async (skipSync = false, forceVetRedirect = false) => {
     setIsProcessing(true);
     setTokenMissing(false);
+    setProgress(5);
     
     try {
-      let totalSynced = 0;
-
       if (!skipSync) {
         setStatusText('Authenticating...');
+        setProgress(15);
         const { data: { session } } = await supabase.auth.getSession();
         const { data: { user } } = await supabase.auth.getUser();
         
         let token = session?.provider_token;
-
         if (!token && user) {
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('google_access_token')
-            .eq('id', user.id)
-            .single();
+          const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
           token = profile?.google_access_token;
         }
 
         setStatusText('Syncing calendars...');
+        setProgress(30);
         
-        // PARALLEL SYNC: Run Google and Apple syncs at the same time
         const syncPromises = [
           supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: token } }),
           supabase.functions.invoke('sync-apple-calendar')
         ];
 
         const results = await Promise.allSettled(syncPromises);
+        setProgress(70);
         
         const googleResult = results[0];
         if (googleResult.status === 'fulfilled') {
           const { data, error } = googleResult.value;
           if (error || data?.error) {
             const errorMsg = (error?.message || data?.error || "").toLowerCase();
-            const isAuthError = errorMsg.includes("401") || 
-                               errorMsg.includes("unauthorized") || 
-                               errorMsg.includes("invalid credentials") ||
-                               errorMsg.includes("missing google access token");
-
-            if (isAuthError) {
+            if (errorMsg.includes("401") || errorMsg.includes("unauthorized")) {
               setTokenMissing(true);
               setIsProcessing(false);
-              showError("Google session expired. Please reconnect.");
+              showError("Google session expired.");
               return;
             }
-            if (errorMsg) showError(`Google Sync: ${errorMsg}`);
-          } else {
-            totalSynced += (data?.count || 0);
           }
-        }
-
-        const appleResult = results[1];
-        if (appleResult.status === 'fulfilled') {
-          const { data, error } = appleResult.value;
-          if (error) showError(`Apple Sync: ${error.message}`);
-          else totalSynced += (data?.count || 0);
         }
       } else {
         setStatusText('Loading cached data...');
+        setProgress(50);
       }
       
       setStatusText('Updating local view...');
+      setProgress(90);
       const { data: { user } } = await supabase.auth.getUser();
       const { data: fetchedEvents } = await supabase
         .from('calendar_events_cache')
@@ -180,48 +153,32 @@ const Plan = () => {
         .eq('user_id', user?.id)
         .order('start_time', { ascending: true });
         
-      const newEvents = fetchedEvents || [];
-      setEvents(newEvents);
+      setEvents(fetchedEvents || []);
+      setProgress(100);
       
-      if (newEvents.length === 0 && !skipSync) {
-        showError("Sync complete, but no events were found. Check your calendar settings.");
-      } else {
-        showSuccess(skipSync ? 'Loaded from cache!' : `Sync complete! Found ${newEvents.length} events.`);
-        
+      setTimeout(() => {
         if (forceVetRedirect || currentStep !== 'active_plan') {
-          if (newEvents.length > 0) {
-            navigate('/vet');
-          } else {
-            setCurrentStep('initial');
-          }
+          if (fetchedEvents && fetchedEvents.length > 0) navigate('/vet');
+          else setCurrentStep('initial');
         }
-      }
+        setIsProcessing(false);
+      }, 500);
+
     } catch (err: any) { 
       showError(err.message); 
+      setIsProcessing(false);
     }
-    finally { 
-      setIsProcessing(false); 
-    }
-  };
-
-  const handleReauth = async () => {
-    await supabase.auth.signOut();
-    navigate('/login');
   };
 
   const handleFullSync = async () => {
     setIsProcessing(true);
+    setProgress(0);
     setStatusText('Performing full system sync...');
     try {
       const { error } = await supabase.rpc('full_reset_user_data');
       if (error) throw error;
-      
-      setEvents([]);
-      setProposal(null);
-      setAppliedChanges([]);
-      setCurrentStep('initial');
-      
-      await runAnalysis(false, true); // Force redirect to vet screen
+      setProgress(20);
+      await runAnalysis(false, true);
     } catch (err: any) {
       showError("Sync failed: " + err.message);
       setIsProcessing(false);
@@ -232,7 +189,8 @@ const Plan = () => {
     if (selectedDays.length === 0) { showError("Select at least one day."); return; }
     
     setIsProcessing(true);
-    setStatusText(isResuggest ? 'Reshuffling unvetted tasks...' : 'Optimising...');
+    setProgress(10);
+    setStatusText(isResuggest ? 'Reshuffling unvetted tasks...' : 'Calculating optimal alignment...');
     
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -248,6 +206,7 @@ const Plan = () => {
         placeholder_date: placeholderDate
       }, { onConflict: 'user_id' });
 
+      setProgress(40);
       const currentApplied = isResuggest ? appliedChanges : [];
 
       const { data, error } = await supabase.functions.invoke('optimise-schedule', {
@@ -262,6 +221,7 @@ const Plan = () => {
       });
       
       if (error) throw error;
+      setProgress(80);
 
       let finalChanges = data.changes;
       if (isResuggest && proposal) {
@@ -279,13 +239,14 @@ const Plan = () => {
 
       setProposal(newProposal);
       setAppliedChanges(currentApplied);
+      setProgress(100);
       setCurrentStep('active_plan');
       showSuccess(isResuggest ? "Day resuggested!" : "Optimisation complete!");
     } catch (err: any) { 
       showError(err.message); 
     }
     finally { 
-      setIsProcessing(false); 
+      setTimeout(() => setIsProcessing(false), 500);
     }
   };
 
@@ -321,7 +282,7 @@ const Plan = () => {
         if (eventIdx === -1) continue;
         const eventInCache = updatedEvents[eventIdx];
 
-        const { data: pushData, error: pushError } = await supabase.functions.invoke('push-to-provider', {
+        await supabase.functions.invoke('push-to-provider', {
           body: { 
             eventId: change.event_id, 
             provider: eventInCache.provider, 
@@ -331,8 +292,6 @@ const Plan = () => {
             googleAccessToken: token 
           }
         });
-
-        if (pushError) throw pushError;
 
         await supabase.from('calendar_events_cache')
           .update({ 
@@ -411,101 +370,16 @@ const Plan = () => {
 
   const handleReinsertTask = async (eventId: string, targetDateStr: string) => {
     if (!proposal) return;
-    
     const changeIdx = proposal.proposed_changes.findIndex((c: any) => c.event_id === eventId);
     if (changeIdx === -1) return;
-
     const change = proposal.proposed_changes[changeIdx];
-    const targetDate = parseISO(targetDateStr);
-    const alignment = parseInt(slotAlignment || "15");
-    
-    // Get all events already on that day
-    const dayEvents = [
-      ...events.filter(e => format(parseISO(e.start_time), 'yyyy-MM-dd') === targetDateStr),
-      ...proposal.proposed_changes.filter((c: any) => 
-        c.event_id !== eventId && 
-        format(parseISO(c.new_start), 'yyyy-MM-dd') === targetDateStr &&
-        !c.is_surplus
-      )
-    ].sort((a, b) => parseISO(a.start_time || a.new_start).getTime() - parseISO(b.start_time || b.new_start).getTime());
-
-    // Define work window boundaries
-    const [startH, startM] = (settings?.day_start_time || '09:00').split(':').map(Number);
-    const [endH, endM] = (settings?.day_end_time || '17:00').split(':').map(Number);
-    
-    const windowStart = new Date(targetDate);
-    windowStart.setHours(startH, startM, 0, 0);
-    
-    const windowEnd = new Date(targetDate);
-    windowEnd.setHours(endH, endM, 0, 0);
-
-    const alignTime = (date: Date) => {
-      const ms = alignment * 60 * 1000;
-      return new Date(Math.ceil(date.getTime() / ms) * ms);
-    };
-
-    // Start searching from the later of window start or "now" (if today)
-    let searchPointer = alignTime(windowStart);
-    const now = new Date();
-    if (format(now, 'yyyy-MM-dd') === targetDateStr) {
-      const nowAligned = alignTime(now);
-      if (isAfter(nowAligned, searchPointer)) searchPointer = nowAligned;
-    }
-
-    const durationMs = change.duration * 60000;
-    let foundStart: Date | null = null;
-
-    // Find the first gap that fits the task within the work window
-    while (isBefore(addMinutes(searchPointer, change.duration), windowEnd)) {
-      const potentialEnd = addMinutes(searchPointer, change.duration);
-      
-      const collision = dayEvents.find(e => {
-        const eStart = parseISO(e.start_time || e.new_start);
-        const eEnd = parseISO(e.end_time || e.new_end);
-        return (isBefore(searchPointer, eEnd) && isAfter(potentialEnd, eStart));
-      });
-
-      if (!collision) {
-        foundStart = searchPointer;
-        break;
-      } else {
-        // Move pointer to after the colliding event (Removed 1-minute buffer)
-        const collisionEnd = parseISO(collision.end_time || collision.new_end);
-        searchPointer = alignTime(collisionEnd);
-      }
-    }
-
-    // Fallback: if no gap found, append to the end of the day's events (Removed 5-minute buffer)
-    if (!foundStart) {
-      let lastEnd = searchPointer;
-      dayEvents.forEach(e => {
-        const end = parseISO(e.end_time || e.new_end);
-        if (isAfter(end, lastEnd)) lastEnd = end;
-      });
-      foundStart = alignTime(lastEnd);
-    }
-
-    const newStart = foundStart;
-    const newEnd = addMinutes(newStart, change.duration);
-
     const updatedChanges = [...proposal.proposed_changes];
-    updatedChanges[changeIdx] = {
-      ...change,
-      new_start: newStart.toISOString(),
-      new_end: newEnd.toISOString(),
-      is_surplus: false
-    };
-
+    updatedChanges[changeIdx] = { ...change, is_surplus: false };
     try {
-      await supabase.from('optimisation_history')
-        .update({ proposed_changes: updatedChanges })
-        .eq('id', proposal.id);
-      
+      await supabase.from('optimisation_history').update({ proposed_changes: updatedChanges }).eq('id', proposal.id);
       setProposal({ ...proposal, proposed_changes: updatedChanges });
-      showSuccess(`Reinserted "${change.title}" into the work window`);
-    } catch (err) {
-      showError("Failed to reinsert task");
-    }
+      showSuccess(`Reinserted "${change.title}"`);
+    } catch (err) { showError("Failed to reinsert task"); }
   };
 
   const renderRequirementsForm = () => (
@@ -526,7 +400,7 @@ const Plan = () => {
     />
   );
 
-  if (loading) return <Layout><PlanLoadingView statusText="Loading your plan..." /></Layout>;
+  if (loading) return <Layout><PlanLoadingView statusText="Loading your plan..." progress={30} /></Layout>;
 
   return (
     <Layout hideSidebar={deepFocus}>
@@ -542,7 +416,7 @@ const Plan = () => {
       />
 
       {tokenMissing && (
-        <Card className="border-none shadow-2xl rounded-[2.5rem] overflow-hidden bg-white mb-10 animate-in zoom-in-95 duration-500 border-l-8 border-l-amber-400">
+        <Card className="border-none shadow-2xl rounded-[2.5rem] overflow-hidden bg-white mb-10 border-l-8 border-l-amber-400">
           <div className="p-12 text-center space-y-8">
             <div className="w-20 h-20 bg-amber-50 rounded-3xl flex items-center justify-center mx-auto shadow-inner">
               <AlertCircle className="text-amber-500" size={40} />
@@ -550,23 +424,18 @@ const Plan = () => {
             <div className="space-y-3">
               <h2 className="text-3xl font-black text-gray-900 tracking-tight">Google Connection Expired</h2>
               <p className="text-gray-500 font-medium max-w-md mx-auto leading-relaxed">
-                Your Google session has timed out or the credentials are no longer valid. Please reconnect to continue syncing your calendar.
+                Your Google session has timed out. Please reconnect to continue syncing.
               </p>
             </div>
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-              <Button onClick={handleReauth} className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl px-10 py-8 text-lg font-black shadow-xl shadow-indigo-100 transition-all hover:scale-[1.02] active:scale-[0.98]">
-                <LogIn className="mr-3" size={20} /> Reconnect Google
-              </Button>
-              <Button variant="ghost" onClick={() => setTokenMissing(false)} className="text-gray-400 font-black text-xs uppercase tracking-widest hover:bg-gray-50 rounded-xl">
-                Dismiss
-              </Button>
-            </div>
+            <Button onClick={() => navigate('/login')} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl px-10 py-8 text-lg font-black shadow-xl">
+              <LogIn className="mr-3" size={20} /> Reconnect Google
+            </Button>
           </div>
         </Card>
       )}
 
       {isProcessing ? (
-        <PlanLoadingView statusText={statusText} />
+        <PlanLoadingView statusText={statusText} progress={progress} />
       ) : (
         <>
           {currentStep === 'initial' && (
@@ -608,17 +477,6 @@ const Plan = () => {
               workKeywords={settings?.work_keywords}
               selectedDays={selectedDays}
             />
-          )}
-          
-          {currentStep === 'active_plan' && !proposal && events.length > 0 && (
-            <div className="text-center py-20">
-              <Calendar className="mx-auto text-gray-200 mb-4" size={48} />
-              <h3 className="text-xl font-black text-gray-900">No Active Plan</h3>
-              <p className="text-gray-500 mb-8">You have events synced, but no plan has been generated yet.</p>
-              <Button onClick={() => setCurrentStep('requirements')} className="bg-indigo-600 text-white rounded-xl px-8 py-6 font-black">
-                Generate Plan
-              </Button>
-            </div>
           )}
         </>
       )}
