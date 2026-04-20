@@ -99,6 +99,44 @@ serve(async (req) => {
     
     const fixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
 
+    const interpretToUtc = (isoStr, timeZone) => {
+      if (isoStr.includes('Z') || isoStr.includes('+') || isoStr.includes('-')) {
+        return new Date(isoStr).toISOString();
+      }
+      
+      // Floating time
+      const [datePart, timePart] = isoStr.split('T');
+      const [y, m, d] = datePart.split('-').map(Number);
+      const [h, min, sec] = (timePart || '00:00:00').split(':').map(Number);
+
+      try {
+        const formatter = new Intl.DateTimeFormat('en-US', {
+          timeZone,
+          year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', second: '2-digit',
+          hour12: false
+        });
+
+        const guessUtc = new Date(Date.UTC(y, m - 1, d, h, min, sec || 0));
+        const parts = formatter.formatToParts(guessUtc);
+        const getPart = (type) => parts.find(p => p.type === type).value;
+        
+        const formattedInTz = new Date(Date.UTC(
+          parseInt(getPart('year')),
+          parseInt(getPart('month')) - 1,
+          parseInt(getPart('day')),
+          parseInt(getPart('hour')),
+          parseInt(getPart('minute')),
+          parseInt(getPart('second'))
+        ));
+
+        const offsetMs = formattedInTz.getTime() - guessUtc.getTime();
+        return new Date(guessUtc.getTime() - offsetMs).toISOString();
+      } catch (e) {
+        return new Date(isoStr).toISOString();
+      }
+    };
+
     for (const cal of enabledCalendars) {
       const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.calendar_id)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`;
       let res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
@@ -109,28 +147,18 @@ serve(async (req) => {
 
       items.forEach(event => {
         const title = event.summary || 'Untitled';
-        let start, end;
+        let startIso, endIso;
 
         if (event.start.dateTime) {
-          start = new Date(event.start.dateTime);
-          end = new Date(event.end.dateTime);
+          startIso = interpretToUtc(event.start.dateTime, userTimezone);
+          endIso = interpretToUtc(event.end.dateTime, userTimezone);
         } else {
           // All-day event: Place it at the start of the work day in user's timezone
           const [y, m, d] = event.start.date.split('-').map(Number);
           const [h, min] = dayStartStr.split(':').map(Number);
           
-          // Create a UTC date that represents the local time
-          const localDate = new Date(Date.UTC(y, m - 1, d, h, min, 0));
-          
-          // Find offset
-          const formatter = new Intl.DateTimeFormat('en-US', { timeZone: userTimezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-          const parts = formatter.formatToParts(localDate);
-          const getPart = (type) => parts.find(p => p.type === type).value;
-          const formattedInTz = new Date(Date.UTC(parseInt(getPart('year')), parseInt(getPart('month')) - 1, parseInt(getPart('day')), parseInt(getPart('hour')), parseInt(getPart('minute')), parseInt(getPart('second'))));
-          const offsetMs = formattedInTz.getTime() - localDate.getTime();
-          
-          start = new Date(localDate.getTime() - offsetMs);
-          end = new Date(start.getTime() + 30 * 60000); // Default 30m for all-day placeholders
+          startIso = interpretToUtc(`${event.start.date}T${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}:00`, userTimezone);
+          endIso = new Date(new Date(startIso).getTime() + 30 * 60000).toISOString();
         }
         
         const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
@@ -144,9 +172,9 @@ serve(async (req) => {
           title: title, 
           description: event.description || null,
           location: event.location || null,
-          start_time: start.toISOString(), 
-          end_time: end.toISOString(),
-          duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000) || 30, 
+          start_time: startIso, 
+          end_time: endIso,
+          duration_minutes: Math.round((new Date(endIso).getTime() - new Date(startIso).getTime()) / 60000) || 30, 
           is_locked: isLocked, 
           is_work: isWork,
           provider: 'google', 

@@ -143,22 +143,21 @@ serve(async (req) => {
     const fixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
 
     // Robust floating time interpreter
-    const interpretFloating = (icalTime, timeZone) => {
-      if (icalTime.isUtc || icalTime.timezone) {
-        return icalTime.toJSDate().toISOString();
-      }
-      
-      // It's a floating time (e.g. 2026-04-20T17:45:00)
-      // We need to treat this as being in the user's local timezone
-      const s = icalTime.toString(); // "2026-04-20T17:45:00"
-      const [datePart, timePart] = s.split('T');
-      const [y, m, d] = datePart.split('-').map(Number);
-      const [h, min, sec] = timePart.split(':').map(Number);
+    const interpretToUtc = (icalTime, timeZone) => {
+      // Extract raw components from ical.js time object
+      const y = icalTime.year;
+      const m = icalTime.month;
+      const d = icalTime.day;
+      const h = icalTime.hour;
+      const min = icalTime.minute;
+      const sec = icalTime.second;
 
-      // Create a string that represents the local time
-      const localStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}T${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-      
-      // Use Intl to find the offset for this specific local time in the target timezone
+      // If it's already UTC, just return it
+      if (icalTime.isUtc) {
+        return new Date(Date.UTC(y, m - 1, d, h, min, sec)).toISOString();
+      }
+
+      // Otherwise, treat it as local time in the user's timezone
       try {
         const formatter = new Intl.DateTimeFormat('en-US', {
           timeZone,
@@ -167,10 +166,10 @@ serve(async (req) => {
           hour12: false
         });
 
-        // We need to find a UTC date that, when formatted in 'timeZone', matches our localStr
-        // A simple way is to create a UTC date, find the offset, and adjust
-        const utcDate = new Date(Date.UTC(y, m - 1, d, h, min, sec));
-        const parts = formatter.formatToParts(utcDate);
+        // We need to find a UTC date that, when formatted in 'timeZone', matches our local components
+        // We start with a guess (treating local as UTC) and then adjust by the offset
+        const guessUtc = new Date(Date.UTC(y, m - 1, d, h, min, sec));
+        const parts = formatter.formatToParts(guessUtc);
         const getPart = (type) => parts.find(p => p.type === type).value;
         
         const formattedInTz = new Date(Date.UTC(
@@ -182,8 +181,8 @@ serve(async (req) => {
           parseInt(getPart('second'))
         ));
 
-        const offsetMs = formattedInTz.getTime() - utcDate.getTime();
-        return new Date(utcDate.getTime() - offsetMs).toISOString();
+        const offsetMs = formattedInTz.getTime() - guessUtc.getTime();
+        return new Date(guessUtc.getTime() - offsetMs).toISOString();
       } catch (e) {
         console.error(`[${functionName}] Timezone error for ${timeZone}:`, e.message);
         return icalTime.toJSDate().toISOString();
@@ -206,8 +205,8 @@ serve(async (req) => {
           for (const vevent of vevents) {
             const event = new ICAL.Event(vevent);
             const title = event.summary || 'Untitled';
-            const startIso = interpretFloating(event.startDate, userTimezone);
-            const endIso = interpretFloating(event.endDate, userTimezone);
+            const startIso = interpretToUtc(event.startDate, userTimezone);
+            const endIso = interpretToUtc(event.endDate, userTimezone);
 
             const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
             const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
