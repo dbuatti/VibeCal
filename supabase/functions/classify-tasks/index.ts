@@ -127,6 +127,7 @@ Deno.serve(async (req) => {
         const updates = events.map((event, i) => ({
           event_id: event.event_id,
           user_id: userId,
+          title: event.title, // Added title to satisfy NOT NULL constraint
           is_locked: !results[i].isMovable,
           is_work: results[i].isWork || false
         }));

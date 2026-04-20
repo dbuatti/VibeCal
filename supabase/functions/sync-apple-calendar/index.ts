@@ -47,8 +47,13 @@ Deno.serve(async (req) => {
       body: `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:"><D:prop><D:current-user-principal/></D:prop></D:propfind>` 
     });
     const principalText = await principalRes.text();
-    const principalHref = principalText.match(/<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i)?.[1];
-    if (!principalHref) throw new Error("Principal not found");
+    const principalHref = principalText.match(/<[^:]*href[^>]*>([^<]+)<\/[^>]*>/i)?.[1] || 
+                         principalText.match(/href="([^"]+)"/i)?.[1];
+    
+    if (!principalHref) {
+      console.error(`[${functionName}] Principal response:`, principalText);
+      throw new Error("Principal not found");
+    }
 
     const homeRes = await fetch(principalHref.startsWith('/') ? `${baseUrl}${principalHref}` : principalHref, { 
       method: 'PROPFIND', 
@@ -56,8 +61,13 @@ Deno.serve(async (req) => {
       body: `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><C:calendar-home-set/></D:prop></D:propfind>` 
     });
     const homeText = await homeRes.text();
-    const homeHref = homeText.match(/<[^:]*:?calendar-home-set[^>]*>\s*<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i)?.[1];
-    if (!homeHref) throw new Error("Home set not found");
+    const homeHref = homeText.match(/calendar-home-set[^>]*>\s*<[^:]*href[^>]*>([^<]+)<\/[^>]*>/i)?.[1] ||
+                    homeText.match(/calendar-home-set[^>]*href="([^"]+)"/i)?.[1];
+    
+    if (!homeHref) {
+      console.error(`[${functionName}] Home set response:`, homeText);
+      throw new Error("Home set not found");
+    }
 
     // 4. Discover Calendars
     const calsRes = await fetch(homeHref.startsWith('/') ? `${baseUrl}${homeHref}` : homeHref, { 
