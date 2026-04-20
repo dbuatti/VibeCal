@@ -11,7 +11,7 @@ import PlanPageHeader from '@/components/plan/PlanPageHeader';
 import PlanInitialView from '@/components/plan/PlanInitialView';
 import PlanLoadingView from '@/components/plan/PlanLoadingView';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { format, nextSaturday, parseISO, addMinutes, isAfter } from 'date-fns';
+import { format, nextSaturday, parseISO, addMinutes, isAfter, isBefore, startOfDay, endOfDay } from 'date-fns';
 import { AlertCircle, LogIn, Sparkles, Calendar, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -416,25 +416,75 @@ const Plan = () => {
 
     const change = proposal.proposed_changes[changeIdx];
     const targetDate = parseISO(targetDateStr);
+    const alignment = parseInt(slotAlignment || "15");
     
+    // Get all events already on that day
     const dayEvents = [
       ...events.filter(e => format(parseISO(e.start_time), 'yyyy-MM-dd') === targetDateStr),
       ...proposal.proposed_changes.filter((c: any) => 
         c.event_id !== eventId && 
-        format(parseISO(c.new_start), 'yyyy-MM-dd') === targetDateStr
+        format(parseISO(c.new_start), 'yyyy-MM-dd') === targetDateStr &&
+        !c.is_surplus
       )
-    ];
+    ].sort((a, b) => parseISO(a.start_time || a.new_start).getTime() - parseISO(b.start_time || b.new_start).getTime());
 
-    let lastEnd = new Date(targetDate);
+    // Define work window boundaries
     const [startH, startM] = (settings?.day_start_time || '09:00').split(':').map(Number);
-    lastEnd.setHours(startH, startM, 0, 0);
+    const [endH, endM] = (settings?.day_end_time || '17:00').split(':').map(Number);
+    
+    const windowStart = new Date(targetDate);
+    windowStart.setHours(startH, startM, 0, 0);
+    
+    const windowEnd = new Date(targetDate);
+    windowEnd.setHours(endH, endM, 0, 0);
 
-    dayEvents.forEach(e => {
-      const end = parseISO(e.end_time || e.new_end);
-      if (isAfter(end, lastEnd)) lastEnd = end;
-    });
+    const alignTime = (date: Date) => {
+      const ms = alignment * 60 * 1000;
+      return new Date(Math.ceil(date.getTime() / ms) * ms);
+    };
 
-    const newStart = addMinutes(lastEnd, 5);
+    // Start searching from the later of window start or "now" (if today)
+    let searchPointer = alignTime(windowStart);
+    const now = new Date();
+    if (format(now, 'yyyy-MM-dd') === targetDateStr) {
+      const nowAligned = alignTime(now);
+      if (isAfter(nowAligned, searchPointer)) searchPointer = nowAligned;
+    }
+
+    const durationMs = change.duration * 60000;
+    let foundStart: Date | null = null;
+
+    // Find the first gap that fits the task within the work window
+    while (isBefore(addMinutes(searchPointer, change.duration), windowEnd)) {
+      const potentialEnd = addMinutes(searchPointer, change.duration);
+      
+      const collision = dayEvents.find(e => {
+        const eStart = parseISO(e.start_time || e.new_start);
+        const eEnd = parseISO(e.end_time || e.new_end);
+        return (isBefore(searchPointer, eEnd) && isAfter(potentialEnd, eStart));
+      });
+
+      if (!collision) {
+        foundStart = searchPointer;
+        break;
+      } else {
+        // Move pointer to after the colliding event
+        const collisionEnd = parseISO(collision.end_time || collision.new_end);
+        searchPointer = alignTime(addMinutes(collisionEnd, 1));
+      }
+    }
+
+    // Fallback: if no gap found, append to the end of the day's events (even if outside window)
+    if (!foundStart) {
+      let lastEnd = searchPointer;
+      dayEvents.forEach(e => {
+        const end = parseISO(e.end_time || e.new_end);
+        if (isAfter(end, lastEnd)) lastEnd = end;
+      });
+      foundStart = alignTime(addMinutes(lastEnd, 5));
+    }
+
+    const newStart = foundStart;
     const newEnd = addMinutes(newStart, change.duration);
 
     const updatedChanges = [...proposal.proposed_changes];
@@ -451,7 +501,7 @@ const Plan = () => {
         .eq('id', proposal.id);
       
       setProposal({ ...proposal, proposed_changes: updatedChanges });
-      showSuccess(`Reinserted "${change.title}" into today`);
+      showSuccess(`Reinserted "${change.title}" into the work window`);
     } catch (err) {
       showError("Failed to reinsert task");
     }
