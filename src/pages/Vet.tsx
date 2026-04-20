@@ -42,17 +42,6 @@ import {
   DropdownMenuTrigger,
   DropdownMenuCheckboxItem
 } from '@/components/ui/dropdown-menu';
-import { 
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 import { format, parseISO, isToday, isTomorrow, startOfDay } from 'date-fns';
 import { cn } from '@/lib/utils';
 
@@ -122,10 +111,13 @@ const Vet = () => {
     fetchEvents();
   }, []);
 
-  const runSync = async () => {
+  const handleFullSync = async () => {
     setIsProcessing(true);
-    setStatusText('Syncing calendars...');
+    setStatusText('Performing full system sync...');
     try {
+      const { error } = await supabase.rpc('full_reset_user_data');
+      if (error) throw error;
+      
       const { data: { session } } = await supabase.auth.getSession();
       const { data: { user } } = await supabase.auth.getUser();
       
@@ -141,26 +133,9 @@ const Vet = () => {
       ]);
 
       await fetchEvents();
-      showSuccess("Calendars synced!");
+      showSuccess("Full sync complete!");
     } catch (err: any) {
-      showError(err.message);
-    } finally {
-      setIsProcessing(false);
-      setStatusText('');
-    }
-  };
-
-  const handleFullReset = async () => {
-    setIsProcessing(true);
-    setStatusText('Resetting system...');
-    try {
-      const { error } = await supabase.rpc('full_reset_user_data');
-      if (error) throw error;
-      
-      showSuccess("System reset. Starting fresh sync...");
-      await runSync();
-    } catch (err: any) {
-      showError("Reset failed: " + err.message);
+      showError("Sync failed: " + err.message);
     } finally {
       setIsProcessing(false);
       setStatusText('');
@@ -302,41 +277,19 @@ const Vet = () => {
             <p className="text-gray-500 font-medium">Decide which events are fixed and which can be moved by the AI.</p>
           </div>
           
-          <div className="flex gap-3 w-full md:w-auto">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="bg-white border-gray-100 text-gray-500 rounded-2xl font-black text-xs uppercase tracking-widest h-14 px-6 shadow-sm">
-                  <RefreshCw size={18} className={cn("mr-2", isProcessing && "animate-spin")} /> Sync
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-56 rounded-2xl p-2" align="end">
-                <DropdownMenuItem onClick={runSync} disabled={isProcessing} className="rounded-lg font-bold text-xs">
-                  <RefreshCw size={14} className="mr-2" /> Standard Resync
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <DropdownMenuItem onSelect={(e) => e.preventDefault()} className="rounded-lg font-bold text-xs text-red-600">
-                      <AlertTriangle size={14} className="mr-2" /> Full System Reset
-                    </DropdownMenuItem>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent className="rounded-[2rem]">
-                    <AlertDialogHeader>
-                      <AlertDialogTitle className="text-2xl font-black tracking-tight">Are you absolutely sure?</AlertDialogTitle>
-                      <AlertDialogDescription className="text-gray-500 font-medium">
-                        This will clear your entire calendar cache and all proposed plans. You will need to resync from scratch. This cannot be undone.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel className="rounded-xl font-bold">Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={handleFullReset} className="bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold">
-                        Yes, Reset Everything
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-              </DropdownMenuContent>
-            </DropdownMenu>
+          <div className="flex items-center gap-4 w-full md:w-auto">
+            {/* Rainbow Full Sync Button */}
+            <button
+              onClick={handleFullSync}
+              disabled={isProcessing}
+              title="Full Sync"
+              className={cn(
+                "w-14 h-14 rounded-full flex items-center justify-center transition-all shadow-xl hover:scale-110 active:scale-95 disabled:opacity-50 disabled:grayscale shrink-0",
+                "bg-gradient-to-tr from-red-500 via-yellow-400 via-green-400 via-blue-500 to-purple-600 text-white"
+              )}
+            >
+              <RefreshCw size={24} className={cn(isProcessing && "animate-spin")} />
+            </button>
 
             <Button 
               variant="outline" 

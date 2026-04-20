@@ -203,9 +203,9 @@ const Plan = () => {
     navigate('/login');
   };
 
-  const handleFullReset = async () => {
+  const handleFullSync = async () => {
     setIsProcessing(true);
-    setStatusText('Performing atomic system reset...');
+    setStatusText('Performing full system sync...');
     try {
       const { error } = await supabase.rpc('full_reset_user_data');
       if (error) throw error;
@@ -215,10 +215,9 @@ const Plan = () => {
       setAppliedChanges([]);
       setCurrentStep('initial');
       
-      showSuccess("System reset complete. Starting fresh sync...");
       await runAnalysis(false, true); // Force redirect to vet screen
     } catch (err: any) {
-      showError("Reset failed: " + err.message);
+      showError("Sync failed: " + err.message);
       setIsProcessing(false);
     }
   };
@@ -481,9 +480,8 @@ const Plan = () => {
         deepFocus={deepFocus}
         setDeepFocus={setDeepFocus}
         onVetTasks={() => navigate('/vet')}
-        onResync={() => runAnalysis(false)}
+        onFullSync={handleFullSync}
         onReset={handleResetPlan}
-        onFullReset={handleFullReset}
         renderRequirementsForm={renderRequirementsForm}
       />
 
@@ -518,7 +516,7 @@ const Plan = () => {
           {currentStep === 'initial' && (
             <PlanInitialView 
               hasEvents={events.length > 0}
-              onSyncFresh={() => runAnalysis(false)}
+              onSyncFresh={handleFullSync}
               onUseCache={() => runAnalysis(true)}
             />
           )}

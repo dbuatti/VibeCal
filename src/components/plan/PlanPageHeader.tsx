@@ -1,30 +1,12 @@
 "use client";
 
 import React from 'react';
-import { Brain, Eye, EyeOff, CheckSquare, Settings2, RefreshCw, Trash2, AlertTriangle } from 'lucide-react';
+import { Brain, Eye, EyeOff, CheckSquare, Settings2, RefreshCw, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { 
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
-import { 
-  DropdownMenu, 
-  DropdownMenuContent, 
-  DropdownMenuItem, 
-  DropdownMenuSeparator, 
-  DropdownMenuTrigger 
-} from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 
 interface PlanPageHeaderProps {
@@ -33,9 +15,8 @@ interface PlanPageHeaderProps {
   deepFocus: boolean;
   setDeepFocus: (val: boolean) => void;
   onVetTasks: () => void;
-  onResync: () => void;
+  onFullSync: () => void;
   onReset: () => void;
-  onFullReset: () => void;
   renderRequirementsForm: () => React.ReactNode;
 }
 
@@ -45,9 +26,8 @@ const PlanPageHeader = ({
   deepFocus,
   setDeepFocus,
   onVetTasks,
-  onResync,
+  onFullSync,
   onReset,
-  onFullReset,
   renderRequirementsForm
 }: PlanPageHeaderProps) => {
   return (
@@ -69,7 +49,7 @@ const PlanPageHeader = ({
         </div>
         <h1 className="text-3xl font-black text-gray-900 tracking-tight">Daily Plan</h1>
       </div>
-      <div className="flex gap-2">
+      <div className="flex items-center gap-3">
         {(currentStep === 'active_plan' || currentStep === 'vetting_tasks') && (
           <Button 
             variant="outline" 
@@ -98,40 +78,18 @@ const PlanPageHeader = ({
           </Button>
         )}
         
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
-              <RefreshCw size={14} className={cn("mr-2", isProcessing && "animate-spin")} /> Sync
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent className="w-56 rounded-2xl p-2" align="end">
-            <DropdownMenuItem onClick={onResync} disabled={isProcessing} className="rounded-lg font-bold text-xs">
-              <RefreshCw size={14} className="mr-2" /> Standard Resync
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <DropdownMenuItem onSelect={(e) => e.preventDefault()} className="rounded-lg font-bold text-xs text-red-600">
-                  <AlertTriangle size={14} className="mr-2" /> Full System Reset
-                </DropdownMenuItem>
-              </AlertDialogTrigger>
-              <AlertDialogContent className="rounded-[2rem]">
-                <AlertDialogHeader>
-                  <AlertDialogTitle className="text-2xl font-black tracking-tight">Are you absolutely sure?</AlertDialogTitle>
-                  <AlertDialogDescription className="text-gray-500 font-medium">
-                    This will clear your entire calendar cache and all proposed plans. You will need to resync from scratch. This cannot be undone.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel className="rounded-xl font-bold">Cancel</AlertDialogCancel>
-                  <AlertDialogAction onClick={onFullReset} className="bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold">
-                    Yes, Reset Everything
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {/* Rainbow Full Sync Button */}
+        <button
+          onClick={onFullSync}
+          disabled={isProcessing}
+          title="Full Sync"
+          className={cn(
+            "w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-lg hover:scale-110 active:scale-95 disabled:opacity-50 disabled:grayscale",
+            "bg-gradient-to-tr from-red-500 via-yellow-400 via-green-400 via-blue-500 to-purple-600 text-white"
+          )}
+        >
+          <RefreshCw size={18} className={cn(isProcessing && "animate-spin")} />
+        </button>
 
         {currentStep === 'active_plan' && (
           <Button variant="outline" onClick={onReset} className="bg-white border-gray-100 text-gray-400 hover:text-red-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
