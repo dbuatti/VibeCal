@@ -41,6 +41,8 @@ serve(async (req) => {
     const { tasks, movableKeywords, lockedKeywords, naturalLanguageRules } = await req.json();
     const authHeader = req.headers.get('Authorization')
     
+    console.log(`[${functionName}] Received request to classify ${tasks?.length || 0} tasks`);
+
     if (!tasks || tasks.length === 0) {
       return new Response(JSON.stringify({ classifications: [] }), { headers: corsHeaders });
     }
@@ -67,8 +69,8 @@ serve(async (req) => {
       const geminiKey = Deno.env.get('GEMINI_API_KEY');
       if (geminiKey) {
         const genAI = new GoogleGenerativeAI(geminiKey);
-        // Using the latest stable model from the provided documentation
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        // Using gemini-1.5-flash which is the current stable fast model
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
         const prompt = `
           You are a high-precision calendar assistant. Your job is to classify tasks as "movable" or "fixed".
@@ -100,12 +102,17 @@ serve(async (req) => {
           Keep explanations under 12 words.
         `;
 
+        console.log(`[${functionName}] Calling Gemini API...`);
         const response = await generateWithRetry(model, prompt);
         const text = response.text();
+        console.log(`[${functionName}] Gemini Response received`);
+        
         const jsonMatch = text.match(/\[.*\]/s);
         if (jsonMatch) {
           classifications = JSON.parse(jsonMatch[0]);
         }
+      } else {
+        console.warn(`[${functionName}] GEMINI_API_KEY is missing`);
       }
     } catch (aiError) {
       console.error(`[${functionName}] AI classification failed:`, aiError.message);

@@ -108,8 +108,10 @@ const Vet = () => {
         .order('start_time', { ascending: true });
 
       setEvents(data || []);
+      return data || [];
     } catch (err) {
       showError("Failed to load tasks");
+      return [];
     } finally {
       setLoading(false);
     }
@@ -118,6 +120,49 @@ const Vet = () => {
   useEffect(() => {
     fetchEvents();
   }, []);
+
+  const runAIClassification = async (targetEvents?: any[]) => {
+    const eventsToClassify = targetEvents || events;
+    if (eventsToClassify.length === 0) return;
+
+    setIsProcessing(true);
+    setStatusText('AI is analyzing your rules...');
+    try {
+      const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, natural_language_rules').single();
+      const { data, error } = await supabase.functions.invoke('classify-tasks', {
+        body: {
+          tasks: eventsToClassify.map(e => e.title),
+          movableKeywords: settings?.movable_keywords || [],
+          lockedKeywords: settings?.locked_keywords || [],
+          naturalLanguageRules: settings?.natural_language_rules || ''
+        }
+      });
+      if (error) throw error;
+      
+      const updatedEvents = [...eventsToClassify];
+      const newExplanations: Record<string, string> = {};
+
+      for (let i = 0; i < updatedEvents.length; i++) {
+        const classification = data.classifications[i];
+        const isMovable = typeof classification === 'boolean' ? classification : classification.isMovable;
+        const explanation = typeof classification === 'object' ? classification.explanation : '';
+        
+        updatedEvents[i].is_locked = !isMovable;
+        newExplanations[updatedEvents[i].event_id] = explanation;
+
+        await supabase.from('calendar_events_cache').update({ is_locked: !isMovable }).eq('event_id', updatedEvents[i].event_id);
+      }
+      
+      setEvents(updatedEvents);
+      setAiExplanations(newExplanations);
+      showSuccess("AI has vetted your tasks!");
+    } catch (err: any) {
+      showError("AI Vetting failed: " + err.message);
+    } finally {
+      setIsProcessing(false);
+      setStatusText('');
+    }
+  };
 
   const handleFullSync = async () => {
     setIsProcessing(true);
@@ -140,8 +185,11 @@ const Vet = () => {
         supabase.functions.invoke('sync-apple-calendar')
       ]);
 
-      await fetchEvents();
-      showSuccess("Full sync complete!");
+      const freshEvents = await fetchEvents();
+      if (freshEvents.length > 0) {
+        await runAIClassification(freshEvents);
+      }
+      showSuccess("Full sync and AI vetting complete!");
     } catch (err: any) {
       showError("Sync failed: " + err.message);
     } finally {
@@ -184,46 +232,6 @@ const Vet = () => {
       showError("Bulk action failed");
     } finally {
       setIsProcessing(false);
-    }
-  };
-
-  const runAIClassification = async () => {
-    setIsProcessing(true);
-    setStatusText('AI is analyzing your rules...');
-    try {
-      const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, natural_language_rules').single();
-      const { data, error } = await supabase.functions.invoke('classify-tasks', {
-        body: {
-          tasks: events.map(e => e.title),
-          movableKeywords: settings?.movable_keywords || [],
-          lockedKeywords: settings?.locked_keywords || [],
-          naturalLanguageRules: settings?.natural_language_rules || ''
-        }
-      });
-      if (error) throw error;
-      
-      const updatedEvents = [...events];
-      const newExplanations: Record<string, string> = {};
-
-      for (let i = 0; i < updatedEvents.length; i++) {
-        const classification = data.classifications[i];
-        const isMovable = typeof classification === 'boolean' ? classification : classification.isMovable;
-        const explanation = typeof classification === 'object' ? classification.explanation : '';
-        
-        updatedEvents[i].is_locked = !isMovable;
-        newExplanations[updatedEvents[i].event_id] = explanation;
-
-        await supabase.from('calendar_events_cache').update({ is_locked: !isMovable }).eq('event_id', updatedEvents[i].event_id);
-      }
-      
-      setEvents(updatedEvents);
-      setAiExplanations(newExplanations);
-      showSuccess("AI has vetted your tasks!");
-    } catch (err: any) {
-      showError(err.message);
-    } finally {
-      setIsProcessing(false);
-      setStatusText('');
     }
   };
 
@@ -316,7 +324,7 @@ const Vet = () => {
 
             <Button 
               variant="outline" 
-              onClick={runAIClassification} 
+              onClick={() => runAIClassification()} 
               disabled={isProcessing}
               className="flex-1 md:flex-none rounded-2xl h-14 px-8 font-black text-xs uppercase tracking-widest border-indigo-100 text-indigo-600 hover:bg-indigo-50 shadow-sm transition-all hover:scale-[1.02] active:scale-[0.98] relative overflow-hidden group"
             >
