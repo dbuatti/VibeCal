@@ -16,6 +16,26 @@ import { cn } from '@/lib/utils';
 import { Save, Sparkles, Ban, Briefcase, RefreshCw, Link2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
+const GeminiLogo = ({ className }: { className?: string }) => (
+  <svg 
+    viewBox="0 0 24 24" 
+    fill="none" 
+    xmlns="http://www.w3.org/2000/svg" 
+    className={className}
+  >
+    <path 
+      d="M12 2L14.5 9.5L22 12L14.5 14.5L12 22L9.5 14.5L2 12L9.5 9.5L12 2Z" 
+      fill="url(#gemini-gradient)"
+    />
+    <defs>
+      <linearGradient id="gemini-gradient" x1="2" y1="12" x2="22" y2="12" gradientUnits="userSpaceOnUse">
+        <stop stopColor="#4285F4" />
+        <stop offset="1" stopColor="#9B72CB" />
+      </linearGradient>
+    </defs>
+  </svg>
+);
+
 const Settings = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
@@ -320,10 +340,10 @@ const Settings = () => {
             href="https://gemini.google.com/app/7f2a6f927c67ca43" 
             target="_blank" 
             rel="noopener noreferrer"
-            className="w-10 h-10 rounded-full bg-white border border-gray-100 shadow-sm flex items-center justify-center text-indigo-600 hover:bg-indigo-50 transition-all hover:scale-110"
+            className="w-10 h-10 rounded-full bg-white border border-gray-100 shadow-sm flex items-center justify-center hover:bg-indigo-50 transition-all hover:scale-110"
             title="Open Gemini"
           >
-            <Sparkles size={20} />
+            <GeminiLogo className="w-6 h-6" />
           </a>
           <Button onClick={handleSave} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-6">
             <Save size={18} className="mr-2" /> Save Changes
