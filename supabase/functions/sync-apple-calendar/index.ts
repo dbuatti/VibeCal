@@ -31,18 +31,15 @@ Deno.serve(async (req) => {
     const profile = profiles[0];
     
     if (!profile?.apple_id || !profile?.apple_app_password) {
-      console.log(`[${functionName}] No Apple credentials found for user ${user.id}`);
       return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
     }
-
-    console.log(`[${functionName}] Starting sync for user: ${profile.apple_id}`);
 
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
     const headers = {
       'Authorization': `Basic ${auth}`,
       'Content-Type': 'text/xml; charset=utf-8',
       'User-Agent': 'VibeCal/1.0',
-      'Depth': '0'
+      'Depth': '1'
     };
 
     const baseUrl = 'https://caldav.icloud.com';
@@ -53,10 +50,9 @@ Deno.serve(async (req) => {
     };
 
     // 3. Discover Principal
-    console.log(`[${functionName}] Step 1: Discovering principal...`);
     const principalRes = await fetch(`${baseUrl}/`, { 
       method: 'PROPFIND', 
-      headers, 
+      headers: { ...headers, 'Depth': '0' }, 
       body: `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:"><D:prop><D:current-user-principal/></D:prop></D:propfind>` 
     });
     const principalText = await principalRes.text();
@@ -69,10 +65,9 @@ Deno.serve(async (req) => {
     const principalUrl = principalPath.startsWith('http') ? principalPath : `${baseUrl}${principalPath}`;
 
     // 4. Discover Home Set
-    console.log(`[${functionName}] Step 2: Discovering home set...`);
     const homeRes = await fetch(principalUrl, {
       method: 'PROPFIND',
-      headers,
+      headers: { ...headers, 'Depth': '0' },
       body: `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><C:calendar-home-set/></D:prop></D:propfind>`
     });
     const homeText = await homeRes.text();
@@ -85,7 +80,6 @@ Deno.serve(async (req) => {
     const homeUrl = homePath.startsWith('http') ? homePath : `${baseUrl}${homePath}`;
 
     // 5. Discover Calendars
-    console.log(`[${functionName}] Step 3: Discovering calendars...`);
     const calsRes = await fetch(homeUrl, {
       method: 'PROPFIND',
       headers: { ...headers, 'Depth': '1' },
@@ -107,9 +101,8 @@ Deno.serve(async (req) => {
         });
       }
     }
-    console.log(`[${functionName}] Discovered ${discoveredCalendars.length} Apple calendars`);
 
-    // 6. Sync Calendar List and Respect Settings
+    // 6. Sync Calendar List
     const existingCalsRes = await fetch(`${supabaseUrl}/rest/v1/user_calendars?user_id=eq.${user.id}&provider=eq.apple`, {
       headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
     });
@@ -118,7 +111,6 @@ Deno.serve(async (req) => {
     const calendarsToUpsert = discoveredCalendars.map(cal => {
       const existing = existingCals.find(e => e.calendar_id === cal.calendar_id);
       let isEnabled = existing ? existing.is_enabled : false;
-      // If no calendars are enabled yet, enable the first one that isn't "Reminders"
       if (!isEnabled && !existing && !existingCals.some(c => c.is_enabled) && !cal.calendar_name.toLowerCase().includes('reminders')) {
         isEnabled = true;
       }
@@ -133,22 +125,20 @@ Deno.serve(async (req) => {
       });
     }
 
-    // 7. Fetch Events ONLY for Enabled Calendars
+    // 7. Fetch Events
     const enabledCalendars = calendarsToUpsert.filter(c => c.is_enabled);
     const disabledCalendarIds = calendarsToUpsert.filter(c => !c.is_enabled).map(c => c.calendar_id);
     
-    console.log(`[${functionName}] Fetching events for ${enabledCalendars.length} enabled calendars`);
-    
     const allEvents = [];
     const now = new Date();
-    // Wider range for debugging: -30 days to +120 days
-    const startRange = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-    const endRange = new Date(now.getTime() + 120 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    const startRange = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    const endRange = new Date(now.getTime() + 180 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
     for (const cal of enabledCalendars) {
-      console.log(`[${functionName}] Fetching: ${cal.calendar_name}`);
+      console.log(`[${functionName}] Fetching: ${cal.calendar_name} (${cal.calendar_id})`);
       try {
-        const reportRes = await fetch(cal.calendar_id, {
+        // Try with a broad filter first
+        let reportRes = await fetch(cal.calendar_id, {
           method: 'REPORT',
           headers: { ...headers, 'Content-Type': 'application/xml; charset=utf-8' },
           body: `<?xml version="1.0" encoding="utf-8" ?>
@@ -164,53 +154,76 @@ Deno.serve(async (req) => {
             </C:calendar-query>`
         });
 
-        if (!reportRes.ok) {
-          console.error(`[${functionName}] REPORT failed for ${cal.calendar_name}: ${reportRes.status}`);
-          continue;
-        }
+        let reportText = await reportRes.text();
+        let eventResponses = reportText.split(/<[^:]*:?response/i).slice(1);
 
-        const reportText = await reportRes.text();
-        const eventResponses = reportText.split(/<[^:]*:?response/i).slice(1);
-        console.log(`[${functionName}] Found ${eventResponses.length} raw responses in ${cal.calendar_name}`);
-        
-        let calEventCount = 0;
-        for (const resp of eventResponses) {
-          const icsData = resp.match(/<[^:]*:?calendar-data[^>]*>([\s\S]*?)<\/[^:]*:?calendar-data>/i)?.[1];
-          if (!icsData) continue;
-          try {
-            const jcalData = ICAL.parse(icsData.trim());
-            const vcalendar = new ICAL.Component(jcalData);
-            const vevents = vcalendar.getAllSubcomponents('vevent');
-            for (const vevent of vevents) {
-              const event = new ICAL.Event(vevent);
-              if (!event.uid || !event.startDate) continue;
-              
-              allEvents.push({
-                user_id: user.id,
-                event_id: event.uid,
-                title: event.summary || 'Untitled',
-                start_time: event.startDate.toJSDate().toISOString(),
-                end_time: event.endDate.toJSDate().toISOString(),
-                provider: 'apple',
-                source_calendar: cal.calendar_name,
-                source_calendar_id: cal.calendar_id,
-                last_synced_at: new Date().toISOString()
-              });
-              calEventCount++;
+        // FALLBACK: If no events found with time-range, try fetching ALL events in the calendar
+        if (eventResponses.length === 0) {
+          console.log(`[${functionName}] No events in range for ${cal.calendar_name}, trying fallback fetch...`);
+          reportRes = await fetch(cal.calendar_id, {
+            method: 'PROPFIND',
+            headers: { ...headers, 'Depth': '1' },
+            body: `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:"><D:prop><D:getcontenttype/><D:resourcetype/></D:prop></D:propfind>`
+          });
+          const propText = await reportRes.text();
+          const resources = propText.split(/<[^:]*:?response/i).slice(1);
+          
+          const eventUrls = [];
+          for (const res of resources) {
+            const href = res.match(/<[^:]*:?href[^>]*>([^<]+)<\/[^:]*:?href>/i)?.[1];
+            if (href && href.endsWith('.ics')) {
+              eventUrls.push(href.startsWith('http') ? href : `${baseUrl}${href}`);
             }
-          } catch (e) {
-            console.error(`[${functionName}] ICAL Parse Error:`, e.message);
+          }
+
+          if (eventUrls.length > 0) {
+            console.log(`[${functionName}] Found ${eventUrls.length} .ics files in ${cal.calendar_name}, fetching individually...`);
+            // Fetch first 50 to avoid timeout
+            for (const url of eventUrls.slice(0, 50)) {
+              const icsRes = await fetch(url, { headers });
+              if (icsRes.ok) {
+                const icsData = await icsRes.text();
+                parseAndAddEvents(icsData, cal, user.id, allEvents);
+              }
+            }
+          }
+        } else {
+          console.log(`[${functionName}] Found ${eventResponses.length} responses in ${cal.calendar_name}`);
+          for (const resp of eventResponses) {
+            const icsData = resp.match(/<[^:]*:?calendar-data[^>]*>([\s\S]*?)<\/[^:]*:?calendar-data>/i)?.[1];
+            if (icsData) parseAndAddEvents(icsData, cal, user.id, allEvents);
           }
         }
-        console.log(`[${functionName}] Found ${calEventCount} events in ${cal.calendar_name}`);
       } catch (err) {
         console.error(`[${functionName}] Error in ${cal.calendar_name}:`, err.message);
       }
     }
 
+    function parseAndAddEvents(icsData, cal, userId, eventList) {
+      try {
+        const jcalData = ICAL.parse(icsData.trim());
+        const vcalendar = new ICAL.Component(jcalData);
+        const vevents = vcalendar.getAllSubcomponents('vevent');
+        for (const vevent of vevents) {
+          const event = new ICAL.Event(vevent);
+          if (!event.uid || !event.startDate) continue;
+          eventList.push({
+            user_id: userId,
+            event_id: event.uid,
+            title: event.summary || 'Untitled',
+            start_time: event.startDate.toJSDate().toISOString(),
+            end_time: event.endDate.toJSDate().toISOString(),
+            provider: 'apple',
+            source_calendar: cal.calendar_name,
+            source_calendar_id: cal.calendar_id,
+            last_synced_at: new Date().toISOString()
+          });
+        }
+      } catch (e) {}
+    }
+
     // 8. Cleanup and Upsert
     if (disabledCalendarIds.length > 0) {
-      console.log(`[${functionName}] Cleaning up cache for ${disabledCalendarIds.length} disabled calendars`);
       for (const calId of disabledCalendarIds) {
         await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&source_calendar_id=eq.${encodeURIComponent(calId)}`, {
           method: 'DELETE',
@@ -220,15 +233,12 @@ Deno.serve(async (req) => {
     }
 
     if (allEvents.length > 0) {
-      console.log(`[${functionName}] Upserting ${allEvents.length} total Apple events to cache`);
-      const upsertRes = await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
+      console.log(`[${functionName}] Upserting ${allEvents.length} total Apple events`);
+      await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
         method: 'POST',
         headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}`, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' },
         body: JSON.stringify(allEvents)
       });
-      if (!upsertRes.ok) console.error(`[${functionName}] Upsert Error:`, await upsertRes.text());
-    } else {
-      console.log(`[${functionName}] No events found in any enabled calendars.`);
     }
 
     return new Response(JSON.stringify({ count: allEvents.length }), { 
