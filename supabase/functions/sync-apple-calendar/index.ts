@@ -31,7 +31,7 @@ serve(async (req) => {
       return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
     }
 
-    const userTimezone = profile.timezone || 'UTC';
+    const userTimezone = profile.timezone || 'Australia/Melbourne';
     console.log(`[${functionName}] Using User Timezone: ${userTimezone}`);
 
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
@@ -88,7 +88,7 @@ serve(async (req) => {
     const syncStartTime = new Date();
     syncStartTime.setDate(syncStartTime.getDate() - 1);
     const syncEndTime = new Date();
-    syncEndTime.setDate(syncEndTime.getDate() + 365);
+    syncEndTime.setDate(syncEndTime.getDate() + 30); // Reduced window to save quota
 
     const startStr = syncStartTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endStr = syncEndTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
@@ -114,6 +114,17 @@ serve(async (req) => {
     const workKeywords = settings?.work_keywords || ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session', 'work session'];
     const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga|show|tech|dress|night|opening|closing|birthday|party|gala|buffer|probe|experiment|quinceanera|🎭|✨|lunch|dinner|breakfast|brunch|bump in|performance|gig|concert|wedding|funeral|doctor|dentist|flight|train|hotel|check-in|check-out|reservation|40th|50th|60th|anniversary/i;
 
+    // Helper to get offset for a specific timezone
+    const getOffsetMinutes = (tz: string, date: Date) => {
+      try {
+        const utcDate = new Date(date.toLocaleString('en-US', { timeZone: 'UTC' }));
+        const tzDate = new Date(date.toLocaleString('en-US', { timeZone: tz }));
+        return (utcDate.getTime() - tzDate.getTime()) / 60000;
+      } catch (e) {
+        return 600; // Default to +10 (Melbourne) if error
+      }
+    };
+
     for (const cal of calendarPaths) {
       console.log(`[${functionName}] Fetching events for: ${cal.name}`);
       const eventsRes = await fetch(cal.href, { method: 'REPORT', headers: { ...headers, 'Depth': '1' }, body: reportQuery });
@@ -138,19 +149,19 @@ serve(async (req) => {
             
             // Handle floating times by assuming user's timezone
             if (!event.startDate.isUtc && !event.startDate.timezone) {
-              // This is a floating time (e.g. "2026-04-20T17:45:00")
-              // We need to parse it as being in the user's local timezone
-              const s = event.startDate.toString();
-              const e = event.endDate.toString();
+              const s = event.startDate.toString(); // "2026-04-21T10:30:00"
+              const parts = s.split(/[-T:]/);
+              const tempDate = new Date(Date.UTC(parseInt(parts[0]), parseInt(parts[1])-1, parseInt(parts[2]), parseInt(parts[3]), parseInt(parts[4])));
+              const offset = getOffsetMinutes(userTimezone, tempDate);
+              start = new Date(tempDate.getTime() + offset * 60000);
               
-              // Trick to parse local time string into UTC Date object using user's TZ
-              start = new Date(new Date(s).toLocaleString('en-US', { timeZone: userTimezone }));
-              end = new Date(new Date(e).toLocaleString('en-US', { timeZone: userTimezone }));
+              const es = event.endDate.toString();
+              const eparts = es.split(/[-T:]/);
+              const etempDate = new Date(Date.UTC(parseInt(eparts[0]), parseInt(eparts[1])-1, parseInt(eparts[2]), parseInt(eparts[3]), parseInt(eparts[4])));
+              const eoffset = getOffsetMinutes(userTimezone, etempDate);
+              end = new Date(etempDate.getTime() + eoffset * 60000);
               
-              // Adjust for the fact that the constructor above might have double-shifted
-              const offset = (new Date(s).getTime() - start.getTime());
-              start = new Date(new Date(s).getTime() + offset);
-              end = new Date(new Date(e).getTime() + offset);
+              console.log(`[${functionName}] Floating Time Fixed: "${title}" ${s} -> ${start.toISOString()}`);
             } else {
               start = event.startDate.toJSDate();
               end = event.endDate.toJSDate();
