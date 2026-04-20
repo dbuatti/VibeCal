@@ -158,72 +158,75 @@ Deno.serve(async (req) => {
         console.log(`[${functionName}] Found ${eventResponses.length} responses in ${cal.calendar_name}`);
 
         let parsedCount = 0;
-        for (const resp of eventResponses) {
-          // 1. Brute Force Extract calendar-data
+        for (let i = 0; i < eventResponses.length; i++) {
+          const resp = eventResponses[i];
+          const isDebugEvent = i < 5; // Only log first 5 to avoid quota/volume issues
+
+          // 1. Brute Force Extract calendar-data (Simplified Regex)
           const icsMatch = resp.match(/calendar-data[^>]*>([\s\S]*?)<\/.*?calendar-data>/i);
           let icsData = icsMatch?.[1];
           
-          if (icsData) {
-            // 2. Strip CDATA wrapper
-            if (icsData.includes('<![CDATA[')) {
-              icsData = icsData.match(/<!\[CDATA\[([\s\S]*?)\]\]>/i)?.[1] || icsData;
-            }
+          if (!icsData) {
+            if (isDebugEvent) console.log(`[${functionName}] [Debug] Failed to find calendar-data in response ${i}. Raw snippet: ${resp.substring(0, 200)}`);
+            continue;
+          }
 
-            // 3. Log first 200 characters for debugging (Logging Blitz)
+          // 2. Strip CDATA wrapper
+          if (icsData.includes('<![CDATA[')) {
+            icsData = icsData.match(/<!\[CDATA\[([\s\S]*?)\]\]>/i)?.[1] || icsData;
+          }
+
+          if (isDebugEvent) {
             const debugSnippet = icsData.substring(0, 200).replace(/\r/g, '\\r').replace(/\n/g, '\\n');
-            console.log(`[${functionName}] [Debug] Raw Data (200 chars): ${debugSnippet}`);
+            console.log(`[${functionName}] [Debug] Raw Data (Event ${i}): ${debugSnippet}`);
+          }
 
-            // 4. Unfold lines (iCal standard: CRLF followed by a space means the line continues)
-            const unfolded = icsData.replace(/\r\n\s/g, '');
-            
-            // 5. Brute Force Regex for key fields
-            const summaryMatch = unfolded.match(/SUMMARY:(.*)/i);
-            const uidMatch = unfolded.match(/UID:(.*)/i);
-            
-            // Specific regex for dates accounting for TZID and semicolons
-            const startMatch = unfolded.match(/DTSTART(?:;TZID=[^:]+)?[:](\d{8}T\d{6}Z?)/i);
-            const endMatch = unfolded.match(/DTEND(?:;TZID=[^:]+)?[:](\d{8}T\d{6}Z?)/i);
+          // 3. Unfold lines (iCal standard: CRLF followed by a space means the line continues)
+          const unfolded = icsData.replace(/\r\n\s/g, '');
+          
+          // 4. Brute Force Regex for key fields
+          const summaryMatch = unfolded.match(/SUMMARY:(.*)/i);
+          const uidMatch = unfolded.match(/UID:(.*)/i);
+          
+          // Specific regex for dates accounting for TZID and semicolons
+          const startMatch = unfolded.match(/DTSTART(?:;TZID=[^:]+)?[:](\d{8}T\d{6}Z?)/i);
+          const endMatch = unfolded.match(/DTEND(?:;TZID=[^:]+)?[:](\d{8}T\d{6}Z?)/i);
 
-            console.log(`[${functionName}] [Debug] Regex Match SUMMARY: ${summaryMatch ? 'FOUND' : 'null'}`);
-            console.log(`[${functionName}] [Debug] Regex Match UID: ${uidMatch ? 'FOUND' : 'null'}`);
-            console.log(`[${functionName}] [Debug] Regex Match DTSTART: ${startMatch ? 'FOUND' : 'null'}`);
-            console.log(`[${functionName}] [Debug] Regex Match DTEND: ${endMatch ? 'FOUND' : 'null'}`);
+          if (isDebugEvent) {
+            console.log(`[${functionName}] [Debug] Event ${i} Regex Results: SUMMARY=${!!summaryMatch}, UID=${!!uidMatch}, START=${!!startMatch}, END=${!!endMatch}`);
+          }
 
-            const summary = summaryMatch?.[1]?.trim() || 'Untitled';
-            const uid = uidMatch?.[1]?.trim();
-            const dtstart = startMatch?.[1]?.trim();
-            const dtend = endMatch?.[1]?.trim();
+          const summary = summaryMatch?.[1]?.trim() || 'Untitled';
+          const uid = uidMatch?.[1]?.trim();
+          const dtstart = startMatch?.[1]?.trim();
+          const dtend = endMatch?.[1]?.trim();
 
-            if (uid && dtstart && dtend) {
-              const parseIcalDate = (str) => {
-                // Handle 20260310T120000 format
-                const y = str.substring(0, 4), m = str.substring(4, 6), d = str.substring(6, 8);
-                const h = str.substring(9, 11), min = str.substring(11, 13), s = str.substring(13, 15);
-                const dateStr = `${y}-${m}-${d}T${h}:${min}:${s}${str.endsWith('Z') ? 'Z' : ''}`;
-                return new Date(dateStr).toISOString();
+          if (uid && dtstart && dtend) {
+            const parseIcalDate = (str) => {
+              const y = str.substring(0, 4), m = str.substring(4, 6), d = str.substring(6, 8);
+              const h = str.substring(9, 11), min = str.substring(11, 13), s = str.substring(13, 15);
+              const dateStr = `${y}-${m}-${d}T${h}:${min}:${s}${str.endsWith('Z') ? 'Z' : ''}`;
+              return new Date(dateStr).toISOString();
+            };
+
+            try {
+              const eventObj = {
+                user_id: user.id,
+                event_id: uid,
+                title: summary,
+                start_time: parseIcalDate(dtstart),
+                end_time: parseIcalDate(dtend),
+                provider: 'apple',
+                source_calendar: cal.calendar_name,
+                source_calendar_id: cal.calendar_id,
+                last_synced_at: new Date().toISOString()
               };
-
-              try {
-                const eventObj = {
-                  user_id: user.id,
-                  event_id: uid,
-                  title: summary,
-                  start_time: parseIcalDate(dtstart),
-                  end_time: parseIcalDate(dtend),
-                  provider: 'apple',
-                  source_calendar: cal.calendar_name,
-                  source_calendar_id: cal.calendar_id,
-                  last_synced_at: new Date().toISOString()
-                };
-                
-                console.log(`[${functionName}] [Debug] Final Event Object:`, JSON.stringify(eventObj));
-                allEvents.push(eventObj);
-                parsedCount++;
-              } catch (e) {
-                console.error(`[${functionName}] [Debug] Parsing Error: Invalid Date for ${summary} - ${e.message}`);
-              }
-            } else {
-              console.log(`[${functionName}] [Debug] Skipping event due to missing fields: UID=${!!uid}, START=${!!dtstart}, END=${!!dtend}`);
+              
+              if (isDebugEvent) console.log(`[${functionName}] [Debug] Event ${i} Object:`, JSON.stringify(eventObj));
+              allEvents.push(eventObj);
+              parsedCount++;
+            } catch (e) {
+              console.error(`[${functionName}] [Debug] Parsing Error for ${summary}: ${e.message}`);
             }
           }
         }
@@ -255,9 +258,6 @@ Deno.serve(async (req) => {
         },
         body: JSON.stringify(allEvents)
       });
-      if (!upsertRes.ok) {
-        console.error(`[${functionName}] Upsert Error:`, await upsertRes.text());
-      }
     }
 
     return new Response(JSON.stringify({ count: allEvents.length }), { 
