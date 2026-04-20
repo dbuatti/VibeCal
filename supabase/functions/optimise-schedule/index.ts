@@ -25,9 +25,11 @@ serve(async (req) => {
     const { 
       durationOverride, 
       maxTasksOverride, 
+      maxHoursOverride,
       slotAlignment = 15, 
       selectedDays = [1, 2, 3, 4, 5],
-      placeholderDate
+      placeholderDate,
+      vettedEventIds = []
     } = body;
 
     // 2. Fetch Data
@@ -54,13 +56,13 @@ serve(async (req) => {
 
     // 3. Scheduling Logic
     const proposedChanges = [];
-    const fixedEvents = allEvents.filter(e => e.is_locked);
-    const movableEvents = allEvents.filter(e => !e.is_locked);
+    // Treat vetted events as fixed for the purpose of this run
+    const fixedEvents = allEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
+    const movableEvents = allEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
 
     // We'll schedule for the next 14 days
     const startDate = startOfDay(new Date());
-    const endDate = addMinutes(startDate, 14 * 24 * 60);
-
+    
     let currentMovableIdx = 0;
 
     // Iterate through each day
@@ -92,7 +94,11 @@ serve(async (req) => {
         }
       });
 
-      let dailyTaskCount = 0;
+      let dailyTaskCount = dayFixedEvents.filter(e => {
+        const title = e.title?.toLowerCase() || '';
+        return !title.includes('lunch') && !title.includes('break') && !title.includes('dinner');
+      }).length;
+
       let currentTime = dayStart;
       const maxDailyMinutes = (maxHoursOverride || settings.max_hours_per_day) * 60;
       const maxDailyTasks = maxTasksOverride || settings.max_tasks_per_day;

@@ -285,6 +285,7 @@ const Plan = () => {
         body: { 
           durationOverride: durationOverride === "original" ? null : parseInt(durationOverride), 
           maxTasksOverride, 
+          maxHoursOverride,
           slotAlignment: parseInt(slotAlignment), 
           selectedDays,
           placeholderDate,
