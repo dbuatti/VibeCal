@@ -27,6 +27,7 @@ serve(async (req) => {
     const { data: profile } = await supabaseAdmin.from('profiles').select('apple_id, apple_app_password, timezone').eq('id', user.id).single();
     
     if (!profile?.apple_id || !profile?.apple_app_password) {
+      console.log(`[${functionName}] No Apple credentials found for user ${user.id}`);
       return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
     }
 
@@ -107,6 +108,7 @@ serve(async (req) => {
     const enabledPaths = (enabledCals || []).filter(c => c.is_enabled);
 
     if (enabledPaths.length === 0) {
+      console.log(`[${functionName}] No Apple calendars enabled for user ${user.id}`);
       await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
       return new Response(JSON.stringify({ count: 0, message: "No calendars enabled" }), { headers: corsHeaders });
     }
@@ -140,7 +142,8 @@ serve(async (req) => {
     const lockedKeywords = settings?.locked_keywords || [];
     const workKeywords = settings?.work_keywords || ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session', 'work session'];
     
-    const fixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
+    // Hard-coded "Hard" events that should always be locked
+    const hardFixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
 
     const interpretToUtc = (icalTime, timeZone) => {
       const y = icalTime.year;
@@ -186,8 +189,12 @@ serve(async (req) => {
     };
 
     for (const cal of enabledPaths) {
+      console.log(`[${functionName}] Fetching events for calendar: ${cal.calendar_name}`);
       const eventsRes = await fetch(cal.calendar_id, { method: 'REPORT', headers: { ...headers, 'Depth': '1' }, body: reportQuery });
-      if (!eventsRes.ok) continue;
+      if (!eventsRes.ok) {
+        console.error(`[${functionName}] Failed to fetch events for ${cal.calendar_name}: ${eventsRes.status}`);
+        continue;
+      }
       
       const eventsText = await eventsRes.text();
       const icsDatas = eventsText.match(/BEGIN:VCALENDAR.*?END:VCALENDAR/gs) || [];
@@ -206,8 +213,20 @@ serve(async (req) => {
 
             const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
             const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
-            const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && fixedKeywords.test(title));
+            
+            // Logic: Lock if explicitly locked OR (not explicitly movable AND matches hard fixed keywords)
+            // We removed the generic "appointment" check to avoid locking everything
+            let isLocked = isExplicitlyLocked;
+            let lockReason = isExplicitlyLocked ? "Explicit Keyword" : "Default Movable";
+
+            if (!isExplicitlyMovable && !isLocked && hardFixedKeywords.test(title)) {
+              isLocked = true;
+              lockReason = "Hard Fixed Keyword (Flight/Doctor/etc)";
+            }
+
             const isWork = workKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
+
+            console.log(`[${functionName}] Event: "${title}" | Start: ${startIso} | Locked: ${isLocked} (${lockReason})`);
 
             eventMap.set(event.uid, {
               user_id: user.id,
@@ -233,7 +252,8 @@ serve(async (req) => {
 
     const uniqueEvents = Array.from(eventMap.values());
     if (uniqueEvents.length > 0) {
-      await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
+      const { error: upsertError } = await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
+      if (upsertError) console.error(`[${functionName}] Upsert Error:`, upsertError);
     }
 
     const cleanupThreshold = new Date(new Date(syncTimestamp).getTime() - 60000).toISOString();

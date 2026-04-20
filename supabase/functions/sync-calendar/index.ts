@@ -32,6 +32,7 @@ serve(async (req) => {
   const functionName = "sync-calendar";
 
   try {
+    console.log(`[${functionName}] START - Google Sync Process`);
     const authHeader = req.headers.get('Authorization')
     let { googleAccessToken } = await req.json();
 
@@ -57,6 +58,7 @@ serve(async (req) => {
     });
 
     if (listRes.status === 401 && refreshToken) {
+      console.log(`[${functionName}] Token expired, refreshing...`);
       token = await refreshGoogleToken(refreshToken);
       await supabaseAdmin.from('profiles').update({ google_access_token: token }).eq('id', user.id);
     }
@@ -96,15 +98,13 @@ serve(async (req) => {
     const workKeywords = settings?.work_keywords || ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session', 'work session'];
     const dayStartStr = settings?.day_start_time || '09:00';
     
-    const fixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
+    const hardFixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
 
     const interpretToUtc = (isoStr, timeZone) => {
-      // If it has an explicit offset or Z, use it directly and ensure Z
       if (isoStr.includes('Z') || isoStr.includes('+') || (isoStr.includes('-') && isoStr.includes('T'))) {
         return new Date(isoStr).toISOString();
       }
       
-      // Floating time: Treat as local in the provided timeZone
       const [datePart, timePart] = isoStr.split('T');
       const [y, m, d] = datePart.split('-').map(Number);
       const [h, min, sec] = (timePart || '00:00:00').split(':').map(Number);
@@ -123,12 +123,8 @@ serve(async (req) => {
         parts.forEach(part => p[part.type] = part.value);
         
         const formattedInTz = new Date(Date.UTC(
-          parseInt(p.year),
-          parseInt(p.month) - 1,
-          parseInt(p.day),
-          parseInt(p.hour),
-          parseInt(p.minute),
-          parseInt(p.second)
+          parseInt(p.year), parseInt(p.month) - 1, parseInt(p.day), 
+          parseInt(p.hour), parseInt(p.minute), parseInt(p.second)
         ));
 
         const offsetMs = formattedInTz.getTime() - guessUtc.getTime();
@@ -139,6 +135,7 @@ serve(async (req) => {
     };
 
     for (const cal of enabledCalendars) {
+      console.log(`[${functionName}] Fetching events for calendar: ${cal.calendar_name}`);
       const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.calendar_id)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`;
       let res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) continue;
@@ -163,9 +160,24 @@ serve(async (req) => {
         
         const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
         const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
-        const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && ((event.attendees?.length > 1) || fixedKeywords.test(title)));
+        
+        let isLocked = isExplicitlyLocked;
+        let lockReason = isExplicitlyLocked ? "Explicit Keyword" : "Default Movable";
+
+        if (!isExplicitlyMovable && !isLocked) {
+          if (event.attendees?.length > 1) {
+            isLocked = true;
+            lockReason = "Multi-attendee Meeting";
+          } else if (hardFixedKeywords.test(title)) {
+            isLocked = true;
+            lockReason = "Hard Fixed Keyword";
+          }
+        }
+
         const isWork = workKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
         
+        console.log(`[${functionName}] Event: "${title}" | Start: ${startIso} | Locked: ${isLocked} (${lockReason})`);
+
         eventMap.set(event.id, {
           user_id: user.id, 
           event_id: event.id, 
@@ -194,8 +206,10 @@ serve(async (req) => {
     const cleanupThreshold = new Date(new Date(syncTimestamp).getTime() - 60000).toISOString();
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google').gte('start_time', syncStartTime.toISOString()).lt('last_seen_at', cleanupThreshold);
     
+    console.log(`[${functionName}] SUCCESS - Synced ${uniqueEvents.length} events.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
+    console.error(`[${functionName}] FATAL ERROR:`, error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })
