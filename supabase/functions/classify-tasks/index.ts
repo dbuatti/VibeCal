@@ -25,7 +25,8 @@ function isSemanticMatch(title: string, pattern: string) {
   return false;
 }
 
-const HARD_FIXED_PATTERNS = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary|dentist|appointment|appt|interview|vs|meeting with/i;
+// Expanded local patterns to minimize AI usage
+const HARD_FIXED_PATTERNS = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|clinic|surgery|medical|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary|appointment|appt|interview|vs|meeting with|call with|zoom|teams|google meet|skype|facetime|session with|coaching|lesson|rehearsal|audition|workshop|seminar|webinar|conference|travel to|commute|drive to/i;
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
@@ -45,7 +46,7 @@ serve(async (req) => {
     const { data: { user } } = await supabaseUser.auth.getUser();
     if (!user) throw new Error("Unauthorized");
 
-    // 1. STAGE 1: SEMANTIC MEMORY & HEURISTIC PRE-FILTER
+    // 1. STAGE 1: SEMANTIC MEMORY & HEURISTIC PRE-FILTER (Zero API Cost)
     const { data: feedback } = await supabaseAdmin
       .from('task_classification_feedback')
       .select('task_name, is_movable')
@@ -57,7 +58,7 @@ serve(async (req) => {
       if (match) {
         return { 
           isMovable: match.is_movable, 
-          explanation: `Semantic match: Similar to "${match.task_name}" which you previously vetted.`,
+          explanation: `Memory: Matches your previous vetting of "${match.task_name}".`,
           confidence: 1.0,
           isPredefined: true 
         };
@@ -67,7 +68,7 @@ serve(async (req) => {
       if (HARD_FIXED_PATTERNS.test(title)) {
         return {
           isMovable: false,
-          explanation: "Heuristic: Detected high-priority event pattern (Travel/Medical/Event).",
+          explanation: "Local Heuristic: Detected high-priority event pattern (Travel/Medical/Meeting).",
           confidence: 0.9,
           isPredefined: true
         };
@@ -76,10 +77,10 @@ serve(async (req) => {
       // Check user keywords
       const t = title.toLowerCase();
       if (lockedKeywords.some(kw => t.includes(kw.toLowerCase()))) {
-        return { isMovable: false, explanation: "Keyword match: Found in your 'Locked' list.", confidence: 1.0, isPredefined: true };
+        return { isMovable: false, explanation: "User Rule: Found in your 'Locked' list.", confidence: 1.0, isPredefined: true };
       }
       if (movableKeywords.some(kw => t.includes(kw.toLowerCase()))) {
-        return { isMovable: true, explanation: "Keyword match: Found in your 'Movable' list.", confidence: 1.0, isPredefined: true };
+        return { isMovable: true, explanation: "User Rule: Found in your 'Movable' list.", confidence: 1.0, isPredefined: true };
       }
 
       return null;
@@ -125,16 +126,24 @@ serve(async (req) => {
           });
         }
       } catch (aiError) {
-        console.warn(`[${functionName}] AI Quota/Error, using Smart Fallback:`, aiError.message);
+        // Check if it's a quota error (429)
+        const isQuotaError = aiError.message?.includes('429') || aiError.message?.includes('quota');
+        
+        if (isQuotaError) {
+          console.log(`[${functionName}] Quota Exceeded. Switching to Local Power-Saving Mode.`);
+        } else {
+          console.warn(`[${functionName}] AI Error, using Local Fallback:`, aiError.message);
+        }
         
         // 3. STAGE 3: SMART HEURISTIC FALLBACK (AI Busy/Quota)
         indicesToAI.forEach(idx => {
           const title = taskList[idx].toLowerCase();
+          // If it wasn't caught by Stage 1, we do a slightly more aggressive check here
           const likelyFixed = /with|call|meeting|vs|interview|appointment|doctor|dentist|flight|zoom|teams|rehearsal|lesson|performance|gig|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i.test(title);
           
           results[idx] = {
             isMovable: !likelyFixed,
-            explanation: "Classified via Smart Heuristic (AI Power Saving Mode).",
+            explanation: isQuotaError ? "Local Mode: Classified via heuristic (AI Quota Exceeded)." : "Local Mode: Classified via heuristic (AI Unavailable).",
             confidence: 0.6,
             dependsOn: null
           };
