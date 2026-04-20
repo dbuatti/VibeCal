@@ -27,12 +27,13 @@ serve(async (req) => {
     const { data: profile } = await supabaseAdmin.from('profiles').select('apple_id, apple_app_password, timezone').eq('id', user.id).single();
     
     if (!profile?.apple_id || !profile?.apple_app_password) {
-      console.log(`[${functionName}] No Apple credentials found for user ${user.id}`);
       return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
     }
 
+    // Force Melbourne if not set, otherwise use profile
     const userTimezone = profile.timezone || 'Australia/Melbourne';
-    console.log(`[${functionName}] Using User Timezone: ${userTimezone}`);
+    const isMelbourne = userTimezone.includes('Melbourne') || userTimezone.includes('Sydney');
+    const offsetString = isMelbourne ? "+10:00" : "+00:00"; // Simple fallback for AEST
 
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
     const headers = {
@@ -46,8 +47,6 @@ serve(async (req) => {
     // 1. Discover Principal
     const propfindPrincipal = `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:"><D:prop><D:current-user-principal/></D:prop></D:propfind>`;
     const principalRes = await fetch('https://caldav.icloud.com/', { method: 'PROPFIND', headers, body: propfindPrincipal });
-    if (!principalRes.ok) throw new Error(`Principal discovery failed: ${principalRes.status}`);
-    
     const principalText = await principalRes.text();
     const principalMatch = principalText.match(/<[^:]*:?current-user-principal[^>]*>\s*<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i);
     if (!principalMatch) throw new Error("Could not find principal href");
@@ -58,7 +57,6 @@ serve(async (req) => {
     const homeRes = await fetch(`https://caldav.icloud.com${principalHref}`, { method: 'PROPFIND', headers, body: propfindHome });
     const homeText = await homeRes.text();
     const homeMatch = homeText.match(/<[^:]*:?calendar-home-set[^>]*>\s*<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i);
-    if (!homeMatch) throw new Error("Could not find calendar home set");
     const homeHref = homeMatch[1];
 
     // 3. Discover Calendars
@@ -68,7 +66,6 @@ serve(async (req) => {
     
     const calendarPaths = [];
     const responses = calsText.split(/<[^:]*:?response/i);
-    
     for (const resp of responses) {
       if (/<[^:]*:?resourcetype[^>]*>.*?<[^:]*:?calendar/is.test(resp)) {
         const hrefMatch = resp.match(/<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i);
@@ -88,7 +85,7 @@ serve(async (req) => {
     const syncStartTime = new Date();
     syncStartTime.setDate(syncStartTime.getDate() - 1);
     const syncEndTime = new Date();
-    syncEndTime.setDate(syncEndTime.getDate() + 30); // Reduced window to save quota
+    syncEndTime.setDate(syncEndTime.getDate() + 30);
 
     const startStr = syncStartTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endStr = syncEndTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
@@ -112,21 +109,11 @@ serve(async (req) => {
     const movableKeywords = settings?.movable_keywords || [];
     const lockedKeywords = settings?.locked_keywords || [];
     const workKeywords = settings?.work_keywords || ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session', 'work session'];
-    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga|show|tech|dress|night|opening|closing|birthday|party|gala|buffer|probe|experiment|quinceanera|🎭|✨|lunch|dinner|breakfast|brunch|bump in|performance|gig|concert|wedding|funeral|doctor|dentist|flight|train|hotel|check-in|check-out|reservation|40th|50th|60th|anniversary/i;
-
-    // Helper to get offset for a specific timezone
-    const getOffsetMinutes = (tz: string, date: Date) => {
-      try {
-        const utcDate = new Date(date.toLocaleString('en-US', { timeZone: 'UTC' }));
-        const tzDate = new Date(date.toLocaleString('en-US', { timeZone: tz }));
-        return (utcDate.getTime() - tzDate.getTime()) / 60000;
-      } catch (e) {
-        return 600; // Default to +10 (Melbourne) if error
-      }
-    };
+    
+    // Relaxed fixed keywords - only lock things that are definitely unmovable
+    const fixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
 
     for (const cal of calendarPaths) {
-      console.log(`[${functionName}] Fetching events for: ${cal.name}`);
       const eventsRes = await fetch(cal.href, { method: 'REPORT', headers: { ...headers, 'Depth': '1' }, body: reportQuery });
       if (!eventsRes.ok) continue;
       
@@ -142,46 +129,37 @@ serve(async (req) => {
           for (const vevent of vevents) {
             const event = new ICAL.Event(vevent);
             const title = event.summary || 'Untitled';
-            const description = event.description || null;
-            const location = event.location || null;
             
-            let start, end;
+            let startIso, endIso;
             
-            // Handle floating times by assuming user's timezone
+            // STRICT TIMEZONE HANDLING
+            // If it's floating or has no TZ, we force it to Melbourne (+10:00)
             if (!event.startDate.isUtc && !event.startDate.timezone) {
               const s = event.startDate.toString(); // "2026-04-21T10:30:00"
-              const parts = s.split(/[-T:]/);
-              const tempDate = new Date(Date.UTC(parseInt(parts[0]), parseInt(parts[1])-1, parseInt(parts[2]), parseInt(parts[3]), parseInt(parts[4])));
-              const offset = getOffsetMinutes(userTimezone, tempDate);
-              start = new Date(tempDate.getTime() + offset * 60000);
-              
-              const es = event.endDate.toString();
-              const eparts = es.split(/[-T:]/);
-              const etempDate = new Date(Date.UTC(parseInt(eparts[0]), parseInt(eparts[1])-1, parseInt(eparts[2]), parseInt(eparts[3]), parseInt(eparts[4])));
-              const eoffset = getOffsetMinutes(userTimezone, etempDate);
-              end = new Date(etempDate.getTime() + eoffset * 60000);
-              
-              console.log(`[${functionName}] Floating Time Fixed: "${title}" ${s} -> ${start.toISOString()}`);
+              const e = event.endDate.toString();
+              startIso = `${s}${offsetString}`;
+              endIso = `${e}${offsetString}`;
             } else {
-              start = event.startDate.toJSDate();
-              end = event.endDate.toJSDate();
+              startIso = event.startDate.toJSDate().toISOString();
+              endIso = event.endDate.toJSDate().toISOString();
             }
 
-            const uid = event.uid;
             const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
             const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
+            
+            // Default to MOVABLE (false) unless it matches a strict fixed keyword or is explicitly locked
             const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && fixedKeywords.test(title));
             const isWork = workKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
 
-            eventMap.set(uid, {
+            eventMap.set(event.uid, {
               user_id: user.id,
-              event_id: uid,
+              event_id: event.uid,
               title: title,
-              description: description,
-              location: location,
-              start_time: start.toISOString(),
-              end_time: end.toISOString(),
-              duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000) || 30,
+              description: event.description || null,
+              location: event.location || null,
+              start_time: startIso,
+              end_time: endIso,
+              duration_minutes: Math.round((new Date(endIso).getTime() - new Date(startIso).getTime()) / 60000) || 30,
               is_locked: isLocked,
               is_work: isWork,
               provider: 'apple',
@@ -210,7 +188,6 @@ serve(async (req) => {
       .gte('start_time', syncStartTime.toISOString())
       .lt('last_seen_at', cleanupThreshold);
 
-    console.log(`[${functionName}] SUCCESS - Synced ${uniqueEvents.length} events.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
     console.error(`[${functionName}] FATAL ERROR:`, error.message);

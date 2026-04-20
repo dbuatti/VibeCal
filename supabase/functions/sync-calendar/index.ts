@@ -22,8 +22,8 @@ serve(async (req) => {
     const supabaseAdmin = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '')
     const supabaseUser = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_ANON_KEY') ?? '', { global: { headers: { Authorization: authHeader } } })
     
-    const { data: { user }, error: userError } = await supabaseUser.auth.getUser()
-    if (userError || !user) throw new Error("Unauthorized: " + (userError?.message || "No user found"));
+    const { data: { user } } = await supabaseUser.auth.getUser()
+    if (!user) throw new Error("Unauthorized");
 
     if (!googleAccessToken) {
       const { data: profile } = await supabaseAdmin.from('profiles').select('google_access_token').eq('id', user.id).single();
@@ -38,12 +38,6 @@ serve(async (req) => {
     const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { 
       headers: { Authorization: `Bearer ${googleAccessToken}` } 
     });
-    
-    if (!listRes.ok) {
-      const errorData = await listRes.json();
-      throw new Error(`Google API Error: ${errorData.error?.message || 'Unknown'}`);
-    }
-
     const listData = await listRes.json();
     if (listData.items) {
       const discovered = listData.items.filter(cal => !cal.id.includes('@import.calendar.google.com')).map(cal => ({
@@ -53,19 +47,13 @@ serve(async (req) => {
         provider: 'google', 
         color: cal.backgroundColor || '#6366f1'
       }));
-      
       if (discovered.length > 0) {
         await supabaseAdmin.from('user_calendars').upsert(discovered, { onConflict: 'user_id, calendar_id' });
       }
     }
 
     // 2. Get Enabled Calendars
-    const { data: enabled } = await supabaseAdmin
-      .from('user_calendars')
-      .select('calendar_id, calendar_name, is_enabled')
-      .eq('user_id', user.id)
-      .eq('provider', 'google');
-    
+    const { data: enabled } = await supabaseAdmin.from('user_calendars').select('calendar_id, calendar_name, is_enabled').eq('user_id', user.id).eq('provider', 'google');
     const enabledCalendars = (enabled || []).filter(c => c.is_enabled);
     if (enabledCalendars.length === 0) {
       return new Response(JSON.stringify({ count: 0, message: "No calendars enabled" }), { headers: corsHeaders });
@@ -80,14 +68,13 @@ serve(async (req) => {
     const syncTimestamp = new Date().toISOString();
     const eventMap = new Map();
     
-    const { data: existingEvents } = await supabaseAdmin.from('calendar_events_cache').select('event_id, is_locked').eq('user_id', user.id);
-    const existingLockStatus = new Map(existingEvents?.map(e => [e.event_id, e.is_locked]) || []);
-
     const { data: settings } = await supabaseAdmin.from('user_settings').select('movable_keywords, locked_keywords, work_keywords').eq('user_id', user.id).single();
     const movableKeywords = settings?.movable_keywords || [];
     const lockedKeywords = settings?.locked_keywords || [];
     const workKeywords = settings?.work_keywords || ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session', 'work session'];
-    const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga|show|tech|dress|night|opening|closing|birthday|party|gala|buffer|probe|experiment|quinceanera|🎭|✨|lunch|dinner|breakfast|brunch|bump in|performance|gig|concert|wedding|funeral|doctor|dentist|flight|train|hotel|check-in|check-out|reservation|40th|50th|60th|anniversary/i;
+    
+    // Relaxed fixed keywords
+    const fixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
 
     for (const cal of enabledCalendars) {
       const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.calendar_id)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`;
@@ -99,16 +86,14 @@ serve(async (req) => {
 
       items.forEach(event => {
         const title = event.summary || 'Untitled';
-        let start = event.start.dateTime ? new Date(event.start.dateTime) : new Date(event.start.date + "T09:00:00");
-        let end = event.end.dateTime ? new Date(event.end.dateTime) : new Date(event.end.date + "T09:30:00");
+        let start = event.start.dateTime ? new Date(event.start.dateTime) : new Date(event.start.date + "T09:00:00Z");
+        let end = event.end.dateTime ? new Date(event.end.dateTime) : new Date(event.end.date + "T09:30:00Z");
         
-        let isLocked = existingLockStatus.has(event.id) ? existingLockStatus.get(event.id) : null;
-        if (isLocked === null) {
-          const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
-          const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
-          isLocked = isExplicitlyLocked || (!isExplicitlyMovable && ((event.attendees?.length > 1) || fixedKeywords.test(title)));
-        }
-
+        const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
+        const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
+        
+        // Default to MOVABLE unless strict match
+        const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && ((event.attendees?.length > 1) || fixedKeywords.test(title)));
         const isWork = workKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
         
         eventMap.set(event.id, {
@@ -136,7 +121,6 @@ serve(async (req) => {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
     }
     
-    // Cleanup stale Google events
     const cleanupThreshold = new Date(new Date(syncTimestamp).getTime() - 60000).toISOString();
     await supabaseAdmin.from('calendar_events_cache')
       .delete()
@@ -145,7 +129,6 @@ serve(async (req) => {
       .gte('start_time', syncStartTime.toISOString())
       .lt('last_seen_at', cleanupThreshold);
     
-    console.log(`[${functionName}] SUCCESS - Synced ${uniqueEvents.length} events.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
     console.error(`[${functionName}] FATAL ERROR:`, error.message);
