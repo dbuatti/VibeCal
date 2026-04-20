@@ -453,7 +453,7 @@ const Vet = () => {
                 <div className="grid grid-cols-1 gap-4">
                   {groupedEvents[dateKey].map((event) => (
                     <div key={event.event_id} className={cn(
-                      "p-6 rounded-[2.5rem] border transition-all duration-300 group flex items-center justify-between relative overflow-hidden hover:shadow-md",
+                      "px-6 py-3 rounded-[2rem] border transition-all duration-300 group flex items-center justify-between relative overflow-hidden hover:shadow-md",
                       event.is_locked 
                         ? "bg-white border-gray-100" 
                         : "bg-indigo-50/40 border-indigo-100/50"
