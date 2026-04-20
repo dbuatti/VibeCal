@@ -63,27 +63,37 @@ serve(async (req) => {
     const calsRes = await fetch(homeHref, { method: 'PROPFIND', headers: { ...headers, 'Depth': '1' }, body: propfindCals });
     const calsText = await calsRes.text();
     
-    const discoveredCalendars = [];
+    const discoveredCalendarsMap = new Map();
     const responses = calsText.split(/<[^:]*:?response/i);
+    
     for (const resp of responses) {
-      if (/<[^:]*:?resourcetype[^>]*>.*?<[^:]*:?calendar/is.test(resp)) {
-        const hrefMatch = resp.match(/<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i);
-        const nameMatch = resp.match(/<[^:]*:?displayname[^>]*>([^<]+)<\/[^>]*>/i);
-        if (hrefMatch) {
-          let href = hrefMatch[1];
-          if (href.startsWith('/')) href = `${baseUrl}${href}`;
-          // Normalize: remove trailing slash
-          href = href.replace(/\/$/, '');
-          
-          discoveredCalendars.push({ 
+      const hrefMatch = resp.match(/<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i);
+      const nameMatch = resp.match(/<[^:]*:?displayname[^>]*>([^<]+)<\/[^>]*>/i);
+      const isCalendar = /<[^:]*:?resourcetype[^>]*>.*?<[^:]*:?calendar/is.test(resp);
+      
+      if (hrefMatch && isCalendar) {
+        let href = hrefMatch[1];
+        if (href.startsWith('/')) href = `${baseUrl}${href}`;
+        href = href.replace(/\/$/, ''); // Normalize: remove trailing slash
+        
+        const name = nameMatch ? nameMatch[1] : 'Untitled';
+        
+        // FILTER: Skip delegated accounts (email addresses) and system lists
+        const isEmail = name.includes('@') && name.includes('.');
+        const isSystem = /reminders|tasks|inbox|outbox/i.test(name);
+        
+        if (!isEmail && !isSystem) {
+          discoveredCalendarsMap.set(href, { 
             user_id: user.id,
             calendar_id: href, 
-            calendar_name: nameMatch ? nameMatch[1] : 'Untitled',
+            calendar_name: name,
             provider: 'apple'
           });
         }
       }
     }
+
+    const discoveredCalendars = Array.from(discoveredCalendarsMap.values());
 
     // Upsert discovered calendars
     if (discoveredCalendars.length > 0) {
@@ -152,6 +162,7 @@ serve(async (req) => {
     };
 
     for (const cal of enabledPaths) {
+      console.log(`[${functionName}] Fetching events for: ${cal.calendar_name}`);
       const eventsRes = await fetch(cal.calendar_id, { method: 'REPORT', headers: { ...headers, 'Depth': '1' }, body: reportQuery });
       if (!eventsRes.ok) continue;
       
