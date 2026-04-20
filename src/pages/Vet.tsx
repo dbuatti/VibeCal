@@ -26,7 +26,8 @@ import {
   Globe,
   Sparkles,
   Info,
-  AlertTriangle
+  AlertTriangle,
+  Brain
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -44,6 +45,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { format, parseISO, isToday, isTomorrow, startOfDay } from 'date-fns';
 import { cn } from '@/lib/utils';
+import TrainAIModal from '@/components/TrainAIModal';
 
 type SortField = 'date' | 'title' | 'status';
 type SortOrder = 'asc' | 'desc';
@@ -86,6 +88,10 @@ const Vet = () => {
   const [sortBy, setSortBy] = useState<SortField>('date');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
   const [selectedProvider, setSelectedProvider] = useState<string | 'all'>('all');
+
+  // Training Modal State
+  const [trainingTask, setTrainingTask] = useState<any>(null);
+  const [isTrainingModalOpen, setIsTrainingModalOpen] = useState(false);
 
   const fetchEvents = async () => {
     setLoading(true);
@@ -258,6 +264,11 @@ const Vet = () => {
     if (isToday(date)) return "Today";
     if (isTomorrow(date)) return "Tomorrow";
     return format(date, 'EEEE, MMM do');
+  };
+
+  const handleOpenTraining = (event: any) => {
+    setTrainingTask(event);
+    setIsTrainingModalOpen(true);
   };
 
   return (
@@ -469,6 +480,13 @@ const Vet = () => {
                                 Work
                               </Badge>
                             )}
+                            <button 
+                              onClick={() => handleOpenTraining(event)}
+                              className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+                              title="Train AI on this task"
+                            >
+                              <Brain size={14} />
+                            </button>
                           </div>
                           
                           <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
@@ -533,6 +551,13 @@ const Vet = () => {
           )}
         </div>
       </div>
+
+      <TrainAIModal 
+        isOpen={isTrainingModalOpen}
+        onClose={() => setIsTrainingModalOpen(false)}
+        task={trainingTask}
+        onSuccess={fetchEvents}
+      />
     </Layout>
   );
 };
