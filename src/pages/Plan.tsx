@@ -235,6 +235,9 @@ const Plan = () => {
   const handleFullSync = async () => {
     console.log("[Plan] handleFullSync started");
     setIsProcessing(true);
+    setProposal(null);
+    setAppliedChanges([]);
+    setCurrentStep('initial');
     setProgress(0);
     setStatusText('Performing full system sync...');
     try {

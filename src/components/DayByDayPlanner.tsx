@@ -54,14 +54,18 @@ const DayByDayPlanner = ({
     const todayStr = formatInTimeZone(new Date(), timezone, 'yyyy-MM-dd');
 
     changes.forEach(c => {
-      const newDate = formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd');
-      if (newDate >= todayStr) dates.add(newDate);
+      if (c.new_start) {
+        const newDate = formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd');
+        if (newDate >= todayStr) dates.add(newDate);
+      }
       
-      const oldDate = formatInTimeZone(parseISO(c.old_start), timezone, 'yyyy-MM-dd');
-      if (oldDate >= todayStr) dates.add(oldDate);
+      if (c.old_start) {
+        const oldDate = formatInTimeZone(parseISO(c.old_start), timezone, 'yyyy-MM-dd');
+        if (oldDate >= todayStr) dates.add(oldDate);
+      }
     });
 
-    events.filter(e => e.is_locked).forEach(e => {
+    events.filter(e => e.is_locked && e.start_time).forEach(e => {
       const date = formatInTimeZone(parseISO(e.start_time), timezone, 'yyyy-MM-dd');
       if (date >= todayStr) dates.add(date);
     });
@@ -80,14 +84,14 @@ const DayByDayPlanner = ({
   const currentDate = currentDateStr ? parseISO(currentDateStr) : new Date();
 
   const dayChanges = useMemo(() => {
-    return changes.filter(c => 
-      formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd') === currentDateStr ||
-      formatInTimeZone(parseISO(c.old_start), timezone, 'yyyy-MM-dd') === currentDateStr
+    return changes.filter(c =>
+      (c.new_start && formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd') === currentDateStr) ||
+      (c.old_start && formatInTimeZone(parseISO(c.old_start), timezone, 'yyyy-MM-dd') === currentDateStr)
     );
   }, [changes, currentDateStr]);
 
   const dayLockedEvents = useMemo(() => {
-    return events.filter(e => e.is_locked && formatInTimeZone(parseISO(e.start_time), timezone, 'yyyy-MM-dd') === currentDateStr);
+    return events.filter(e => e.is_locked && e.start_time && formatInTimeZone(parseISO(e.start_time), timezone, 'yyyy-MM-dd') === currentDateStr);
   }, [events, currentDateStr]);
 
   const isDayVetted = useMemo(() => {
@@ -112,9 +116,9 @@ const DayByDayPlanner = ({
       const todayStr = formatInTimeZone(new Date(), timezone, 'yyyy-MM-dd');
       const firstUnvettedIndex = allDates.findIndex(dateStr => {
         if (dateStr < todayStr) return false;
-        const dayChangesForDate = changes.filter(c => 
-          formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd') === dateStr ||
-          formatInTimeZone(parseISO(c.old_start), timezone, 'yyyy-MM-dd') === dateStr
+        const dayChangesForDate = changes.filter(c =>
+          (c.new_start && formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd') === dateStr) ||
+          (c.old_start && formatInTimeZone(parseISO(c.old_start), timezone, 'yyyy-MM-dd') === dateStr)
         );
         return dayChangesForDate.length > 0 && !dayChangesForDate.every(c => appliedChanges.includes(c.event_id));
       });
@@ -140,13 +144,22 @@ const DayByDayPlanner = ({
 
     const workEvents = eventsOnThisDay
       .filter(e => isWorkEvent(e))
-      .sort((a, b) => parseISO(a.start_time || a.new_start).getTime() - parseISO(b.start_time || b.new_start).getTime());
+      .sort((a, b) => {
+        const aStart = a.start_time || a.new_start;
+        const bStart = b.start_time || b.new_start;
+        if (!aStart || !bStart) return 0;
+        return parseISO(aStart).getTime() - parseISO(bStart).getTime();
+      });
 
     let totalWorkMinutes = 0;
     let lastEnd = new Date(0);
     workEvents.forEach(e => {
-      const start = parseISO(e.start_time || e.new_start);
-      const end = parseISO(e.end_time || e.new_end);
+      const startStr = e.start_time || e.new_start;
+      const endStr = e.end_time || e.new_end;
+      if (!startStr || !endStr) return;
+
+      const start = parseISO(startStr);
+      const end = parseISO(endStr);
       if (isAfter(end, lastEnd)) {
         const effectiveStart = isBefore(start, lastEnd) ? lastEnd : start;
         totalWorkMinutes += (end.getTime() - effectiveStart.getTime()) / 60000;
@@ -288,10 +301,10 @@ const DayByDayPlanner = ({
             <CalendarIcon className="text-indigo-600" size={20} />
             <h3 className="text-lg font-black text-gray-900 tracking-tight">Visual Map</h3>
           </div>
-          <VisualSchedule 
-            events={events.filter(e => formatInTimeZone(parseISO(e.start_time), timezone, 'yyyy-MM-dd') === currentDateStr)} 
-            changes={dayChanges.filter(c => formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd') === currentDateStr)} 
-            appliedChanges={appliedChanges} 
+          <VisualSchedule
+            events={events.filter(e => e.start_time && formatInTimeZone(parseISO(e.start_time), timezone, 'yyyy-MM-dd') === currentDateStr)}
+            changes={dayChanges.filter(c => c.new_start && formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd') === currentDateStr)}
+            appliedChanges={appliedChanges}
             isVetted={isDayVetted}
             workKeywords={workKeywords}
             timezone={timezone}
