@@ -75,16 +75,15 @@ serve(async (req) => {
       if (hrefMatch && isCalendar) {
         let href = hrefMatch[1];
         if (href.startsWith('/')) href = `${baseUrl}${href}`;
-        href = href.replace(/\/$/, ''); // Normalize: remove trailing slash
+        // Normalize: ensure trailing slash for consistency with previous versions
+        if (!href.endsWith('/')) href += '/';
         
         const name = nameMatch ? nameMatch[1] : 'Untitled';
         
-        // AGGRESSIVE FILTER: Skip delegated accounts, system lists, and app-specific task lists
+        // Filter out obvious system/app lists
         const isEmail = name.includes('@') && name.includes('.');
-        // Added keywords based on user feedback: pomodoro, shopping, spendings, distraction, etc.
         const isSystem = /reminders|tasks|inbox|outbox|notifications|shopping|pomodoro|distraction|spendings|list|checklist/i.test(name);
         
-        // DE-DUPLICATION: Only keep the first instance of a calendar name
         if (!isEmail && !isSystem && !seenNames.has(name)) {
           seenNames.add(name);
           discoveredCalendarsMap.set(href, { 
@@ -102,17 +101,6 @@ serve(async (req) => {
     // Upsert discovered calendars
     if (discoveredCalendars.length > 0) {
       await supabaseAdmin.from('user_calendars').upsert(discoveredCalendars, { onConflict: 'user_id, calendar_id' });
-    }
-
-    // CLEANUP: Remove Apple calendars that were NOT discovered in this run
-    const discoveredIds = discoveredCalendars.map(c => c.calendar_id);
-    if (discoveredIds.length > 0) {
-      const idList = discoveredIds.map(id => `'${id}'`).join(',');
-      await supabaseAdmin.from('user_calendars')
-        .delete()
-        .eq('user_id', user.id)
-        .eq('provider', 'apple')
-        .filter('calendar_id', 'not.in', `(${idList})`);
     }
 
     // Get enabled calendars

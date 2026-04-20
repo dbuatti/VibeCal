@@ -7,6 +7,7 @@ import { Switch } from '@/components/ui/switch';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Calendar, RefreshCw, Globe, CheckSquare, Square } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface CalendarSettingsProps {
   calendars: any[];
@@ -57,80 +58,91 @@ const CalendarSettings = ({ calendars, isTesting, onDiscover, onToggle }: Calend
   };
 
   return (
-    <Card className="border-none shadow-sm rounded-2xl border-l-4 border-l-indigo-600 h-full flex flex-col overflow-hidden">
-      <CardHeader className="pb-4 shrink-0">
-        <div className="flex items-center justify-between">
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <Calendar className="text-indigo-600" size={20} />
-            Calendars
-          </CardTitle>
-          <Button 
-            variant="ghost" 
-            size="sm" 
-            onClick={onDiscover}
-            disabled={isTesting}
-            className="h-8 rounded-lg text-indigo-600 hover:bg-indigo-50 font-black text-[10px] uppercase tracking-widest"
-          >
-            <RefreshCw size={12} className={cn("mr-2", isTesting && "animate-spin")} />
-            Refresh
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent className="flex-1 min-h-0 p-0 flex flex-col">
-        <ScrollArea className="flex-1 w-full">
-          <div className="px-6 pb-6 space-y-8">
-            {providers.length > 0 ? providers.map((provider) => (
-              <div key={provider} className="space-y-4">
-                <div className="flex items-center justify-between sticky top-0 bg-white py-2 z-10 border-b border-gray-50">
-                  <div className="flex items-center gap-2">
-                    <ProviderIcon provider={provider} />
-                    <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">
-                      {provider === 'google' ? 'Google Account' : provider === 'apple' ? 'iCloud Account' : 'Other'}
-                    </h3>
-                  </div>
-                  <div className="flex gap-2">
-                    <button 
-                      onClick={() => handleBulkToggle(provider, true)}
-                      className="text-[8px] font-black uppercase tracking-widest text-indigo-500 hover:text-indigo-700 flex items-center gap-1"
-                    >
-                      <CheckSquare size={10} /> All
-                    </button>
-                    <button 
-                      onClick={() => handleBulkToggle(provider, false)}
-                      className="text-[8px] font-black uppercase tracking-widest text-gray-400 hover:text-gray-600 flex items-center gap-1"
-                    >
-                      <Square size={10} /> None
-                    </button>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  {grouped[provider].map((cal: any) => (
-                    <div key={cal.id} className="flex items-center justify-between p-3 bg-gray-50/50 rounded-xl border border-gray-100 hover:border-indigo-100 transition-colors">
-                      <div className="flex items-center gap-3 overflow-hidden">
-                        <div className="w-2.5 h-2.5 rounded-full shrink-0 shadow-sm" style={{ backgroundColor: cal.color || '#6366f1' }} />
-                        <span className="text-xs font-bold text-gray-700 truncate">{cal.calendar_name}</span>
-                      </div>
-                      <Switch 
-                        checked={cal.is_enabled} 
-                        onCheckedChange={(val) => onToggle(cal.id, val)}
-                        className="data-[state=checked]:bg-indigo-600"
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )) : (
-              <div className="py-10 text-center bg-gray-50 rounded-2xl border border-dashed border-gray-200 mx-6 mt-4">
-                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">No calendars found</p>
-                <Button variant="link" onClick={onDiscover} className="text-indigo-600 text-[10px] font-black uppercase tracking-widest mt-2">
-                  Discover Now
-                </Button>
-              </div>
-            )}
+    <TooltipProvider>
+      <Card className="border-none shadow-sm rounded-2xl border-l-4 border-l-indigo-600 h-full flex flex-col overflow-hidden">
+        <CardHeader className="pb-4 shrink-0">
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Calendar className="text-indigo-600" size={20} />
+              Calendars
+            </CardTitle>
+            <Button 
+              variant="ghost" 
+              size="sm" 
+              onClick={onDiscover}
+              disabled={isTesting}
+              className="h-8 rounded-lg text-indigo-600 hover:bg-indigo-50 font-black text-[10px] uppercase tracking-widest"
+            >
+              <RefreshCw size={12} className={cn("mr-2", isTesting && "animate-spin")} />
+              Refresh
+            </Button>
           </div>
-        </ScrollArea>
-      </CardContent>
-    </Card>
+        </CardHeader>
+        <CardContent className="flex-1 min-h-0 p-0 flex flex-col">
+          <ScrollArea className="flex-1 w-full">
+            <div className="px-6 pb-6 space-y-8">
+              {providers.length > 0 ? providers.map((provider) => (
+                <div key={provider} className="space-y-4">
+                  <div className="flex items-center justify-between sticky top-0 bg-white py-2 z-10 border-b border-gray-50">
+                    <div className="flex items-center gap-2">
+                      <ProviderIcon provider={provider} />
+                      <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">
+                        {provider === 'google' ? 'Google Account' : provider === 'apple' ? 'iCloud Account' : 'Other'}
+                      </h3>
+                    </div>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => handleBulkToggle(provider, true)}
+                        className="text-[8px] font-black uppercase tracking-widest text-indigo-500 hover:text-indigo-700 flex items-center gap-1"
+                      >
+                        <CheckSquare size={10} /> All
+                      </button>
+                      <button 
+                        onClick={() => handleBulkToggle(provider, false)}
+                        className="text-[8px] font-black uppercase tracking-widest text-gray-400 hover:text-gray-600 flex items-center gap-1"
+                      >
+                        <Square size={10} /> None
+                      </button>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    {grouped[provider].map((cal: any) => (
+                      <div key={cal.id} className="flex items-center justify-between p-3 bg-gray-50/50 rounded-xl border border-gray-100 hover:border-indigo-100 transition-colors gap-3">
+                        <div className="flex items-center gap-3 overflow-hidden flex-1">
+                          <div className="w-2.5 h-2.5 rounded-full shrink-0 shadow-sm" style={{ backgroundColor: cal.color || '#6366f1' }} />
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="text-xs font-bold text-gray-700 truncate cursor-default">
+                                {cal.calendar_name}
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent className="rounded-lg font-bold text-[10px]">
+                              {cal.calendar_name}
+                            </TooltipContent>
+                          </Tooltip>
+                        </div>
+                        <Switch 
+                          checked={cal.is_enabled} 
+                          onCheckedChange={(val) => onToggle(cal.id, val)}
+                          className="data-[state=checked]:bg-indigo-600 shrink-0"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )) : (
+                <div className="py-10 text-center bg-gray-50 rounded-2xl border border-dashed border-gray-200 mx-6 mt-4">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">No calendars found</p>
+                  <Button variant="link" onClick={onDiscover} className="text-indigo-600 text-[10px] font-black uppercase tracking-widest mt-2">
+                    Discover Now
+                  </Button>
+                </div>
+              )}
+            </div>
+          </ScrollArea>
+        </CardContent>
+      </Card>
+    </TooltipProvider>
   );
 };
 
