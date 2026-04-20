@@ -315,9 +315,20 @@ const Settings = () => {
           <h1 className="text-3xl font-bold text-gray-900">Control Layer</h1>
           <p className="text-gray-500 mt-1">Configure your scheduling rules and AI preferences.</p>
         </div>
-        <Button onClick={handleSave} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-6">
-          <Save size={18} className="mr-2" /> Save Changes
-        </Button>
+        <div className="flex items-center gap-3">
+          <a 
+            href="https://gemini.google.com/app/7f2a6f927c67ca43" 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="w-10 h-10 rounded-full bg-white border border-gray-100 shadow-sm flex items-center justify-center text-indigo-600 hover:bg-indigo-50 transition-all hover:scale-110"
+            title="Open Gemini"
+          >
+            <Sparkles size={20} />
+          </a>
+          <Button onClick={handleSave} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-6">
+            <Save size={18} className="mr-2" /> Save Changes
+          </Button>
+        </div>
       </div>
 
       <div className="space-y-8">
