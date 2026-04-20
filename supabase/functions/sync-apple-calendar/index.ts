@@ -159,27 +159,26 @@ Deno.serve(async (req) => {
 
         let parsedCount = 0;
         for (const resp of eventResponses) {
-          // DEBUG: Log the first response to see the XML structure
-          if (parsedCount === 0 && eventResponses.length > 0) {
-            console.log(`[${functionName}] DEBUG: First response snippet:`, resp.substring(0, 500));
-          }
-
-          // More flexible regex for calendar-data content
-          const icsMatch = resp.match(/calendar-data[^>]*>([\s\S]*?)<\//i);
+          // 1. Extract the calendar-data content
+          const icsMatch = resp.match(/calendar-data[^>]*>([\s\S]*?)<\/.*?calendar-data>/i);
           let icsData = icsMatch?.[1];
           
           if (icsData) {
-            // Decode XML entities
+            // 2. Strip CDATA wrapper if present
+            if (icsData.includes('<![CDATA[')) {
+              icsData = icsData.match(/<!\[CDATA\[([\s\S]*?)\]\]>/i)?.[1] || icsData;
+            }
+
+            // 3. Decode XML entities
             icsData = icsData
               .replace(/&quot;/g, '"')
               .replace(/&/g, '&')
               .replace(/</g, '<')
               .replace(/>/g, '>')
-              .replace(/&#x([0-9a-fA-F]+);/g, (match, hex) => String.fromCharCode(parseInt(hex, 16)))
-              .replace(/&#([0-9]+);/g, (match, dec) => String.fromCharCode(parseInt(dec, 10)))
               .trim();
             
             try {
+              // 4. Main Parser (ICAL.js)
               const jcalData = ICAL.parse(icsData);
               const vcalendar = new ICAL.Component(jcalData);
               const vevents = vcalendar.getAllSubcomponents('vevent');
@@ -205,7 +204,34 @@ Deno.serve(async (req) => {
                 parsedCount++;
               }
             } catch (parseErr) {
-              // Silent fail for individual records
+              // 5. Fallback Parser (Regex) if ICAL.js fails
+              const summary = icsData.match(/SUMMARY:(.*)/i)?.[1]?.trim() || 'Untitled';
+              const uid = icsData.match(/UID:(.*)/i)?.[1]?.trim();
+              const dtstart = icsData.match(/DTSTART(?:;TZID=.*?)?:(.*)/i)?.[1]?.trim();
+              const dtend = icsData.match(/DTEND(?:;TZID=.*?)?:(.*)/i)?.[1]?.trim();
+
+              if (uid && dtstart && dtend) {
+                const parseIcalDate = (str) => {
+                  const y = str.substring(0, 4), m = str.substring(4, 6), d = str.substring(6, 8);
+                  const h = str.substring(9, 11), min = str.substring(11, 13), s = str.substring(13, 15);
+                  return new Date(`${y}-${m}-${d}T${h}:${min}:${s}`).toISOString();
+                };
+
+                try {
+                  allEvents.push({
+                    user_id: user.id,
+                    event_id: uid,
+                    title: summary,
+                    start_time: parseIcalDate(dtstart),
+                    end_time: parseIcalDate(dtend),
+                    provider: 'apple',
+                    source_calendar: cal.calendar_name,
+                    source_calendar_id: cal.calendar_id,
+                    last_synced_at: new Date().toISOString()
+                  });
+                  parsedCount++;
+                } catch (e) {}
+              }
             }
           }
         }
