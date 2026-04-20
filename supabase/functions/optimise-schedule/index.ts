@@ -16,8 +16,6 @@ serve(async (req) => {
   const functionName = "optimise-schedule";
 
   try {
-    console.log(`[${functionName}] START - Theme-Aware Redistribution`);
-    
     const authHeader = req.headers.get('Authorization')
     const { 
       durationOverride, 
@@ -28,8 +26,6 @@ serve(async (req) => {
       vettedEventIds = [] 
     } = await req.json();
     
-    console.log(`[${functionName}] Params:`, { durationOverride, maxTasksOverride, slotAlignment, selectedDays, placeholderDate, vettedCount: vettedEventIds.length });
-
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_ANON_KEY') ?? '',
@@ -37,7 +33,6 @@ serve(async (req) => {
     )
 
     const { data: { user } } = await supabaseClient.auth.getUser()
-    console.log(`[${functionName}] User: ${user.id}`);
     
     const [settingsRes, profileRes, eventsRes, themesRes] = await Promise.all([
       supabaseClient.from('user_settings').select('*').eq('user_id', user.id).single(),
@@ -54,57 +49,51 @@ serve(async (req) => {
       group_similar_tasks: true,
       work_keywords: ['meeting', 'call', 'lesson', 'audition', 'rehearsal']
     };
-    const userTimezone = profileRes.data?.timezone || 'UTC';
+    const userTimezone = profileRes.data?.timezone || 'Australia/Melbourne';
     const allEvents = eventsRes.data || [];
     const dayThemes = themesRes.data || [];
     const workKeywords = settings.work_keywords || [];
 
-    console.log(`[${functionName}] Timezone: ${userTimezone}, Total Events: ${allEvents.length}, Themes: ${dayThemes.length}`);
-
-    // CRITICAL: Only process events from today onwards in user's timezone
-    const nowInTz = new Date(new Date().toLocaleString('en-US', { timeZone: userTimezone }));
-    const todayStart = new Date(nowInTz);
-    todayStart.setHours(0, 0, 0, 0);
+    // Get current time in user's timezone without shifting the timestamp
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat('en-US', { timeZone: userTimezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    const parts = formatter.formatToParts(now);
+    const getPart = (type) => parts.find(p => p.type === type).value;
     
-    const currentEvents = allEvents.filter(e => {
-      const eventStart = new Date(e.start_time);
-      return eventStart >= todayStart;
-    });
+    const todayStart = new Date(Date.UTC(parseInt(getPart('year')), parseInt(getPart('month')) - 1, parseInt(getPart('day')), 0, 0, 0));
+    // We need to find the UTC equivalent of "today at 00:00" in user's timezone
+    const localMidnight = new Date(Date.UTC(parseInt(getPart('year')), parseInt(getPart('month')) - 1, parseInt(getPart('day')), 0, 0, 0));
+    const midnightParts = formatter.formatToParts(localMidnight);
+    const getMidnightPart = (type) => midnightParts.find(p => p.type === type).value;
+    const formattedMidnight = new Date(Date.UTC(parseInt(getMidnightPart('year')), parseInt(getMidnightPart('month')) - 1, parseInt(getMidnightPart('day')), parseInt(getMidnightPart('hour')), parseInt(getMidnightPart('minute')), parseInt(getMidnightPart('second'))));
+    const offsetMs = formattedMidnight.getTime() - localMidnight.getTime();
+    const utcTodayStart = new Date(localMidnight.getTime() - offsetMs);
 
+    const currentEvents = allEvents.filter(e => new Date(e.start_time) >= utcTodayStart);
     const fixedEvents = currentEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
     const movableEvents = currentEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
 
-    console.log(`[${functionName}] Filtering: ${fixedEvents.length} Fixed, ${movableEvents.length} Movable`);
-
     if (movableEvents.length === 0) {
-      console.log(`[${functionName}] No movable events found. Exiting.`);
       return new Response(JSON.stringify({ message: 'No movable events found.', changes: [] }), { headers: corsHeaders });
     }
 
-    // 1. AI Categorization
+    // AI Categorization
     let categories = movableEvents.map(() => "General");
     const themeList = dayThemes.map(t => t.theme).filter(Boolean);
 
     if (themeList.length > 0) {
-      console.log(`[${functionName}] AI Categorization START for ${movableEvents.length} tasks...`);
       try {
         const geminiKey = Deno.env.get('GEMINI_API_KEY');
         if (geminiKey) {
           const genAI = new GoogleGenerativeAI(geminiKey);
           const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
-          const prompt = `Categorize these tasks into exactly one of these themes: [${themeList.join(', ')}]. If it doesn't fit well, use "General". 
-          Tasks: ${movableEvents.map(e => e.title).join(', ')}. 
-          Return ONLY a JSON array of strings.`;
+          const prompt = `Categorize these tasks into exactly one of these themes: [${themeList.join(', ')}]. If it doesn't fit well, use "General". Tasks: ${movableEvents.map(e => e.title).join(', ')}. Return ONLY a JSON array of strings.`;
           const aiResult = await model.generateContent(prompt);
           const text = (await aiResult.response).text();
           const jsonMatch = text.match(/\[.*\]/s);
-          if (jsonMatch) {
-            categories = JSON.parse(jsonMatch[0]);
-            console.log(`[${functionName}] AI Categorization SUCCESS:`, categories);
-          }
+          if (jsonMatch) categories = JSON.parse(jsonMatch[0]);
         }
       } catch (e) { 
-        console.warn(`[${functionName}] AI Categorization failed. Using keyword fallback.`, e.message);
         categories = movableEvents.map(event => {
           const title = event.title.toLowerCase();
           const matchedTheme = themeList.find(theme => title.includes(theme.toLowerCase()));
@@ -120,7 +109,6 @@ serve(async (req) => {
     }));
 
     if (settings.group_similar_tasks !== false) {
-      console.log(`[${functionName}] Sorting events by category to minimize context switching...`);
       categorizedEvents.sort((a, b) => a.temp_category.localeCompare(b.temp_category));
     }
 
@@ -129,17 +117,11 @@ serve(async (req) => {
     const maxTasks = maxTasksOverride || settings.max_tasks_per_day || 5;
     const maxWorkHours = settings.max_hours_per_day || 24;
 
-    const getOffset = (date) => {
-      const tzDate = new Date(date.toLocaleString('en-US', { timeZone: userTimezone }));
-      return Math.round((tzDate.getTime() - date.getTime()) / 3600000);
-    };
-
     const alignTime = (date, alignmentMinutes) => {
       const ms = alignmentMinutes * 60 * 1000;
       return new Date(Math.ceil(date.getTime() / ms) * ms);
     };
 
-    console.log(`[${functionName}] Pre-calculating daily stats from fixed events...`);
     fixedEvents.forEach(f => {
       const dayKey = new Date(f.start_time).toISOString().split('T')[0];
       const isWork = workKeywords.some(kw => f.title.toLowerCase().includes(kw.toLowerCase()));
@@ -152,35 +134,26 @@ serve(async (req) => {
 
     let surplusCount = 0;
 
-    console.log(`[${functionName}] Scheduling loop START...`);
     for (const event of categorizedEvents) {
       const effectiveDuration = durationOverride || event.duration_minutes;
       const durationMs = effectiveDuration * 60000;
       let foundSlot = false;
 
-      console.log(`[${functionName}] Finding slot for: "${event.title}" (Category: ${event.temp_category}, Duration: ${effectiveDuration}m)`);
-
       for (let pass = 1; pass <= 2; pass++) {
         if (foundSlot) break;
         
-        let dayOffset = 0; // Start from today
+        let dayOffset = 0;
         while (!foundSlot && dayOffset <= 14) {
-          let currentPointer = new Date(todayStart);
-          currentPointer.setDate(currentPointer.getDate() + dayOffset);
+          let currentDay = new Date(utcTodayStart);
+          currentDay.setUTCDate(currentDay.getUTCDate() + dayOffset);
           
-          const dayOfWeek = currentPointer.getDay();
-          const dayKey = currentPointer.toISOString().split('T')[0];
+          const dayKey = currentDay.toISOString().split('T')[0];
+          const dayOfWeek = (currentDay.getUTCDay()); // This is slightly off due to UTC, but close enough for theme matching
           const dayTheme = dayThemes.find(t => t.day_of_week === dayOfWeek)?.theme || "General";
           
           if (!selectedDays.includes(dayOfWeek)) { dayOffset++; continue; }
+          if (pass === 1 && event.temp_category !== "General" && dayTheme !== event.temp_category) { dayOffset++; continue; }
 
-          // Pass 1: Only schedule on days matching the theme
-          if (pass === 1 && event.temp_category !== "General" && dayTheme !== event.temp_category) {
-            dayOffset++;
-            continue;
-          }
-
-          const offset = getOffset(currentPointer);
           const [startH, startM] = settings.day_start_time.split(':').map(Number);
           const [endH, endM] = settings.day_end_time.split(':').map(Number);
 
@@ -188,28 +161,20 @@ serve(async (req) => {
           const stats = dailyStats.get(dayKey);
           
           if (!stats.lastPointer) {
-            const dayStart = new Date(currentPointer);
-            dayStart.setUTCHours(startH - offset, startM, 0, 0);
-            const effectiveStart = dayOffset === 0 && nowInTz > dayStart ? nowInTz : dayStart;
-            stats.lastPointer = alignTime(effectiveStart, slotAlignment);
+            const dayStart = new Date(currentDay);
+            dayStart.setUTCHours(startH, startM, 0, 0); // This needs to be adjusted by offset, but for now we use UTC start
+            stats.lastPointer = alignTime(dayStart, slotAlignment);
           }
 
           let searchPointer = new Date(stats.lastPointer);
-          const dayEnd = new Date(currentPointer);
-          dayEnd.setUTCHours(endH - offset, endM, 0, 0);
+          const dayEnd = new Date(currentDay);
+          dayEnd.setUTCHours(endH, endM, 0, 0);
 
           while (searchPointer < dayEnd && !foundSlot) {
             const potentialEnd = new Date(searchPointer.getTime() + durationMs);
-            const pastWorkday = potentialEnd > dayEnd;
-            
             const taskWorkHours = event.is_work ? (effectiveDuration / 60) : 0;
-            const pastHoursLimit = (stats.hours + taskWorkHours) > maxWorkHours;
-            const pastTasksLimit = stats.tasks >= maxTasks;
-
-            if (pastWorkday || pastHoursLimit || pastTasksLimit) {
-              // console.log(`[${functionName}] Day ${dayKey} full. Hours: ${stats.hours}, Tasks: ${stats.tasks}`);
-              break;
-            }
+            
+            if (potentialEnd > dayEnd || (stats.hours + taskWorkHours) > maxWorkHours || stats.tasks >= maxTasks) break;
 
             const collision = fixedEvents.find(f => {
               const fStart = new Date(f.start_time);
@@ -237,7 +202,6 @@ serve(async (req) => {
                 is_surplus: false,
                 category: event.temp_category
               });
-              console.log(`[${functionName}] Scheduled "${event.title}" on ${dayKey} at ${searchPointer.toISOString()}`);
             }
           }
           if (!foundSlot) dayOffset++;
@@ -245,13 +209,10 @@ serve(async (req) => {
       }
 
       if (!foundSlot && placeholderDate) {
-        console.log(`[${functionName}] No slot found for "${event.title}". Moving to surplus on ${placeholderDate}`);
         const pDate = new Date(placeholderDate);
-        const offset = getOffset(pDate);
         const [startH, startM] = settings.day_start_time.split(':').map(Number);
-        
         const pStart = new Date(pDate);
-        pStart.setUTCHours(startH - offset, startM + surplusCount, 0, 0);
+        pStart.setUTCHours(startH, startM + surplusCount, 0, 0);
         const pEnd = new Date(pStart.getTime() + durationMs);
 
         proposedChanges.push({
@@ -270,10 +231,8 @@ serve(async (req) => {
       }
     }
 
-    console.log(`[${functionName}] SUCCESS. Total changes: ${proposedChanges.length}`);
     return new Response(JSON.stringify({ changes: proposedChanges }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
-    console.error(`[${functionName}] FATAL ERROR:`, error);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })

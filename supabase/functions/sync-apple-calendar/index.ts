@@ -75,12 +75,9 @@ serve(async (req) => {
       if (hrefMatch && isCalendar) {
         let href = hrefMatch[1];
         if (href.startsWith('/')) href = `${baseUrl}${href}`;
-        // Normalize: ensure trailing slash for consistency with previous versions
         if (!href.endsWith('/')) href += '/';
         
         const name = nameMatch ? nameMatch[1] : 'Untitled';
-        
-        // Filter out obvious system/app lists
         const isEmail = name.includes('@') && name.includes('.');
         const isSystem = /reminders|tasks|inbox|outbox|notifications|shopping|pomodoro|distraction|spendings|list|checklist/i.test(name);
         
@@ -97,13 +94,10 @@ serve(async (req) => {
     }
 
     const discoveredCalendars = Array.from(discoveredCalendarsMap.values());
-
-    // Upsert discovered calendars
     if (discoveredCalendars.length > 0) {
       await supabaseAdmin.from('user_calendars').upsert(discoveredCalendars, { onConflict: 'user_id, calendar_id' });
     }
 
-    // Get enabled calendars
     const { data: enabledCals } = await supabaseAdmin
       .from('user_calendars')
       .select('calendar_id, calendar_name, is_enabled')
@@ -113,7 +107,6 @@ serve(async (req) => {
     const enabledPaths = (enabledCals || []).filter(c => c.is_enabled);
 
     if (enabledPaths.length === 0) {
-      console.log(`[${functionName}] No Apple calendars enabled. Cleaning up cache.`);
       await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
       return new Response(JSON.stringify({ count: 0, message: "No calendars enabled" }), { headers: corsHeaders });
     }
@@ -149,23 +142,55 @@ serve(async (req) => {
     
     const fixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
 
+    // Robust floating time interpreter
     const interpretFloating = (icalTime, timeZone) => {
-      const s = icalTime.toString();
-      if (icalTime.isUtc || icalTime.timezone) return icalTime.toJSDate().toISOString();
+      if (icalTime.isUtc || icalTime.timezone) {
+        return icalTime.toJSDate().toISOString();
+      }
+      
+      // It's a floating time (e.g. 2026-04-20T17:45:00)
+      // We need to treat this as being in the user's local timezone
+      const s = icalTime.toString(); // "2026-04-20T17:45:00"
       const [datePart, timePart] = s.split('T');
       const [y, m, d] = datePart.split('-').map(Number);
       const [h, min, sec] = timePart.split(':').map(Number);
-      const dummy = new Date(Date.UTC(y, m - 1, d, h, min, sec));
-      const formatter = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false });
-      const parts = formatter.formatToParts(dummy);
-      const getPart = (type) => parseInt(parts.find(p => p.type === type).value);
-      const tzDate = new Date(Date.UTC(getPart('year'), getPart('month') - 1, getPart('day'), getPart('hour'), getPart('minute'), getPart('second')));
-      const offsetMs = tzDate.getTime() - dummy.getTime();
-      return new Date(dummy.getTime() - offsetMs).toISOString();
+
+      // Create a string that represents the local time
+      const localStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}T${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+      
+      // Use Intl to find the offset for this specific local time in the target timezone
+      try {
+        const formatter = new Intl.DateTimeFormat('en-US', {
+          timeZone,
+          year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', second: '2-digit',
+          hour12: false
+        });
+
+        // We need to find a UTC date that, when formatted in 'timeZone', matches our localStr
+        // A simple way is to create a UTC date, find the offset, and adjust
+        const utcDate = new Date(Date.UTC(y, m - 1, d, h, min, sec));
+        const parts = formatter.formatToParts(utcDate);
+        const getPart = (type) => parts.find(p => p.type === type).value;
+        
+        const formattedInTz = new Date(Date.UTC(
+          parseInt(getPart('year')),
+          parseInt(getPart('month')) - 1,
+          parseInt(getPart('day')),
+          parseInt(getPart('hour')),
+          parseInt(getPart('minute')),
+          parseInt(getPart('second'))
+        ));
+
+        const offsetMs = formattedInTz.getTime() - utcDate.getTime();
+        return new Date(utcDate.getTime() - offsetMs).toISOString();
+      } catch (e) {
+        console.error(`[${functionName}] Timezone error for ${timeZone}:`, e.message);
+        return icalTime.toJSDate().toISOString();
+      }
     };
 
     for (const cal of enabledPaths) {
-      console.log(`[${functionName}] Fetching events for: ${cal.calendar_name}`);
       const eventsRes = await fetch(cal.calendar_id, { method: 'REPORT', headers: { ...headers, 'Depth': '1' }, body: reportQuery });
       if (!eventsRes.ok) continue;
       
