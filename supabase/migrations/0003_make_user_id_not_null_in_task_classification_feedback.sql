@@ -1,0 +1,1 @@
+ALTER TABLE task_classification_feedback ALTER COLUMN user_id SET NOT NULL;

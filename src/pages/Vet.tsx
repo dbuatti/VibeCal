@@ -182,19 +182,21 @@ const Vet = () => {
   const runAIClassification = async () => {
     setIsProcessing(true);
     try {
-      const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords').single();
+      const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, natural_language_rules').single();
       const { data, error } = await supabase.functions.invoke('classify-tasks', {
-        body: { 
-          tasks: events.map(e => e.title), 
+        body: {
+          tasks: events.map(e => e.title),
           movableKeywords: settings?.movable_keywords || [],
-          lockedKeywords: settings?.locked_keywords || []
+          lockedKeywords: settings?.locked_keywords || [],
+          naturalLanguageRules: settings?.natural_language_rules || ''
         }
       });
       if (error) throw error;
       
       const updatedEvents = [...events];
       for (let i = 0; i < updatedEvents.length; i++) {
-        const isMovable = data.classifications[i];
+        const classification = data.classifications[i];
+        const isMovable = typeof classification === 'boolean' ? classification : classification.isMovable;
         updatedEvents[i].is_locked = !isMovable;
         await supabase.from('calendar_events_cache').update({ is_locked: !isMovable }).eq('event_id', updatedEvents[i].event_id);
       }

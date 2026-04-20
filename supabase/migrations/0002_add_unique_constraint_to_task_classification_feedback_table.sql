@@ -1,0 +1,1 @@
+ALTER TABLE task_classification_feedback ADD CONSTRAINT task_classification_feedback_user_id_task_name_key UNIQUE (user_id, task_name);

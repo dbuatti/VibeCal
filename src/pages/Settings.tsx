@@ -7,6 +7,7 @@ import KeywordManager from '@/components/settings/KeywordManager';
 import DayThemesSettings from '@/components/settings/DayThemesSettings';
 import OptimisationLogicSettings from '@/components/settings/OptimisationLogicSettings';
 import CalendarSettings from '@/components/settings/CalendarSettings';
+import IntelligenceCenter from '@/components/settings/IntelligenceCenter';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { supabase } from '@/lib/supabase';
@@ -32,7 +33,8 @@ const Settings = () => {
     group_similar_tasks: true,
     movable_keywords: [],
     locked_keywords: [],
-    work_keywords: []
+    work_keywords: [],
+    natural_language_rules: ''
   });
 
   const [profile, setProfile] = useState<any>({
@@ -94,7 +96,8 @@ const Settings = () => {
             ...settingsRes.data,
             movable_keywords: settingsRes.data.movable_keywords || [],
             locked_keywords: settingsRes.data.locked_keywords || [],
-            work_keywords: settingsRes.data.work_keywords || []
+            work_keywords: settingsRes.data.work_keywords || [],
+            natural_language_rules: settingsRes.data.natural_language_rules || ''
           });
         }
         if (profileRes.data) setProfile(profileRes.data);
@@ -369,6 +372,13 @@ const Settings = () => {
                 badgeVariant="amber"
               />
             </div>
+
+            <IntelligenceCenter
+              naturalLanguageRules={settings.natural_language_rules}
+              onRulesChange={(rules) => setSettings(prev => ({ ...prev, natural_language_rules: rules }))}
+              movableKeywords={settings.movable_keywords}
+              lockedKeywords={settings.locked_keywords}
+            />
 
             <DayThemesSettings themes={themes} onThemeChange={handleThemeChange} />
           </div>

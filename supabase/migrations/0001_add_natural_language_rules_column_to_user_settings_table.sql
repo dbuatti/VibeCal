@@ -1,0 +1,1 @@
+ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS natural_language_rules TEXT;
