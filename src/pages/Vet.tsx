@@ -106,8 +106,26 @@ const Vet = () => {
         supabase.functions.invoke('sync-apple-calendar')
       ]);
 
+      setStatusText('AI is vetting your schedule...');
+      const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, work_keywords, natural_language_rules').single();
+      
+      const { data: fetchedEvents } = await supabase.from('calendar_events_cache').select('*').eq('user_id', user.id).order('start_time', { ascending: true });
+      
+      if (fetchedEvents && fetchedEvents.length > 0) {
+        await supabase.functions.invoke('classify-tasks', {
+          body: {
+            events: fetchedEvents.map(e => ({ event_id: e.event_id, title: e.title })),
+            movableKeywords: settings?.movable_keywords || [],
+            lockedKeywords: settings?.locked_keywords || [],
+            workKeywords: settings?.work_keywords || [],
+            naturalLanguageRules: settings?.natural_language_rules || '',
+            persist: true
+          }
+        });
+      }
+
       await fetchEvents();
-      showSuccess("Sync complete!");
+      showSuccess("Sync and AI vetting complete!");
     } catch (err: any) {
       showError("Sync failed: " + err.message);
     } finally {
@@ -124,13 +142,14 @@ const Vet = () => {
     setIsLocalMode(false);
     
     try {
-      const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, natural_language_rules').single();
+      const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, work_keywords, natural_language_rules').single();
       
       const { data, error } = await supabase.functions.invoke('classify-tasks', {
         body: {
           events: events.map(e => ({ event_id: e.event_id, title: e.title })),
           movableKeywords: settings?.movable_keywords || [],
           lockedKeywords: settings?.locked_keywords || [],
+          workKeywords: settings?.work_keywords || [],
           naturalLanguageRules: settings?.natural_language_rules || '',
           persist: true
         }
@@ -256,14 +275,14 @@ const Vet = () => {
               <RefreshCw size={24} className={cn(isProcessing && statusText.includes('sync') && "animate-spin")} />
             </button>
 
-            <Button 
-              variant="outline" 
-              onClick={runAIClassification} 
-              disabled={isProcessing} 
+            <Button
+              variant="outline"
+              onClick={runAIClassification}
+              disabled={isProcessing}
               className="rounded-2xl h-14 px-8 font-black text-xs uppercase tracking-widest flex gap-3 border-indigo-100 text-indigo-600 hover:bg-indigo-50 shadow-sm"
             >
               {isProcessing && statusText.includes('AI') ? <RefreshCw className="animate-spin" size={20} /> : <Sparkles size={20} />}
-              AI Auto-Vet
+              Classify Tasks
             </Button>
             <Button onClick={() => navigate('/plan')} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl h-14 px-10 font-black text-xs uppercase tracking-widest shadow-xl">
               <CheckCircle2 className="mr-2" size={18} /> Done

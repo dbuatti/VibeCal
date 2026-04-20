@@ -21,6 +21,7 @@ async function refreshGoogleToken(refreshToken) {
 }
 
 Deno.serve(async (req) => {
+  const functionName = "sync-calendar";
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   try {
@@ -92,7 +93,7 @@ Deno.serve(async (req) => {
 
     // 5. Upsert to Supabase (Direct REST)
     if (allEvents.length > 0) {
-      await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache`, {
+      const upsertRes = await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
         method: 'POST',
         headers: { 
           'apikey': supabaseKey, 
@@ -102,12 +103,18 @@ Deno.serve(async (req) => {
         },
         body: JSON.stringify(allEvents)
       });
+      
+      if (!upsertRes.ok) {
+        const errorText = await upsertRes.text();
+        console.error(`[${functionName}] Upsert Error:`, errorText);
+      }
     }
 
     return new Response(JSON.stringify({ count: allEvents.length }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
   } catch (error) {
+    console.error(`[${functionName}] Fatal Error:`, error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })

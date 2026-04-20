@@ -155,12 +155,13 @@ const Plan = () => {
         .order('start_time', { ascending: true });
 
       if (fetchedEvents && fetchedEvents.length > 0) {
-        const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, natural_language_rules').single();
+        const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, work_keywords, natural_language_rules').single();
         await supabase.functions.invoke('classify-tasks', {
           body: {
             events: fetchedEvents.map(e => ({ event_id: e.event_id, title: e.title })),
             movableKeywords: settings?.movable_keywords || [],
             lockedKeywords: settings?.locked_keywords || [],
+            workKeywords: settings?.work_keywords || [],
             naturalLanguageRules: settings?.natural_language_rules || '',
             persist: true
           }

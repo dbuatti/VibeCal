@@ -5,6 +5,7 @@ const corsHeaders = {
 }
 
 Deno.serve(async (req) => {
+  const functionName = "sync-apple-calendar";
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   try {
@@ -38,7 +39,7 @@ Deno.serve(async (req) => {
       'Depth': '1'
     };
 
-    // 3. Discover Principal & Home Set (Simplified for speed)
+    // 3. Discover Principal & Home Set
     const baseUrl = 'https://caldav.icloud.com';
     const principalRes = await fetch(`${baseUrl}/`, { 
       method: 'PROPFIND', 
@@ -66,7 +67,6 @@ Deno.serve(async (req) => {
     });
     const calsText = await calsRes.text();
     
-    // Simple regex parsing for calendars
     const calendars = [];
     const responses = calsText.split(/<[^:]*:?response/i);
     for (const resp of responses) {
@@ -85,9 +85,14 @@ Deno.serve(async (req) => {
     }
 
     if (calendars.length > 0) {
-      await fetch(`${supabaseUrl}/rest/v1/user_calendars`, {
+      await fetch(`${supabaseUrl}/rest/v1/user_calendars?on_conflict=user_id,calendar_id`, {
         method: 'POST',
-        headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}`, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' },
+        headers: { 
+          'apikey': supabaseKey, 
+          'Authorization': `Bearer ${supabaseKey}`, 
+          'Content-Type': 'application/json', 
+          'Prefer': 'resolution=merge-duplicates' 
+        },
         body: JSON.stringify(calendars)
       });
     }
@@ -96,6 +101,7 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
   } catch (error) {
+    console.error(`[${functionName}] Fatal Error:`, error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })
