@@ -261,7 +261,6 @@ const Vet = () => {
   return (
     <Layout>
       <div className="max-w-5xl mx-auto pb-24">
-        {/* Header Section */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-6">
           <div className="space-y-1">
             <button 
@@ -278,7 +277,6 @@ const Vet = () => {
           </div>
           
           <div className="flex items-center gap-4 w-full md:w-auto">
-            {/* Rainbow Full Sync Button */}
             <button
               onClick={handleFullSync}
               disabled={isProcessing}
@@ -317,7 +315,6 @@ const Vet = () => {
           </div>
         )}
 
-        {/* Vetting Progress Bar */}
         <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm mb-8">
           <div className="flex justify-between items-end mb-3 px-2">
             <div className="flex items-center gap-2">
@@ -335,7 +332,6 @@ const Vet = () => {
           </div>
         </div>
 
-        {/* Sticky Filter & Search Bar */}
         <div className="sticky top-4 z-50 bg-white/90 backdrop-blur-xl rounded-[2.5rem] border border-gray-100 shadow-xl overflow-hidden mb-10">
           <div className="p-4 flex flex-col lg:flex-row gap-4 justify-between items-center">
             <div className="relative w-full lg:w-96">
@@ -417,7 +413,6 @@ const Vet = () => {
           </div>
         </div>
 
-        {/* Task List Grouped by Date */}
         <div className="space-y-16">
           {loading ? (
             <div className="p-20 text-center">
@@ -450,7 +445,6 @@ const Vet = () => {
                         ? "bg-white border-gray-100" 
                         : "bg-indigo-50/40 border-indigo-100/50"
                     )}>
-                      {/* Work Watermark */}
                       {event.is_work && (
                         <div className="absolute -right-2 -bottom-2 opacity-[0.04] pointer-events-none rotate-12 group-hover:rotate-0 transition-transform duration-700">
                           <Briefcase size={80} />

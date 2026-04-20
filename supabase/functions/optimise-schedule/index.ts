@@ -57,12 +57,10 @@ serve(async (req) => {
 
     console.log(`[${functionName}] Config - TZ: ${userTimezone} | Window: ${settings.day_start_time}-${settings.day_end_time} | Max Tasks: ${maxTasksOverride || settings.max_tasks_per_day}`);
 
-    // Get "Today" at midnight in user's timezone
     const now = new Date();
     const todayStr = formatInTimeZone(now, userTimezone, 'yyyy-MM-dd');
     const localTodayStart = toDate(`${todayStr}T00:00:00`, { timeZone: userTimezone });
 
-    // Deduplicate and filter future events
     const seenIds = new Set();
     const uniqueEvents = allEvents.filter(e => {
       if (seenIds.has(e.event_id)) return false;
@@ -77,7 +75,6 @@ serve(async (req) => {
       return new Response(JSON.stringify({ message: 'No movable events found.', changes: [] }), { headers: corsHeaders });
     }
 
-    // AI Categorization
     let categories = movableEvents.map(() => "General");
     const themeList = dayThemes.map(t => t.theme).filter(Boolean);
 
@@ -122,7 +119,6 @@ serve(async (req) => {
       return new Date(Math.ceil(date.getTime() / ms) * ms);
     };
 
-    // Pre-calculate stats for fixed events
     fixedEvents.forEach(f => {
       const dayKey = formatInTimeZone(new Date(f.start_time), userTimezone, 'yyyy-MM-dd');
       if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
@@ -143,11 +139,14 @@ serve(async (req) => {
     let surplusCount = 0;
 
     for (const event of categorizedEvents) {
-      const effectiveDuration = durationOverride || event.duration_minutes;
+      const effectiveDuration = durationOverride === "original" ? event.duration_minutes : (parseInt(durationOverride) || event.duration_minutes);
       const durationMs = effectiveDuration * 60000;
       let foundSlot = false;
 
-      for (let pass = 1; pass <= 2; pass++) {
+      // Pass 0: Try Today (dayOffset 0) regardless of theme
+      // Pass 1: Try future days matching theme
+      // Pass 2: Try all days regardless of theme
+      for (let pass = 0; pass <= 2; pass++) {
         if (foundSlot) break;
         
         let dayOffset = 0;
@@ -157,8 +156,13 @@ serve(async (req) => {
           const dayOfWeek = toDate(currentDay, { timeZone: userTimezone }).getDay();
           const dayTheme = dayThemes.find(t => t.day_of_week === dayOfWeek)?.theme || "General";
           
-          if (!selectedDays.includes(dayOfWeek)) { dayOffset++; continue; }
+          // Pass 0 logic: Only check today
+          if (pass === 0 && dayOffset !== 0) break; 
+          
+          // Pass 1 logic: Skip if theme doesn't match
           if (pass === 1 && event.temp_category !== "General" && dayTheme !== event.temp_category) { dayOffset++; continue; }
+          
+          if (!selectedDays.includes(dayOfWeek)) { dayOffset++; continue; }
 
           if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
           const stats = dailyStats.get(dayKey);
@@ -181,10 +185,7 @@ serve(async (req) => {
             const potentialEnd = new Date(searchPointer.getTime() + durationMs);
             const taskWorkHours = event.is_work ? (effectiveDuration / 60) : 0;
             
-            if (potentialEnd > dayEnd) {
-              console.log(`[${functionName}]   - Day ${dayKey}: "${event.title}" hits Day End wall (${formatInTimeZone(dayEnd, userTimezone, 'HH:mm')})`);
-              break;
-            }
+            if (potentialEnd > dayEnd) break;
             if ((stats.hours + taskWorkHours) > maxWorkHours) break;
             if (stats.tasks >= maxTasks) break;
 
@@ -241,6 +242,7 @@ serve(async (req) => {
       }
     }
 
+    console.log(`[${functionName}] SUCCESS - Generated ${proposedChanges.length} changes.`);
     return new Response(JSON.stringify({ changes: proposedChanges }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
     console.error(`[${functionName}] Error:`, error.message);
