@@ -31,7 +31,6 @@ serve(async (req) => {
       return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
     }
 
-    // Use standard Basic Auth encoding
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
     const headers = {
       'Authorization': `Basic ${auth}`,
@@ -42,25 +41,16 @@ serve(async (req) => {
     };
 
     // 1. Discover Principal
-    console.log(`[${functionName}] Discovering iCloud Principal for ${profile.apple_id}...`);
+    console.log(`[${functionName}] Discovering iCloud Principal...`);
     const propfindPrincipal = `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:"><D:prop><D:current-user-principal/></D:prop></D:propfind>`;
-    
-    const principalRes = await fetch('https://caldav.icloud.com/', { 
-      method: 'PROPFIND', 
-      headers: { ...headers, 'Depth': '0' }, 
-      body: propfindPrincipal 
-    });
-
-    if (!principalRes.ok) {
-      const errText = await principalRes.text();
-      console.error(`[${functionName}] Principal discovery failed (${principalRes.status}):`, errText);
-      throw new Error(`Principal discovery failed: ${principalRes.status}`);
-    }
+    const principalRes = await fetch('https://caldav.icloud.com/', { method: 'PROPFIND', headers, body: propfindPrincipal });
+    if (!principalRes.ok) throw new Error(`Principal discovery failed: ${principalRes.status}`);
     
     const principalText = await principalRes.text();
-    const principalMatch = principalText.match(/<current-user-principal>.*?<href>(.*?)<\/href>.*?<\/current-user-principal>/s);
+    // More robust regex to handle namespaces and attributes
+    const principalMatch = principalText.match(/<[^:]*:?current-user-principal[^>]*>\s*<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i);
     if (!principalMatch) {
-      console.error(`[${functionName}] Could not find principal href in response:`, principalText);
+      console.error(`[${functionName}] XML Response:`, principalText);
       throw new Error("Could not find principal href");
     }
     const principalHref = principalMatch[1];
@@ -69,16 +59,9 @@ serve(async (req) => {
     // 2. Discover Calendar Home Set
     console.log(`[${functionName}] Discovering Calendar Home Set...`);
     const propfindHome = `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><C:calendar-home-set/></D:prop></D:propfind>`;
-    const homeRes = await fetch(`https://caldav.icloud.com${principalHref}`, { 
-      method: 'PROPFIND', 
-      headers: { ...headers, 'Depth': '0' }, 
-      body: propfindHome 
-    });
-    
-    if (!homeRes.ok) throw new Error(`Home set discovery failed: ${homeRes.status}`);
-    
+    const homeRes = await fetch(`https://caldav.icloud.com${principalHref}`, { method: 'PROPFIND', headers, body: propfindHome });
     const homeText = await homeRes.text();
-    const homeMatch = homeText.match(/<calendar-home-set>.*?<href>(.*?)<\/href>.*?<\/calendar-home-set>/s);
+    const homeMatch = homeText.match(/<[^:]*:?calendar-home-set[^>]*>\s*<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i);
     if (!homeMatch) throw new Error("Could not find calendar home set");
     const homeHref = homeMatch[1];
     console.log(`[${functionName}] Found Home Href: ${homeHref}`);
@@ -86,21 +69,15 @@ serve(async (req) => {
     // 3. Discover Calendars
     console.log(`[${functionName}] Discovering Calendars...`);
     const propfindCals = `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><D:displayname/><D:resourcetype/></D:prop></D:propfind>`;
-    const calsRes = await fetch(homeHref, { 
-      method: 'PROPFIND', 
-      headers: { ...headers, 'Depth': '1' }, 
-      body: propfindCals 
-    });
-    
-    if (!calsRes.ok) throw new Error(`Calendar discovery failed: ${calsRes.status}`);
-    
+    const calsRes = await fetch(homeHref, { method: 'PROPFIND', headers: { ...headers, 'Depth': '1' }, body: propfindCals });
     const calsText = await calsRes.text();
+    
     const calendarPaths = [];
     const responses = calsText.split('</D:response>');
     for (const resp of responses) {
-      if (resp.includes('<C:calendar/>')) {
-        const hrefMatch = resp.match(/<D:href>(.*?)<\/D:href>/);
-        const nameMatch = resp.match(/<D:displayname>(.*?)<\/D:displayname>/);
+      if (resp.includes('<C:calendar/>') || resp.includes(':calendar')) {
+        const hrefMatch = resp.match(/<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i);
+        const nameMatch = resp.match(/<[^:]*:?displayname[^>]*>([^<]+)<\/[^>]*>/i);
         if (hrefMatch) {
           calendarPaths.push({
             href: hrefMatch[1],
@@ -112,7 +89,7 @@ serve(async (req) => {
 
     console.log(`[${functionName}] Found ${calendarPaths.length} calendars.`);
 
-    // 4. Fetch Events for each calendar
+    // 4. Fetch Events
     const syncStartTime = new Date();
     syncStartTime.setDate(syncStartTime.getDate() - 1);
     const syncEndTime = new Date();
@@ -144,16 +121,8 @@ serve(async (req) => {
 
     for (const cal of calendarPaths) {
       console.log(`[${functionName}] Fetching events for: ${cal.name}`);
-      const eventsRes = await fetch(cal.href, { 
-        method: 'REPORT', 
-        headers: { ...headers, 'Depth': '1' }, 
-        body: reportQuery 
-      });
-      
-      if (!eventsRes.ok) {
-        console.warn(`[${functionName}] Failed to fetch events for ${cal.name}: ${eventsRes.status}`);
-        continue;
-      }
+      const eventsRes = await fetch(cal.href, { method: 'REPORT', headers: { ...headers, 'Depth': '1' }, body: reportQuery });
+      if (!eventsRes.ok) continue;
       
       const eventsText = await eventsRes.text();
       const icsDatas = eventsText.match(/BEGIN:VCALENDAR.*?END:VCALENDAR/gs) || [];
@@ -199,23 +168,20 @@ serve(async (req) => {
     }
 
     const uniqueEvents = Array.from(eventMap.values());
-    console.log(`[${functionName}] Upserting ${uniqueEvents.length} Apple events...`);
-
     if (uniqueEvents.length > 0) {
-      const { error: upsertError } = await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
-      if (upsertError) throw upsertError;
+      await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
     }
 
     // Cleanup stale Apple events
     const cleanupThreshold = new Date(new Date(syncTimestamp).getTime() - 60000).toISOString();
-    const { count: deletedCount } = await supabaseAdmin.from('calendar_events_cache')
-      .delete({ count: 'exact' })
+    await supabaseAdmin.from('calendar_events_cache')
+      .delete()
       .eq('user_id', user.id)
       .eq('provider', 'apple')
       .gte('start_time', syncStartTime.toISOString())
       .lt('last_seen_at', cleanupThreshold);
 
-    console.log(`[${functionName}] SUCCESS - Synced ${uniqueEvents.length} events, cleaned up ${deletedCount || 0}.`);
+    console.log(`[${functionName}] SUCCESS - Synced ${uniqueEvents.length} events.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
     console.error(`[${functionName}] FATAL ERROR:`, error.message);

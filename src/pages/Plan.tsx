@@ -47,7 +47,6 @@ const Plan = () => {
 
       const { data: { session } } = await supabase.auth.getSession();
       
-      // If we have a fresh provider token from the session, update the profile immediately
       if (session?.provider_token) {
         await supabase.from('profiles').update({ google_access_token: session.provider_token }).eq('id', user.id);
       }
@@ -103,7 +102,7 @@ const Plan = () => {
     fetchData();
   }, []);
 
-  const runAnalysis = async (skipSync = false) => {
+  const runAnalysis = async (skipSync = false, forceVetRedirect = false) => {
     setIsProcessing(true);
     setTokenMissing(false);
     
@@ -117,7 +116,6 @@ const Plan = () => {
         
         let token = session?.provider_token;
 
-        // If session token is missing, try to get the cached one from the profile
         if (!token && user) {
           const { data: profile } = await supabase
             .from('profiles')
@@ -139,8 +137,6 @@ const Plan = () => {
         const googleResult = results[0];
         if (googleResult.status === 'fulfilled') {
           const { data, error } = googleResult.value;
-          
-          // Check for 401 or specific Google auth errors
           if (error || data?.error) {
             const errorMsg = (error?.message || data?.error || "").toLowerCase();
             const isAuthError = errorMsg.includes("401") || 
@@ -154,8 +150,6 @@ const Plan = () => {
               showError("Google session expired. Please reconnect.");
               return;
             }
-            
-            // If it's not an auth error but still an error, show it
             if (errorMsg) showError(`Google Sync: ${errorMsg}`);
           } else {
             totalSynced += (data?.count || 0);
@@ -164,8 +158,9 @@ const Plan = () => {
 
         const appleResult = results[1];
         if (appleResult.status === 'fulfilled') {
-          const { data } = appleResult.value;
-          totalSynced += (data?.count || 0);
+          const { data, error } = appleResult.value;
+          if (error) showError(`Apple Sync: ${error.message}`);
+          else totalSynced += (data?.count || 0);
         }
       } else {
         setStatusText('Loading cached data...');
@@ -187,7 +182,7 @@ const Plan = () => {
       } else {
         showSuccess(skipSync ? 'Loaded from cache!' : `Sync complete! Found ${newEvents.length} events.`);
         
-        if (currentStep !== 'active_plan') {
+        if (forceVetRedirect || currentStep !== 'active_plan') {
           if (newEvents.length > 0) {
             navigate('/vet');
           } else {
@@ -204,7 +199,6 @@ const Plan = () => {
   };
 
   const handleReauth = async () => {
-    // Force a sign out to clear all session data and force a fresh Google login
     await supabase.auth.signOut();
     navigate('/login');
   };
@@ -222,10 +216,9 @@ const Plan = () => {
       setCurrentStep('initial');
       
       showSuccess("System reset complete. Starting fresh sync...");
-      await runAnalysis(false);
+      await runAnalysis(false, true); // Force redirect to vet screen
     } catch (err: any) {
       showError("Reset failed: " + err.message);
-    } finally {
       setIsProcessing(false);
     }
   };
