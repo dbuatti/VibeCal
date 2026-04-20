@@ -131,7 +131,6 @@ Deno.serve(async (req) => {
     
     const allEvents = [];
     const now = new Date();
-    // Broad range: -60 days to +180 days
     const startRange = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endRange = new Date(now.getTime() + 180 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
@@ -160,13 +159,25 @@ Deno.serve(async (req) => {
 
         let parsedCount = 0;
         for (const resp of eventResponses) {
-          // More flexible regex for calendar-data
-          const icsMatch = resp.match(/<[^>]*calendar-data[^>]*>([\s\S]*?)<\/[^>]*calendar-data>/i);
+          // DEBUG: Log the first response to see the XML structure
+          if (parsedCount === 0 && eventResponses.length > 0) {
+            console.log(`[${functionName}] DEBUG: First response snippet:`, resp.substring(0, 500));
+          }
+
+          // More flexible regex for calendar-data content
+          const icsMatch = resp.match(/calendar-data[^>]*>([\s\S]*?)<\//i);
           let icsData = icsMatch?.[1];
           
           if (icsData) {
-            // Decode XML entities if present
-            icsData = icsData.replace(/&quot;/g, '"').replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>').trim();
+            // Decode XML entities
+            icsData = icsData
+              .replace(/&quot;/g, '"')
+              .replace(/&/g, '&')
+              .replace(/</g, '<')
+              .replace(/>/g, '>')
+              .replace(/&#x([0-9a-fA-F]+);/g, (match, hex) => String.fromCharCode(parseInt(hex, 16)))
+              .replace(/&#([0-9]+);/g, (match, dec) => String.fromCharCode(parseInt(dec, 10)))
+              .trim();
             
             try {
               const jcalData = ICAL.parse(icsData);
@@ -194,9 +205,7 @@ Deno.serve(async (req) => {
                 parsedCount++;
               }
             } catch (parseErr) {
-              if (parsedCount === 0) {
-                console.error(`[${functionName}] ICAL Parse Error sample:`, icsData.substring(0, 100));
-              }
+              // Silent fail for individual records
             }
           }
         }
@@ -228,13 +237,6 @@ Deno.serve(async (req) => {
         },
         body: JSON.stringify(allEvents)
       });
-      
-      if (!upsertRes.ok) {
-        const errText = await upsertRes.text();
-        console.error(`[${functionName}] Database Upsert Error:`, errText);
-      } else {
-        console.log(`[${functionName}] Successfully saved ${allEvents.length} events.`);
-      }
     }
 
     return new Response(JSON.stringify({ count: allEvents.length }), { 
