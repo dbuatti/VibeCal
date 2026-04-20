@@ -21,7 +21,7 @@ interface TrainAIModalProps {
   isOpen: boolean;
   onClose: () => void;
   task: any;
-  onSuccess: () => void;
+  onSuccess: (isMovable: boolean) => void;
 }
 
 const TrainAIModal = ({ isOpen, onClose, task, onSuccess }: TrainAIModalProps) => {
@@ -57,7 +57,6 @@ const TrainAIModal = ({ isOpen, onClose, task, onSuccess }: TrainAIModalProps) =
         .single();
 
       const currentRules = settings?.natural_language_rules || '';
-      // Explicitly include the task title in the rule string for AI context
       const newRuleEntry = `\n- For tasks like "${task.title}": ${rule} (Classification: ${isMovable ? 'Movable' : 'Fixed'})`;
       const updatedRules = currentRules + newRuleEntry;
 
@@ -66,8 +65,14 @@ const TrainAIModal = ({ isOpen, onClose, task, onSuccess }: TrainAIModalProps) =
         .update({ natural_language_rules: updatedRules.trim() })
         .eq('user_id', user.id);
 
+      // 3. Update the local cache status immediately
+      await supabase
+        .from('calendar_events_cache')
+        .update({ is_locked: !isMovable })
+        .eq('event_id', task.event_id);
+
       showSuccess("AI trained successfully!");
-      onSuccess();
+      onSuccess(isMovable);
       onClose();
     } catch (err: any) {
       showError("Failed to train AI: " + err.message);

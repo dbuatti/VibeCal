@@ -556,7 +556,14 @@ const Vet = () => {
         isOpen={isTrainingModalOpen}
         onClose={() => setIsTrainingModalOpen(false)}
         task={trainingTask}
-        onSuccess={fetchEvents}
+        onSuccess={(isMovable) => {
+          if (trainingTask) {
+            setEvents(prev => prev.map(e => 
+              e.event_id === trainingTask.event_id ? { ...e, is_locked: !isMovable } : e
+            ));
+          }
+          fetchEvents();
+        }}
       />
     </Layout>
   );
