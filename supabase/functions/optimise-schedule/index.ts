@@ -63,10 +63,9 @@ serve(async (req) => {
     const localTodayStart = toDate(`${todayStr}T00:00:00`, { timeZone: userTimezone });
 
     console.log(`[${functionName}] --- DIAGNOSTIC START ---`);
-    console.log(`[${functionName}] TODAY STRING: ${todayStr}`);
-    console.log(`[${functionName}] USER TIMEZONE: ${userTimezone}`);
-    console.log(`[${functionName}] SELECTED DAYS: ${JSON.stringify(selectedDays)}`);
-    console.log(`[${functionName}] CURRENT TIME IN TZ: ${formatInTimeZone(now, userTimezone, 'HH:mm:ss')}`);
+    console.log(`[${functionName}] TODAY: ${todayStr} | TZ: ${userTimezone}`);
+    console.log(`[${functionName}] NOW: ${formatInTimeZone(now, userTimezone, 'HH:mm:ss')}`);
+    console.log(`[${functionName}] WINDOW: ${settings.day_start_time} - ${settings.day_end_time}`);
 
     const seenIds = new Set();
     const uniqueEvents = allEvents.filter(e => {
@@ -78,13 +77,38 @@ serve(async (req) => {
     const fixedEvents = uniqueEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
     const movableEvents = uniqueEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
 
-    console.log(`[${functionName}] TOTAL EVENTS: ${uniqueEvents.length} (${fixedEvents.length} fixed, ${movableEvents.length} movable)`);
+    const alignTime = (date, alignmentMinutes) => {
+      const ms = alignmentMinutes * 60 * 1000;
+      return new Date(Math.ceil(date.getTime() / ms) * ms);
+    };
 
-    if (movableEvents.length === 0) {
-      return new Response(JSON.stringify({ message: 'No movable events found.', changes: [] }), { headers: corsHeaders });
-    }
+    const dailyStats = new Map();
+    dailyStats.set(todayStr, { tasks: 0, hours: 0, lastPointer: null });
 
-    // Categorization logic...
+    // Pre-calculate fixed load and find the "end" of the last fixed event for today
+    fixedEvents.forEach(f => {
+      const dayKey = formatInTimeZone(new Date(f.start_time), userTimezone, 'yyyy-MM-dd');
+      if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
+      const stats = dailyStats.get(dayKey);
+      
+      const isWork = workKeywords.some(kw => f.title.toLowerCase().includes(kw.toLowerCase()));
+      if (isWork) {
+        const duration = (new Date(f.end_time).getTime() - new Date(f.start_time).getTime()) / 3600000;
+        stats.hours += duration;
+      }
+      
+      const isTask = !f.title?.toLowerCase().includes('lunch') && 
+                     !f.title?.toLowerCase().includes('break') && 
+                     !f.title?.toLowerCase().includes('dinner');
+      if (isTask) stats.tasks += 1;
+
+      // If this fixed event is today, log it
+      if (dayKey === todayStr) {
+        console.log(`[${functionName}] TODAY FIXED: "${f.title}" (${formatInTimeZone(new Date(f.start_time), userTimezone, 'HH:mm')} - ${formatInTimeZone(new Date(f.end_time), userTimezone, 'HH:mm')})`);
+      }
+    });
+
+    // Categorization...
     let categories = movableEvents.map(() => "General");
     const themeList = dayThemes.map(t => t.theme).filter(Boolean);
     if (themeList.length > 0) {
@@ -93,7 +117,7 @@ serve(async (req) => {
         if (geminiKey) {
           const genAI = new GoogleGenerativeAI(geminiKey);
           const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
-          const prompt = `Categorize these tasks into exactly one of these themes: [${themeList.join(', ')}]. If it doesn't fit well, use "General". Tasks: ${movableEvents.map(e => e.title).join(', ')}. Return ONLY a JSON array of strings.`;
+          const prompt = `Categorize these tasks into exactly one of these themes: [${themeList.join(', ')}]. Tasks: ${movableEvents.map(e => e.title).join(', ')}. Return ONLY a JSON array of strings.`;
           const aiResult = await model.generateContent(prompt);
           const text = (await aiResult.response).text();
           const jsonMatch = text.match(/\[.*\]/s);
@@ -119,38 +143,6 @@ serve(async (req) => {
     }
 
     const proposedChanges = [];
-    const dailyStats = new Map();
-
-    // Initialize Today explicitly
-    dailyStats.set(todayStr, { tasks: 0, hours: 0, lastPointer: null });
-
-    const alignTime = (date, alignmentMinutes) => {
-      const ms = alignmentMinutes * 60 * 1000;
-      return new Date(Math.ceil(date.getTime() / ms) * ms);
-    };
-
-    // Pre-calculate fixed load
-    fixedEvents.forEach(f => {
-      const dayKey = formatInTimeZone(new Date(f.start_time), userTimezone, 'yyyy-MM-dd');
-      if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
-      const stats = dailyStats.get(dayKey);
-      
-      const isWork = workKeywords.some(kw => f.title.toLowerCase().includes(kw.toLowerCase()));
-      if (isWork) {
-        const duration = (new Date(f.end_time).getTime() - new Date(f.start_time).getTime()) / 3600000;
-        stats.hours += duration;
-      }
-      
-      const isTask = !f.title?.toLowerCase().includes('lunch') && 
-                     !f.title?.toLowerCase().includes('break') && 
-                     !f.title?.toLowerCase().includes('dinner');
-      if (isTask) stats.tasks += 1;
-    });
-
-    dailyStats.forEach((stats, dayKey) => {
-      console.log(`[${functionName}] INITIAL LOAD for ${dayKey}: ${stats.tasks} tasks, ${stats.hours.toFixed(1)}h`);
-    });
-
     let surplusCount = 0;
 
     for (const event of categorizedEvents) {
@@ -165,28 +157,27 @@ serve(async (req) => {
         while (!foundSlot && dayOffset <= 14) {
           const currentDay = new Date(localTodayStart.getTime() + (dayOffset * 86400000));
           const dayKey = formatInTimeZone(currentDay, userTimezone, 'yyyy-MM-dd');
-          const dayOfWeek = toDate(currentDay, { timeZone: userTimezone }).getDay();
-          const dayTheme = dayThemes.find(t => t.day_of_week === dayOfWeek)?.theme || "General";
-          
           const isToday = (dayKey === todayStr);
-
-          if (pass === 0 && !isToday) break; 
-          if (pass === 1 && event.temp_category !== "General" && dayTheme !== event.temp_category) { dayOffset++; continue; }
           
+          if (pass === 0 && !isToday) break; 
+
+          const dayOfWeek = toDate(currentDay, { timeZone: userTimezone }).getDay();
           if (!selectedDays.includes(dayOfWeek)) {
-            if (isToday) console.log(`[${functionName}] TODAY REJECT: "${event.title}" - Monday (1) not in selectedDays ${JSON.stringify(selectedDays)}`);
+            if (isToday) console.log(`[${functionName}] TODAY SKIP: Monday not in selectedDays`);
             dayOffset++; continue; 
           }
 
           if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
           const stats = dailyStats.get(dayKey);
           
+          if (isToday) console.log(`[${functionName}] TODAY CHECK: "${event.title}" (Pass ${pass}) | Current: ${stats.tasks} tasks, ${stats.hours.toFixed(1)}h`);
+
           if (stats.tasks >= maxTasks) {
-            if (isToday) console.log(`[${functionName}] TODAY REJECT: "${event.title}" - Hit max tasks (${stats.tasks}/${maxTasks})`);
+            if (isToday) console.log(`[${functionName}] TODAY REJECT: "${event.title}" - Max tasks reached (${maxTasks})`);
             dayOffset++; continue;
           }
           if (stats.hours >= maxWorkHours) {
-            if (isToday) console.log(`[${functionName}] TODAY REJECT: "${event.title}" - Hit max hours (${stats.hours.toFixed(1)}/${maxWorkHours})`);
+            if (isToday) console.log(`[${functionName}] TODAY REJECT: "${event.title}" - Max hours reached (${maxWorkHours})`);
             dayOffset++; continue;
           }
 
@@ -197,30 +188,22 @@ serve(async (req) => {
             let initialPointer = alignTime(dayStart, slotAlignment);
             if (isToday) {
               const nowAligned = alignTime(new Date(), slotAlignment);
-              if (nowAligned > initialPointer) {
-                initialPointer = nowAligned;
-                console.log(`[${functionName}] TODAY SEARCH START: ${formatInTimeZone(initialPointer, userTimezone, 'HH:mm')} (Current Load: ${stats.tasks} tasks)`);
-              }
+              if (nowAligned > initialPointer) initialPointer = nowAligned;
             }
             stats.lastPointer = initialPointer;
           }
 
           let searchPointer = new Date(stats.lastPointer);
+          if (isToday) console.log(`[${functionName}] TODAY SEARCH: Starting at ${formatInTimeZone(searchPointer, userTimezone, 'HH:mm')}`);
 
           while (searchPointer < dayEnd && !foundSlot) {
             const potentialEnd = new Date(searchPointer.getTime() + durationMs);
-            const taskWorkHours = event.is_work ? (effectiveDuration / 60) : 0;
             
             if (potentialEnd > dayEnd) {
-              if (isToday) console.log(`[${functionName}] TODAY REJECT: "${event.title}" (${effectiveDuration}m) - Ends at ${formatInTimeZone(potentialEnd, userTimezone, 'HH:mm')}, window ends at ${settings.day_end_time}`);
+              if (isToday) console.log(`[${functionName}] TODAY REJECT: "${event.title}" ends at ${formatInTimeZone(potentialEnd, userTimezone, 'HH:mm')}, past window end ${settings.day_end_time}`);
               break;
             }
             
-            if ((stats.hours + taskWorkHours) > maxWorkHours) {
-              if (isToday) console.log(`[${functionName}] TODAY REJECT: "${event.title}" - Would exceed max hours (${(stats.hours + taskWorkHours).toFixed(1)}/${maxWorkHours})`);
-              break;
-            }
-
             const collision = fixedEvents.find(f => {
               const fStart = new Date(f.start_time);
               const fEnd = new Date(f.end_time);
@@ -228,12 +211,11 @@ serve(async (req) => {
             });
 
             if (collision) {
-              if (isToday) console.log(`[${functionName}] TODAY COLLISION: "${event.title}" at ${formatInTimeZone(searchPointer, userTimezone, 'HH:mm')} hits fixed event "${collision.title}"`);
               searchPointer = alignTime(new Date(new Date(collision.end_time).getTime()), slotAlignment);
             } else {
               foundSlot = true;
               stats.tasks += 1;
-              stats.hours += taskWorkHours;
+              if (event.is_work) stats.hours += (effectiveDuration / 60);
               stats.lastPointer = alignTime(new Date(potentialEnd.getTime()), slotAlignment);
 
               if (isToday) console.log(`[${functionName}] TODAY PLACED: "${event.title}" at ${formatInTimeZone(searchPointer, userTimezone, 'HH:mm')}`);
