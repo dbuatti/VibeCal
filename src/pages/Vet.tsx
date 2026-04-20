@@ -166,7 +166,6 @@ const Vet = () => {
         token = profile?.google_access_token;
       }
 
-      // Re-syncing from providers will overwrite the local cache with original times
       await Promise.allSettled([
         supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: token } }),
         supabase.functions.invoke('sync-apple-calendar')
@@ -250,14 +249,13 @@ const Vet = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // Fetch latest settings to ensure we respect current limits
       const { data: settings } = await supabase.from('user_settings').select('*').eq('user_id', user.id).single();
 
       const { data, error } = await supabase.functions.invoke('optimise-schedule', {
         body: { 
           targetDate: dateKey,
-          maxHoursOverride: settings?.max_hours_per_day,
-          maxTasksOverride: settings?.max_tasks_per_day,
+          maxHoursOverride: settings?.max_hours_per_day || 6,
+          maxTasksOverride: 50, // Increase limit for re-planning
           durationOverride: settings?.duration_override,
           slotAlignment: settings?.slot_alignment
         }
@@ -265,30 +263,22 @@ const Vet = () => {
 
       if (error) throw error;
 
-      // Update local state immediately for the "Command Centre" feel
-      const updatedEvents = [...events];
-      for (const change of data.changes) {
-        const idx = updatedEvents.findIndex(e => e.event_id === change.event_id);
-        if (idx !== -1) {
-          updatedEvents[idx] = {
-            ...updatedEvents[idx],
-            start_time: change.new_start || updatedEvents[idx].start_time,
-            end_time: change.new_end || updatedEvents[idx].end_time,
-            duration_minutes: change.duration || updatedEvents[idx].duration_minutes
-          };
-          
-          // Also update DB cache so it persists
-          await supabase.from('calendar_events_cache')
-            .update({ 
-              start_time: change.new_start, 
-              end_time: change.new_end, 
-              duration_minutes: change.duration 
-            })
-            .eq('event_id', change.event_id);
-        }
-      }
+      // Batch update the database for all changes
+      const updatePromises = data.changes.map((change: any) => {
+        if (!change.new_start) return Promise.resolve();
+        return supabase.from('calendar_events_cache')
+          .update({ 
+            start_time: change.new_start, 
+            end_time: change.new_end, 
+            duration_minutes: change.duration 
+          })
+          .eq('event_id', change.event_id);
+      });
 
-      setEvents(updatedEvents);
+      await Promise.all(updatePromises);
+      
+      // Fresh fetch to ensure UI is perfectly in sync with DB
+      await fetchEvents();
       showSuccess(`Day re-planned! Slots updated.`);
     } catch (err: any) {
       showError("Re-plan failed: " + err.message);
