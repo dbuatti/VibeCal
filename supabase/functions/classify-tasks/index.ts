@@ -59,7 +59,7 @@ serve(async (req) => {
       .select('task_name, is_movable')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
-      .limit(20);
+      .limit(30);
 
     let classifications = tasks.map(() => ({ isMovable: false, explanation: "Default fallback", dependsOn: null }));
 
@@ -67,38 +67,36 @@ serve(async (req) => {
       const geminiKey = Deno.env.get('GEMINI_API_KEY');
       if (geminiKey) {
         const genAI = new GoogleGenerativeAI(geminiKey);
-        // Using 1.5 Flash as it often has more stable quotas than the experimental 2.0 Flash Lite
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
         const prompt = `
-          You are a personal assistant helping to organize a calendar. 
-          Classify the following tasks as either "movable" (can be rescheduled) or "fixed" (must happen at this specific time).
+          You are a high-precision calendar assistant. Your job is to classify tasks as "movable" or "fixed".
           
-          NEW CAPABILITY: DEPENDENCY DETECTION
-          Look for rules that imply one task must happen AFTER another.
-          Example: "Post session notes should be scheduled after the session" -> "Post session notes" depends on "session".
+          CRITICAL INSTRUCTION: You MUST prioritize the "USER'S CUSTOM RULES" and "PAST CORRECTIONS" above all else. 
+          If a task matches a pattern in the rules, you MUST follow that rule even if it contradicts general logic.
 
-          PRIORITY 1: USER'S CUSTOM RULES (Follow these strictly)
+          PRIORITY 1: USER'S CUSTOM RULES (MANDATORY)
           ${naturalLanguageRules || 'No custom rules provided.'}
-          Note: Look for patterns like 'For tasks like "NAME": DESCRIPTION (Classification: TYPE)' and apply them to similar task names.
+          
+          Note: If a rule says "For tasks like 'X': ... (Classification: Movable)", any task containing 'X' or similar to 'X' MUST be Movable.
+          Example: "Voice Coaching is always fixed" means any task with "Voice Coaching" MUST be isMovable: false.
 
           PRIORITY 2: USER'S PAST CORRECTIONS
           ${feedback?.map(f => `- "${f.task_name}" is ${f.is_movable ? 'movable' : 'fixed'}`).join('\n') || 'No past corrections.'}
 
-          PRIORITY 3: STRICT KEYWORD RULES
-          - FIXED: Any task containing these keywords: ${lockedKeywords?.join(', ') || 'none'}.
-          - MOVABLE: Any task containing these keywords: ${movableKeywords?.join(', ') || 'none'}.
+          PRIORITY 3: KEYWORD RULES
+          - FIXED: ${lockedKeywords?.join(', ') || 'none'}.
+          - MOVABLE: ${movableKeywords?.join(', ') || 'none'}.
           
-          GENERAL GUIDELINES (Use only if no specific rules apply):
-          - Fixed: Meetings with others, appointments, live classes, rehearsals, ceremonies, specific deadlines.
-          - Movable: Solo work, drafting, chores, practice, exploration, personal projects.
-          
+          DEPENDENCY DETECTION:
+          Look for rules implying sequence (e.g., "X after Y"). Set "dependsOn" to the title of the prerequisite task.
+
           Tasks to classify:
           ${tasks.map(t => `- "${t}"`).join('\n')}
           
           Return ONLY a JSON array of objects: { "isMovable": boolean, "explanation": string, "dependsOn": string | null }.
-          "dependsOn" should be the title (or partial title) of the task this one must follow.
-          The explanation should be short (max 10 words).
+          The explanation MUST state which rule or keyword was matched (e.g., "Matched rule: Voice Coaching is fixed").
+          Keep explanations under 12 words.
         `;
 
         const response = await generateWithRetry(model, prompt);
@@ -110,7 +108,6 @@ serve(async (req) => {
       }
     } catch (aiError) {
       console.error(`[${functionName}] AI classification failed:`, aiError.message);
-      // Fallback to keyword-based heuristic
       classifications = tasks.map(title => {
         const lowerTitle = title.toLowerCase();
         const isLocked = lockedKeywords?.some(kw => lowerTitle.includes(kw.toLowerCase()));
