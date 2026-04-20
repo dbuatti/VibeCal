@@ -1,8 +1,8 @@
 "use client";
 
-import React from 'react';
+import React, { useState } from 'react';
 import { format, parseISO } from 'date-fns';
-import { Lock, Sparkles, Clock, Utensils, Music, Laptop, Coffee, Inbox, Briefcase, ChevronRight } from 'lucide-react';
+import { Lock, Sparkles, Clock, Utensils, Music, Laptop, Coffee, Inbox, Briefcase, ChevronRight, MapPin, AlignLeft, ChevronDown, ChevronUp } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
@@ -14,6 +14,8 @@ interface VisualEventProps {
 }
 
 const VisualEvent = ({ event, isApplied, isVetted, isWork }: VisualEventProps) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+
   const getEventIcon = (title: string = '') => {
     const t = title.toLowerCase();
     if (t.includes('lunch') || t.includes('dinner')) return <Utensils size={14} />;
@@ -39,6 +41,7 @@ const VisualEvent = ({ event, isApplied, isVetted, isWork }: VisualEventProps) =
 
   const styles = getEventStyles(event);
   const icon = getEventIcon(event.title);
+  const hasDetails = event.location || event.description;
 
   return (
     <div className={cn(
@@ -54,7 +57,7 @@ const VisualEvent = ({ event, isApplied, isVetted, isWork }: VisualEventProps) =
       )}
       
       <div className="flex items-center justify-between gap-4 relative z-10">
-        <div className="flex items-center gap-4 flex-1">
+        <div className="flex items-center gap-4 flex-1 min-w-0">
           <div className={cn(
             "w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-all duration-500 group-hover:rotate-6", 
             event.type === 'locked' ? "bg-gray-50/50" : "bg-white/80 shadow-sm"
@@ -65,9 +68,9 @@ const VisualEvent = ({ event, isApplied, isVetted, isWork }: VisualEventProps) =
               icon || (event.type === 'locked' ? <Lock size={16} className="opacity-30" /> : <Sparkles size={18} className="text-indigo-500" />)
             )}
           </div>
-          <div>
+          <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <h4 className={cn("font-black leading-tight tracking-tight", event.is_surplus ? "text-xs" : "text-base")}>
+              <h4 className={cn("font-black leading-tight tracking-tight truncate", event.is_surplus ? "text-xs" : "text-base")}>
                 {event.title}
               </h4>
               {isWork && (
@@ -76,9 +79,20 @@ const VisualEvent = ({ event, isApplied, isVetted, isWork }: VisualEventProps) =
                 </Badge>
               )}
             </div>
-            <div className="flex items-center gap-1.5 mt-1 text-[9px] font-black uppercase tracking-widest opacity-50">
-              <Clock size={10} />
-              {format(parseISO(event.start_time), 'HH:mm')} – {format(parseISO(event.end_time), 'HH:mm')}
+            <div className="flex items-center gap-3 mt-1">
+              <div className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest opacity-50">
+                <Clock size={10} />
+                {format(parseISO(event.start_time), 'HH:mm')} – {format(parseISO(event.end_time), 'HH:mm')}
+              </div>
+              {hasDetails && (
+                <button 
+                  onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
+                  className="flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-indigo-500 hover:text-indigo-700 transition-colors"
+                >
+                  {isExpanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                  Details
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -96,6 +110,26 @@ const VisualEvent = ({ event, isApplied, isVetted, isWork }: VisualEventProps) =
           )}
         </div>
       </div>
+
+      {/* Expanded Details */}
+      {isExpanded && hasDetails && (
+        <div className="mt-4 pt-4 border-t border-black/5 space-y-3 animate-in slide-in-from-top-2 duration-300 relative z-10">
+          {event.location && (
+            <div className="flex items-start gap-2">
+              <MapPin size={12} className="text-gray-400 mt-0.5 shrink-0" />
+              <p className="text-[10px] font-bold text-gray-600 leading-tight">{event.location}</p>
+            </div>
+          )}
+          {event.description && (
+            <div className="flex items-start gap-2">
+              <AlignLeft size={12} className="text-gray-400 mt-0.5 shrink-0" />
+              <p className="text-[10px] font-medium text-gray-500 leading-relaxed whitespace-pre-wrap">
+                {event.description}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

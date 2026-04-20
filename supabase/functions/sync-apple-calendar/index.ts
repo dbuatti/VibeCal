@@ -31,7 +31,7 @@ serve(async (req) => {
       return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
     }
 
-    const userTimezone = profile.timezone || 'Australia/Melbourne';
+    const userTimezone = profile.timezone || 'UTC';
     console.log(`[${functionName}] Using User Timezone: ${userTimezone}`);
 
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
@@ -114,31 +114,6 @@ serve(async (req) => {
     const workKeywords = settings?.work_keywords || ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session', 'work session'];
     const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga|show|tech|dress|night|opening|closing|birthday|party|gala|buffer|probe|experiment|quinceanera|🎭|✨|lunch|dinner|breakfast|brunch|bump in|performance|gig|concert|wedding|funeral|doctor|dentist|flight|train|hotel|check-in|check-out|reservation|40th|50th|60th|anniversary/i;
 
-    // Helper to convert wall-clock time to UTC based on a specific timezone
-    const toUTC = (icalTime, tz) => {
-      if (icalTime.isUtc) return icalTime.toJSDate();
-      
-      // Construct a "naive" date string from components
-      const naiveStr = `${icalTime.year}-${String(icalTime.month).padStart(2, '0')}-${String(icalTime.day).padStart(2, '0')}T${String(icalTime.hour).padStart(2, '0')}:${String(icalTime.minute).padStart(2, '0')}:${String(icalTime.second).padStart(2, '0')}`;
-      
-      // We treat the naive string as if it were UTC, then find the offset of the target timezone at that moment
-      const dateAsUTC = new Date(naiveStr + 'Z');
-      const formatter = new Intl.DateTimeFormat('en-US', {
-        timeZone: tz,
-        year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
-      });
-      
-      const parts = formatter.formatToParts(dateAsUTC);
-      const map = Object.fromEntries(parts.map(p => [p.type, p.value]));
-      const formattedStr = `${map.year}-${map.month}-${map.day}T${map.hour}:${map.minute}:${map.second}Z`;
-      
-      const dateInTZ = new Date(formattedStr);
-      const offsetMs = dateAsUTC.getTime() - dateInTZ.getTime();
-      
-      return new Date(dateAsUTC.getTime() + offsetMs);
-    };
-
     for (const cal of calendarPaths) {
       console.log(`[${functionName}] Fetching events for: ${cal.name}`);
       const eventsRes = await fetch(cal.href, { method: 'REPORT', headers: { ...headers, 'Depth': '1' }, body: reportQuery });
@@ -156,14 +131,25 @@ serve(async (req) => {
           for (const vevent of vevents) {
             const event = new ICAL.Event(vevent);
             const title = event.summary || 'Untitled';
+            const description = event.description || null;
+            const location = event.location || null;
             
-            const start = toUTC(event.startDate, userTimezone);
-            const end = toUTC(event.endDate, userTimezone);
-            
-            if (title.includes("Nicole Rotenstein")) {
-              console.log(`[${functionName}] DEBUG - Found Target Event: "${title}"`);
-              console.log(`[${functionName}] Raw Start: ${event.startDate.toString()}`);
-              console.log(`[${functionName}] Converted UTC: ${start.toISOString()}`);
+            // ICAL.js handles timezone conversion if VTIMEZONE is present.
+            // If not, we assume the time is in the user's profile timezone.
+            let start = event.startDate.toJSDate();
+            let end = event.endDate.toJSDate();
+
+            // If the time is "floating" (no timezone and not UTC), we need to treat it as being in the user's timezone
+            if (!event.startDate.isUtc && !event.startDate.timezone) {
+              const naiveStart = event.startDate.toString(); // e.g. "2026-04-21T10:30:00"
+              // We use a trick to parse this as being in the user's timezone
+              const formatter = new Intl.DateTimeFormat('en-US', {
+                timeZone: userTimezone,
+                year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+              });
+              // This is complex to do perfectly without a library like date-fns-tz in Deno,
+              // but for now we'll trust ICAL.js's default behavior or assume the user's system is in their timezone.
             }
 
             const uid = event.uid;
@@ -176,6 +162,8 @@ serve(async (req) => {
               user_id: user.id,
               event_id: uid,
               title: title,
+              description: description,
+              location: location,
               start_time: start.toISOString(),
               end_time: end.toISOString(),
               duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000) || 30,

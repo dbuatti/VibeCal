@@ -115,6 +115,8 @@ serve(async (req) => {
           user_id: user.id, 
           event_id: event.id, 
           title: title, 
+          description: event.description || null,
+          location: event.location || null,
           start_time: start.toISOString(), 
           end_time: end.toISOString(),
           duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000) || 30, 
