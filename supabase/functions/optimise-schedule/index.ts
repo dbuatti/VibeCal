@@ -54,6 +54,8 @@ serve(async (req) => {
     const dayThemes = themesRes.data || [];
     const workKeywords = settings.work_keywords || [];
 
+    console.log(`[${functionName}] Timezone: ${userTimezone} | Max Tasks: ${maxTasksOverride || settings.max_tasks_per_day} | Max Hours: ${settings.max_hours_per_day}`);
+
     // Calculate local midnight in user's timezone
     const now = new Date();
     const formatter = new Intl.DateTimeFormat('en-US', { 
@@ -169,6 +171,8 @@ serve(async (req) => {
       const durationMs = effectiveDuration * 60000;
       let foundSlot = false;
 
+      console.log(`[${functionName}] Processing task: "${event.title}" (${effectiveDuration}m)`);
+
       for (let pass = 1; pass <= 2; pass++) {
         if (foundSlot) break;
         
@@ -209,7 +213,18 @@ serve(async (req) => {
             const taskWorkHours = event.is_work ? (effectiveDuration / 60) : 0;
             
             // Check if adding this task exceeds limits
-            if (potentialEnd > dayEnd || (stats.hours + taskWorkHours) > maxWorkHours || stats.tasks >= maxTasks) break;
+            if (potentialEnd > dayEnd) {
+              console.log(`[${functionName}]   - Day ${dayKey}: Task ends at ${potentialEnd.toISOString()} which is past Day End (${dayEnd.toISOString()})`);
+              break;
+            }
+            if ((stats.hours + taskWorkHours) > maxWorkHours) {
+              console.log(`[${functionName}]   - Day ${dayKey}: Adding task would exceed Max Hours (${stats.hours.toFixed(1)} + ${taskWorkHours.toFixed(1)} > ${maxWorkHours})`);
+              break;
+            }
+            if (stats.tasks >= maxTasks) {
+              console.log(`[${functionName}]   - Day ${dayKey}: Already at Max Tasks (${stats.tasks}/${maxTasks})`);
+              break;
+            }
 
             const collision = fixedEvents.find(f => {
               const fStart = new Date(f.start_time);
@@ -218,12 +233,15 @@ serve(async (req) => {
             });
 
             if (collision) {
+              console.log(`[${functionName}]   - Day ${dayKey}: Collision at ${searchPointer.toISOString()} with "${collision.title}"`);
               searchPointer = alignTime(new Date(new Date(collision.end_time).getTime() + 1 * 60000), slotAlignment);
             } else {
               foundSlot = true;
               stats.tasks += 1;
               stats.hours += taskWorkHours;
               stats.lastPointer = alignTime(new Date(potentialEnd.getTime() + 5 * 60000), slotAlignment);
+
+              console.log(`[${functionName}]   - Day ${dayKey}: SUCCESS! Scheduled at ${searchPointer.toISOString()}`);
 
               proposedChanges.push({
                 event_id: event.event_id,
@@ -244,6 +262,7 @@ serve(async (req) => {
       }
 
       if (!foundSlot && placeholderDate) {
+        console.log(`[${functionName}]   - NO SLOT FOUND. Moving to surplus on ${placeholderDate}`);
         const pDate = new Date(placeholderDate);
         const [startH, startM] = settings.day_start_time.split(':').map(Number);
         const pStart = new Date(pDate);

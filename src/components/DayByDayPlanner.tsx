@@ -143,7 +143,10 @@ const DayByDayPlanner = ({
       }
     });
 
-    const taskEvents = eventsOnThisDay.filter(e => !e.title?.toLowerCase().includes('lunch') && !e.title?.toLowerCase().includes('break'));
+    const taskEvents = eventsOnThisDay.filter(e => {
+      const title = e.title?.toLowerCase() || '';
+      return !title.includes('lunch') && !title.includes('break') && !title.includes('dinner');
+    });
 
     return {
       tasks: taskEvents.length,
