@@ -49,12 +49,12 @@ serve(async (req) => {
       group_similar_tasks: true,
       work_keywords: ['meeting', 'call', 'lesson', 'audition', 'rehearsal']
     };
-    const userTimezone = profileRes.data?.timezone || 'Australia/Melbourne';
+    const userTimezone = profileRes.data?.timezone || 'Australia/Sydney';
     const allEvents = eventsRes.data || [];
     const dayThemes = themesRes.data || [];
     const workKeywords = settings.work_keywords || [];
 
-    // Calculate local midnight in user's timezone (Melbourne)
+    // Calculate local midnight in user's timezone
     const now = new Date();
     const formatter = new Intl.DateTimeFormat('en-US', { 
       timeZone: userTimezone, 
@@ -175,14 +175,15 @@ serve(async (req) => {
           const stats = dailyStats.get(dayKey);
           
           if (!stats.lastPointer) {
-            const dayStart = new Date(currentDayStart);
-            dayStart.setUTCHours(startH, startM, 0, 0);
+            // Correctly calculate local start time by adding hours to the local midnight UTC timestamp
+            const dayStart = new Date(currentDayStart.getTime() + (startH * 3600000) + (startM * 60000));
             stats.lastPointer = alignTime(dayStart, slotAlignment);
           }
 
           let searchPointer = new Date(stats.lastPointer);
-          const dayEnd = new Date(currentDayStart);
-          dayEnd.setUTCHours(endH, endM, 0, 0);
+          const dayEnd = new Date(currentDayStart.getTime() + (endH * 3600000) + (endM * 60000));
+
+          console.log(`[${functionName}] Checking ${dayKey} | Window: ${settings.day_start_time}-${settings.day_end_time} | Pointer: ${searchPointer.toISOString()}`);
 
           while (searchPointer < dayEnd && !foundSlot) {
             const potentialEnd = new Date(searchPointer.getTime() + durationMs);
@@ -247,6 +248,7 @@ serve(async (req) => {
 
     return new Response(JSON.stringify({ changes: proposedChanges }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
+    console.error(`[${functionName}] Error:`, error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })
