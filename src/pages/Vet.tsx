@@ -123,25 +123,31 @@ const Vet = () => {
 
       if (fetchedEvents && fetchedEvents.length > 0) {
         console.log("[Vet] Invoking classify-tasks...");
-        const classifyRes = await supabase.functions.invoke('classify-tasks', {
-          body: {
-            events: fetchedEvents.map(e => ({
-              event_id: e.event_id,
-              title: e.title,
-              start_time: e.start_time,
-              end_time: e.end_time,
-              provider: e.provider,
-              source_calendar: e.source_calendar,
-              source_calendar_id: e.source_calendar_id
-            })),
-            movableKeywords: settings?.movable_keywords || [],
-            lockedKeywords: settings?.locked_keywords || [],
-            workKeywords: settings?.work_keywords || [],
-            naturalLanguageRules: settings?.natural_language_rules || '',
-            persist: true
-          }
-        });
-        console.log("[Vet] Classification result:", classifyRes);
+        const batchSize = 10;
+        for (let i = 0; i < fetchedEvents.length; i += batchSize) {
+          const batch = fetchedEvents.slice(i, i + batchSize);
+          const progress = Math.round(((i + batch.length) / fetchedEvents.length) * 100);
+          setStatusText(`AI is vetting tasks (${progress}%)...`);
+          
+          await supabase.functions.invoke('classify-tasks', {
+            body: {
+              events: batch.map(e => ({
+                event_id: e.event_id,
+                title: e.title,
+                start_time: e.start_time,
+                end_time: e.end_time,
+                provider: e.provider,
+                source_calendar: e.source_calendar,
+                source_calendar_id: e.source_calendar_id
+              })),
+              movableKeywords: settings?.movable_keywords || [],
+              lockedKeywords: settings?.locked_keywords || [],
+              workKeywords: settings?.work_keywords || [],
+              naturalLanguageRules: settings?.natural_language_rules || '',
+              persist: true
+            }
+          });
+        }
       }
 
       await fetchEvents();
@@ -165,51 +171,57 @@ const Vet = () => {
     try {
       const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, work_keywords, natural_language_rules').single();
       
-      const { data, error } = await supabase.functions.invoke('classify-tasks', {
-        body: {
-          events: events.map(e => ({
-            event_id: e.event_id,
-            title: e.title,
-            start_time: e.start_time,
-            end_time: e.end_time,
-            provider: e.provider,
-            source_calendar: e.source_calendar,
-            source_calendar_id: e.source_calendar_id
-          })),
-          movableKeywords: settings?.movable_keywords || [],
-          lockedKeywords: settings?.locked_keywords || [],
-          workKeywords: settings?.work_keywords || [],
-          naturalLanguageRules: settings?.natural_language_rules || '',
-          persist: true
-        }
-      });
+      const batchSize = 10;
+      const updatedEvents = [...events];
+      const newMetadata = { ...aiMetadata };
+      
+      for (let i = 0; i < events.length; i += batchSize) {
+        const batch = events.slice(i, i + batchSize);
+        const progress = Math.round(((i + batch.length) / events.length) * 100);
+        setStatusText(`AI is vetting tasks (${progress}%)...`);
 
-      if (error) throw error;
-
-      if (data?.isLocalMode) setIsLocalMode(true);
-
-      if (data?.classifications) {
-        const updatedEvents = [...events];
-        const newMetadata = { ...aiMetadata };
-
-        events.forEach((event, idx) => {
-          const classification = data.classifications[idx];
-          if (classification) {
-            const eventIdx = updatedEvents.findIndex(e => e.event_id === event.event_id);
-            if (eventIdx !== -1) {
-              updatedEvents[eventIdx].is_locked = !classification.isMovable;
-              newMetadata[event.event_id] = {
-                explanation: classification.explanation,
-                confidence: classification.confidence || 1.0
-              };
-            }
+        const { data, error } = await supabase.functions.invoke('classify-tasks', {
+          body: {
+            events: batch.map(e => ({
+              event_id: e.event_id,
+              title: e.title,
+              start_time: e.start_time,
+              end_time: e.end_time,
+              provider: e.provider,
+              source_calendar: e.source_calendar,
+              source_calendar_id: e.source_calendar_id
+            })),
+            movableKeywords: settings?.movable_keywords || [],
+            lockedKeywords: settings?.locked_keywords || [],
+            workKeywords: settings?.work_keywords || [],
+            naturalLanguageRules: settings?.natural_language_rules || '',
+            persist: true
           }
         });
 
-        setEvents(updatedEvents);
-        setAiMetadata(newMetadata);
-        showSuccess("AI vetting complete!");
+        if (error) throw error;
+        if (data?.isLocalMode) setIsLocalMode(true);
+
+        if (data?.classifications) {
+          batch.forEach((event, idx) => {
+            const classification = data.classifications[idx];
+            if (classification) {
+              const eventIdx = updatedEvents.findIndex(e => e.event_id === event.event_id);
+              if (eventIdx !== -1) {
+                updatedEvents[eventIdx].is_locked = !classification.isMovable;
+                newMetadata[event.event_id] = {
+                  explanation: classification.explanation,
+                  confidence: classification.confidence || 1.0
+                };
+              }
+            }
+          });
+        }
       }
+
+      setEvents(updatedEvents);
+      setAiMetadata(newMetadata);
+      showSuccess("AI vetting complete!");
 
     } catch (err: any) {
       showError("AI Vetting failed: " + err.message);
