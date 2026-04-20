@@ -44,23 +44,20 @@ serve(async (req) => {
       targetDate 
     } = body;
 
-    const [settingsRes, eventsRes] = await Promise.all([
-      supabase.from('user_settings').select('*').eq('user_id', user.id).single(),
+    // Fetch both settings and profile to get the most accurate timezone
+    const [settingsRes, profileRes, eventsRes] = await Promise.all([
+      supabase.from('user_settings').select('*').eq('user_id', user.id).maybeSingle(),
+      supabase.from('profiles').select('timezone').eq('id', user.id).maybeSingle(),
       supabase.from('calendar_events_cache').select('*').eq('user_id', user.id).order('start_time', { ascending: true })
     ]);
 
-    const settings = settingsRes.data || { 
-      day_start_time: '09:00', 
-      day_end_time: '17:00', 
-      max_hours_per_day: 6, 
-      max_tasks_per_day: 5,
-      timezone: 'Australia/Melbourne',
-      work_keywords: ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt']
-    };
+    const settings = settingsRes.data || {};
+    const profile = profileRes.data || {};
     
-    const userTimezone = settings.timezone || 'Australia/Melbourne';
+    // Priority: Settings > Profile > Default Melbourne
+    const userTimezone = settings.timezone || profile.timezone || 'Australia/Melbourne';
     const allEvents = eventsRes.data || [];
-    const workKeywords = settings.work_keywords || [];
+    const workKeywords = settings.work_keywords || ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt'];
 
     const isWorkEvent = (event) => {
       if (event.is_work === true) return true;
@@ -72,7 +69,7 @@ serve(async (req) => {
     const fixedEvents = allEvents.filter(e => e.is_locked === true || vettedEventIds.includes(e.event_id));
     const movableEvents = allEvents.filter(e => e.is_locked !== true && !vettedEventIds.includes(e.event_id));
 
-    console.log(`[${functionName}] Starting optimisation for user ${user.id}. Movable tasks: ${movableEvents.length}. TZ: ${userTimezone}`);
+    console.log(`[${functionName}] User: ${user.id} | TZ: ${userTimezone} | Movable: ${movableEvents.length}`);
 
     const now = new Date();
     const todayStr = formatInTimeZone(now, userTimezone, 'yyyy-MM-dd');
@@ -82,7 +79,6 @@ serve(async (req) => {
     const startDayStr = targetDate || todayStr;
 
     for (let d = 0; d < daysToProcess; d++) {
-      // Calculate the date for this iteration in the user's timezone
       const baseDate = toDate(`${startDayStr}T00:00:00`, { timeZone: userTimezone });
       const currentDayDate = addMinutes(baseDate, d * 24 * 60);
       const dayOfWeek = currentDayDate.getDay();
@@ -90,10 +86,12 @@ serve(async (req) => {
       if (!targetDate && !selectedDays.includes(dayOfWeek)) continue;
 
       const dayStr = formatInTimeZone(currentDayDate, userTimezone, 'yyyy-MM-dd');
+      
+      // CRITICAL: Ensure window is created in the user's local timezone
       const dayStart = toDate(`${dayStr}T${settings.day_start_time || '09:00'}:00`, { timeZone: userTimezone });
       const dayEnd = toDate(`${dayStr}T${settings.day_end_time || '17:00'}:00`, { timeZone: userTimezone });
       
-      console.log(`[${functionName}] Processing ${dayStr}. Window: ${formatInTimeZone(dayStart, userTimezone, 'HH:mm')} - ${formatInTimeZone(dayEnd, userTimezone, 'HH:mm')}`);
+      console.log(`[${functionName}] Day: ${dayStr} | Window: ${formatInTimeZone(dayStart, userTimezone, 'HH:mm')} - ${formatInTimeZone(dayEnd, userTimezone, 'HH:mm')}`);
 
       const dayFixedEvents = fixedEvents.filter(e => {
         const start = parseISO(e.start_time);
@@ -119,11 +117,17 @@ serve(async (req) => {
 
       let currentTime = dayStart;
       const maxDailyMinutes = (Number(maxHoursOverride || settings.max_hours_per_day) || 6) * 60;
-      const maxDailyTasks = Number(maxTasksOverride || settings.max_tasks_per_day) || 5;
+      const maxDailyTasks = Number(maxTasksOverride || settings.max_tasks_per_day) || 50; // Default to 50 if not specified
 
       while (currentTime < dayEnd && currentMovableIdx < movableEvents.length) {
-        if (dailyWorkMinutes >= maxDailyMinutes) break;
-        if (dailyTaskCount >= maxDailyTasks) break;
+        if (dailyWorkMinutes >= maxDailyMinutes) {
+          console.log(`[${functionName}] ${dayStr}: Max work hours reached (${maxDailyMinutes/60}h)`);
+          break;
+        }
+        if (dailyTaskCount >= maxDailyTasks) {
+          console.log(`[${functionName}] ${dayStr}: Max task count reached (${maxDailyTasks})`);
+          break;
+        }
 
         const event = movableEvents[currentMovableIdx];
         const duration = durationOverride === "original" || !durationOverride ? (event.duration_minutes || 30) : parseInt(durationOverride);
@@ -159,14 +163,13 @@ serve(async (req) => {
           dailyTaskCount++;
           currentMovableIdx++;
           currentTime = slotEnd;
-          
-          console.log(`[${functionName}] Scheduled "${event.title}" at ${formatInTimeZone(slotStart, userTimezone, 'HH:mm')}`);
         } else { 
           break; 
         }
       }
     }
 
+    // Handle overflow
     for (let i = currentMovableIdx; i < movableEvents.length; i++) {
       const event = movableEvents[i];
       proposedChanges.push({
@@ -179,6 +182,8 @@ serve(async (req) => {
         is_surplus: true
       });
     }
+
+    console.log(`[${functionName}] Optimisation complete. Changes: ${proposedChanges.length}`);
 
     return new Response(JSON.stringify({ changes: proposedChanges }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
