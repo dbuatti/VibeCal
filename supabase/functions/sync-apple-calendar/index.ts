@@ -142,9 +142,7 @@ serve(async (req) => {
     
     const fixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
 
-    // Robust floating time interpreter
     const interpretToUtc = (icalTime, timeZone) => {
-      // Extract raw components from ical.js time object
       const y = icalTime.year;
       const m = icalTime.month;
       const d = icalTime.day;
@@ -152,12 +150,12 @@ serve(async (req) => {
       const min = icalTime.minute;
       const sec = icalTime.second;
 
-      // If it's already UTC, just return it
+      // If it's already UTC, return it with explicit Z
       if (icalTime.isUtc) {
         return new Date(Date.UTC(y, m - 1, d, h, min, sec)).toISOString();
       }
 
-      // Otherwise, treat it as local time in the user's timezone
+      // Floating time: Treat as local in the user's timezone
       try {
         const formatter = new Intl.DateTimeFormat('en-US', {
           timeZone,
@@ -166,25 +164,23 @@ serve(async (req) => {
           hour12: false
         });
 
-        // We need to find a UTC date that, when formatted in 'timeZone', matches our local components
-        // We start with a guess (treating local as UTC) and then adjust by the offset
         const guessUtc = new Date(Date.UTC(y, m - 1, d, h, min, sec));
         const parts = formatter.formatToParts(guessUtc);
-        const getPart = (type) => parts.find(p => p.type === type).value;
+        const p = {};
+        parts.forEach(part => p[part.type] = part.value);
         
         const formattedInTz = new Date(Date.UTC(
-          parseInt(getPart('year')),
-          parseInt(getPart('month')) - 1,
-          parseInt(getPart('day')),
-          parseInt(getPart('hour')),
-          parseInt(getPart('minute')),
-          parseInt(getPart('second'))
+          parseInt(p.year),
+          parseInt(p.month) - 1,
+          parseInt(p.day),
+          parseInt(p.hour),
+          parseInt(p.minute),
+          parseInt(p.second)
         ));
 
         const offsetMs = formattedInTz.getTime() - guessUtc.getTime();
         return new Date(guessUtc.getTime() - offsetMs).toISOString();
       } catch (e) {
-        console.error(`[${functionName}] Timezone error for ${timeZone}:`, e.message);
         return icalTime.toJSDate().toISOString();
       }
     };

@@ -99,7 +99,7 @@ serve(async (req) => {
     const fixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
 
     const interpretToUtc = (isoStr, timeZone) => {
-      // If it has an explicit offset or Z, use it directly
+      // If it has an explicit offset or Z, use it directly and ensure Z
       if (isoStr.includes('Z') || isoStr.includes('+') || (isoStr.includes('-') && isoStr.includes('T'))) {
         return new Date(isoStr).toISOString();
       }
@@ -119,15 +119,16 @@ serve(async (req) => {
 
         const guessUtc = new Date(Date.UTC(y, m - 1, d, h, min, sec || 0));
         const parts = formatter.formatToParts(guessUtc);
-        const getPart = (type) => parts.find(p => p.type === type).value;
+        const p = {};
+        parts.forEach(part => p[part.type] = part.value);
         
         const formattedInTz = new Date(Date.UTC(
-          parseInt(getPart('year')),
-          parseInt(getPart('month')) - 1,
-          parseInt(getPart('day')),
-          parseInt(getPart('hour')),
-          parseInt(getPart('minute')),
-          parseInt(getPart('second'))
+          parseInt(p.year),
+          parseInt(p.month) - 1,
+          parseInt(p.day),
+          parseInt(p.hour),
+          parseInt(p.minute),
+          parseInt(p.second)
         ));
 
         const offsetMs = formattedInTz.getTime() - guessUtc.getTime();
@@ -149,14 +150,12 @@ serve(async (req) => {
         const title = event.summary || 'Untitled';
         let startIso, endIso;
 
-        // Prioritize event's own timezone over user's profile timezone
         const eventTimeZone = event.start.timeZone || userTimezone;
 
         if (event.start.dateTime) {
           startIso = interpretToUtc(event.start.dateTime, eventTimeZone);
           endIso = interpretToUtc(event.end.dateTime, eventTimeZone);
         } else {
-          // All-day event: Place it at the start of the work day in the event's timezone
           const [h, min] = dayStartStr.split(':').map(Number);
           startIso = interpretToUtc(`${event.start.date}T${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}:00`, eventTimeZone);
           endIso = new Date(new Date(startIso).getTime() + 30 * 60000).toISOString();

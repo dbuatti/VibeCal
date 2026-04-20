@@ -54,18 +54,27 @@ serve(async (req) => {
     const dayThemes = themesRes.data || [];
     const workKeywords = settings.work_keywords || [];
 
-    // Get current time in user's timezone without shifting the timestamp
+    // Calculate local midnight in user's timezone
     const now = new Date();
-    const formatter = new Intl.DateTimeFormat('en-US', { timeZone: userTimezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    const formatter = new Intl.DateTimeFormat('en-US', { 
+      timeZone: userTimezone, 
+      year: 'numeric', month: '2-digit', day: '2-digit', 
+      hour: '2-digit', minute: '2-digit', second: '2-digit', 
+      hour12: false 
+    });
     const parts = formatter.formatToParts(now);
-    const getPart = (type) => parts.find(p => p.type === type).value;
+    const p = {};
+    parts.forEach(part => p[part.type] = part.value);
     
-    const todayStart = new Date(Date.UTC(parseInt(getPart('year')), parseInt(getPart('month')) - 1, parseInt(getPart('day')), 0, 0, 0));
-    // We need to find the UTC equivalent of "today at 00:00" in user's timezone
-    const localMidnight = new Date(Date.UTC(parseInt(getPart('year')), parseInt(getPart('month')) - 1, parseInt(getPart('day')), 0, 0, 0));
+    const localMidnight = new Date(Date.UTC(parseInt(p.year), parseInt(p.month) - 1, parseInt(p.day), 0, 0, 0));
     const midnightParts = formatter.formatToParts(localMidnight);
-    const getMidnightPart = (type) => midnightParts.find(p => p.type === type).value;
-    const formattedMidnight = new Date(Date.UTC(parseInt(getMidnightPart('year')), parseInt(getMidnightPart('month')) - 1, parseInt(getMidnightPart('day')), parseInt(getMidnightPart('hour')), parseInt(getMidnightPart('minute')), parseInt(getMidnightPart('second'))));
+    const mp = {};
+    midnightParts.forEach(part => mp[part.type] = part.value);
+    
+    const formattedMidnight = new Date(Date.UTC(
+      parseInt(mp.year), parseInt(mp.month) - 1, parseInt(mp.day), 
+      parseInt(mp.hour), parseInt(mp.minute), parseInt(mp.second)
+    ));
     const offsetMs = formattedMidnight.getTime() - localMidnight.getTime();
     const utcTodayStart = new Date(localMidnight.getTime() - offsetMs);
 
@@ -148,7 +157,7 @@ serve(async (req) => {
           currentDay.setUTCDate(currentDay.getUTCDate() + dayOffset);
           
           const dayKey = currentDay.toISOString().split('T')[0];
-          const dayOfWeek = (currentDay.getUTCDay()); // This is slightly off due to UTC, but close enough for theme matching
+          const dayOfWeek = (currentDay.getUTCDay());
           const dayTheme = dayThemes.find(t => t.day_of_week === dayOfWeek)?.theme || "General";
           
           if (!selectedDays.includes(dayOfWeek)) { dayOffset++; continue; }
@@ -162,7 +171,7 @@ serve(async (req) => {
           
           if (!stats.lastPointer) {
             const dayStart = new Date(currentDay);
-            dayStart.setUTCHours(startH, startM, 0, 0); // This needs to be adjusted by offset, but for now we use UTC start
+            dayStart.setUTCHours(startH, startM, 0, 0);
             stats.lastPointer = alignTime(dayStart, slotAlignment);
           }
 
