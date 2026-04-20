@@ -45,7 +45,7 @@ Deno.serve(async (req) => {
     const baseUrl = 'https://caldav.icloud.com';
     
     const extractHref = (xml, tag) => {
-      const regex = new RegExp(`<[^:]*:?${tag}[^>]*>\\s*<[^:]*:?href[^>]*>([^<]+)<\\/[^:]*:?href>\\s*<\\/[^:]*:?${tag}>`, 'i');
+      const regex = new RegExp(`<[^>]*${tag}[^>]*>\\s*<[^>]*href[^>]*>([^<]+)<\\/[^>]*href>\\s*<\\/[^>]*${tag}>`, 'i');
       return xml.match(regex)?.[1];
     };
 
@@ -87,10 +87,10 @@ Deno.serve(async (req) => {
     });
     const calsText = await calsRes.text();
     const discoveredCalendars = [];
-    const responses = calsText.split(/<[^:]*:?response/i).slice(1);
+    const responses = calsText.split(/<[^>]*response/i).slice(1);
     for (const resp of responses) {
-      const href = resp.match(/<[^:]*:?href[^>]*>([^<]+)<\/[^:]*:?href>/i)?.[1];
-      const name = resp.match(/<[^:]*:?displayname[^>]*>([^<]+)<\/[^:]*:?displayname>/i)?.[1];
+      const href = resp.match(/<[^>]*href[^>]*>([^<]+)<\/[^>]*href>/i)?.[1];
+      const name = resp.match(/<[^>]*displayname[^>]*>([^<]+)<\/[^>]*displayname>/i)?.[1];
       const isCalendar = /resourcetype[^>]*>.*?calendar/is.test(resp);
       if (href && isCalendar && name && !name.includes('@')) {
         discoveredCalendars.push({
@@ -154,20 +154,23 @@ Deno.serve(async (req) => {
         });
 
         const reportText = await reportRes.text();
-        const eventResponses = reportText.split(/<[^:]*:?response/i).slice(1);
+        const eventResponses = reportText.split(/<[^>]*response/i).slice(1);
         console.log(`[${functionName}] Found ${eventResponses.length} responses in ${cal.calendar_name}`);
 
         let parsedCount = 0;
         for (let i = 0; i < eventResponses.length; i++) {
           const resp = eventResponses[i];
-          const isDebugEvent = i < 5; // Only log first 5 to avoid quota/volume issues
+          const isDebugEvent = i < 5;
 
-          // 1. Brute Force Extract calendar-data (Simplified Regex)
-          const icsMatch = resp.match(/calendar-data[^>]*>([\s\S]*?)<\/.*?calendar-data>/i);
+          // 1. Namespace-blind Regex for calendar-data
+          const icsMatch = resp.match(/<[^>]*calendar-data[^>]*>([\s\S]*?)<\/[^>]*calendar-data>/i);
           let icsData = icsMatch?.[1];
           
           if (!icsData) {
-            if (isDebugEvent) console.log(`[${functionName}] [Debug] Failed to find calendar-data in response ${i}. Raw snippet: ${resp.substring(0, 200)}`);
+            if (isDebugEvent) {
+              console.log(`[${functionName}] [Debug] Failed to find calendar-data in response ${i}. Full response length: ${resp.length}`);
+              console.log(`[${functionName}] [Debug] Full Response XML (First 1000 chars): ${resp.substring(0, 1000)}`);
+            }
             continue;
           }
 
@@ -178,10 +181,10 @@ Deno.serve(async (req) => {
 
           if (isDebugEvent) {
             const debugSnippet = icsData.substring(0, 200).replace(/\r/g, '\\r').replace(/\n/g, '\\n');
-            console.log(`[${functionName}] [Debug] Raw Data (Event ${i}): ${debugSnippet}`);
+            console.log(`[${functionName}] [Debug] Raw iCal Data (200 chars): ${debugSnippet}`);
           }
 
-          // 3. Unfold lines (iCal standard: CRLF followed by a space means the line continues)
+          // 3. Unfold lines
           const unfolded = icsData.replace(/\r\n\s/g, '');
           
           // 4. Brute Force Regex for key fields
@@ -193,7 +196,7 @@ Deno.serve(async (req) => {
           const endMatch = unfolded.match(/DTEND(?:;TZID=[^:]+)?[:](\d{8}T\d{6}Z?)/i);
 
           if (isDebugEvent) {
-            console.log(`[${functionName}] [Debug] Event ${i} Regex Results: SUMMARY=${!!summaryMatch}, UID=${!!uidMatch}, START=${!!startMatch}, END=${!!endMatch}`);
+            console.log(`[${functionName}] [Debug] Regex Results: SUMMARY=${!!summaryMatch}, UID=${!!uidMatch}, START=${!!startMatch}, END=${!!endMatch}`);
           }
 
           const summary = summaryMatch?.[1]?.trim() || 'Untitled';
