@@ -12,7 +12,7 @@ import PlanInitialView from '@/components/plan/PlanInitialView';
 import PlanLoadingView from '@/components/plan/PlanLoadingView';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { format, nextSaturday, parseISO, addMinutes, isAfter } from 'date-fns';
-import { AlertCircle, LogIn, Sparkles } from 'lucide-react';
+import { AlertCircle, LogIn, Sparkles, Calendar } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 type PlanStep = 'initial' | 'analysis' | 'vetting_tasks' | 'requirements' | 'active_plan';
@@ -106,6 +106,8 @@ const Plan = () => {
     setTokenMissing(false);
     
     try {
+      let totalSynced = 0;
+
       if (!skipSync) {
         setStatusText('Authenticating...');
         const { data: { session } } = await supabase.auth.getSession();
@@ -146,7 +148,15 @@ const Plan = () => {
               showError("Google session expired. Please reconnect.");
               return;
             }
+          } else {
+            totalSynced += (data?.count || 0);
           }
+        }
+
+        const appleResult = results[1];
+        if (appleResult.status === 'fulfilled') {
+          const { data } = appleResult.value;
+          totalSynced += (data?.count || 0);
         }
       } else {
         setStatusText('Loading cached data...');
@@ -156,16 +166,25 @@ const Plan = () => {
       const { data: fetchedEvents } = await supabase
         .from('calendar_events_cache')
         .select('*')
+        .eq('user_id', (await supabase.auth.getUser()).data.user?.id)
         .order('start_time', { ascending: true });
         
-      setEvents(fetchedEvents || []);
+      const newEvents = fetchedEvents || [];
+      setEvents(newEvents);
       
-      // Always go to vetting after a sync if we don't have an active plan
-      if (currentStep !== 'active_plan') {
-        navigate('/vet');
+      if (newEvents.length === 0 && !skipSync) {
+        showError("Sync complete, but no events were found. Check your calendar settings.");
+      } else {
+        showSuccess(skipSync ? 'Loaded from cache!' : `Sync complete! Found ${newEvents.length} events.`);
+        
+        if (currentStep !== 'active_plan') {
+          if (newEvents.length > 0) {
+            navigate('/vet');
+          } else {
+            setCurrentStep('initial');
+          }
+        }
       }
-      
-      showSuccess(skipSync ? 'Loaded from cache!' : 'Calendars synced!');
     } catch (err: any) { 
       showError(err.message); 
     }
@@ -268,7 +287,7 @@ const Plan = () => {
       await supabase.from('optimisation_history').update({ status: 'cancelled' }).eq('id', proposal.id);
       setProposal(null);
       setAppliedChanges([]);
-      setCurrentStep('requirements'); // Go back to requirements instead of initial
+      setCurrentStep('requirements');
       showSuccess("Plan cleared");
     } catch (err: any) { 
       showError("Failed to reset"); 
@@ -525,6 +544,17 @@ const Plan = () => {
               maxTasks={maxTasksOverride}
               workKeywords={settings?.work_keywords}
             />
+          )}
+          
+          {currentStep === 'active_plan' && !proposal && events.length > 0 && (
+            <div className="text-center py-20">
+              <Calendar className="mx-auto text-gray-200 mb-4" size={48} />
+              <h3 className="text-xl font-black text-gray-900">No Active Plan</h3>
+              <p className="text-gray-500 mb-8">You have events synced, but no plan has been generated yet.</p>
+              <Button onClick={() => setCurrentStep('requirements')} className="bg-indigo-600 text-white rounded-xl px-8 py-6 font-black">
+                Generate Plan
+              </Button>
+            </div>
           )}
         </>
       )}
