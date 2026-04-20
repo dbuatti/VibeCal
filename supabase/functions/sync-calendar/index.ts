@@ -33,6 +33,8 @@ serve(async (req) => {
 
   try {
     console.log(`[${functionName}] START - Google Sync Process`);
+    console.log(`[${functionName}] Runtime Timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}`);
+    
     const authHeader = req.headers.get('Authorization')
     let { googleAccessToken } = await req.json();
 
@@ -44,6 +46,7 @@ serve(async (req) => {
 
     const { data: profile } = await supabaseAdmin.from('profiles').select('google_access_token, google_refresh_token, timezone').eq('id', user.id).single();
     const userTimezone = profile?.timezone || 'Australia/Melbourne';
+    console.log(`[${functionName}] User Target Timezone: ${userTimezone}`);
     
     let token = googleAccessToken || profile?.google_access_token;
     const refreshToken = profile?.google_refresh_token;
@@ -101,13 +104,22 @@ serve(async (req) => {
     const hardFixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
 
     const interpretToUtc = (isoStr, timeZone) => {
-      if (isoStr.includes('Z') || isoStr.includes('+') || (isoStr.includes('-') && isoStr.includes('T'))) {
+      // If it's already UTC or has an offset, parse it directly
+      if (isoStr.includes('Z') || isoStr.includes('+') || (isoStr.includes('-') && isoStr.includes('T') && isoStr.length > 10)) {
         return new Date(isoStr).toISOString();
       }
       
+      // Handle floating times (no offset)
       const [datePart, timePart] = isoStr.split('T');
       const [y, m, d] = datePart.split('-').map(Number);
       const [h, min, sec] = (timePart || '00:00:00').split(':').map(Number);
+
+      // USER OVERRIDE: If user is in Melbourne, force GMT+10 for floating times
+      if (timeZone === 'Australia/Melbourne' || timeZone === 'AEST' || timeZone === 'AEDT') {
+        const date = new Date(Date.UTC(y, m - 1, d, h, min, sec || 0));
+        date.setUTCHours(date.getUTCHours() - 10); // Force GMT+10 offset
+        return date.toISOString();
+      }
 
       try {
         const formatter = new Intl.DateTimeFormat('en-US', {
@@ -148,6 +160,9 @@ serve(async (req) => {
         let startIso, endIso;
 
         const eventTimeZone = event.start.timeZone || userTimezone;
+        const rawStart = event.start.dateTime || event.start.date;
+        
+        console.log(`[${functionName}] Raw Event Data - Title: "${title}" | Start: ${rawStart} | TZ: ${eventTimeZone}`);
 
         if (event.start.dateTime) {
           startIso = interpretToUtc(event.start.dateTime, eventTimeZone);
@@ -176,7 +191,7 @@ serve(async (req) => {
 
         const isWork = workKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
         
-        console.log(`[${functionName}] Event: "${title}" | Start: ${startIso} | Locked: ${isLocked} (${lockReason})`);
+        console.log(`[${functionName}] Processed Event: "${title}" | Final UTC: ${startIso} | Locked: ${isLocked} (${lockReason})`);
 
         eventMap.set(event.id, {
           user_id: user.id, 

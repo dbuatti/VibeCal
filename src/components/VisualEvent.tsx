@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { format, parseISO } from 'date-fns';
+import { formatInTimeZone } from 'date-fns-tz';
 import { Lock, Sparkles, Clock, Utensils, Music, Laptop, Coffee, Inbox, Briefcase, ChevronRight, MapPin, AlignLeft, ChevronDown, ChevronUp, Link as LinkIcon } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
@@ -11,9 +12,10 @@ interface VisualEventProps {
   isApplied: boolean;
   isVetted: boolean;
   isWork: boolean;
+  timezone?: string;
 }
 
-const VisualEvent = ({ event, isApplied, isVetted, isWork }: VisualEventProps) => {
+const VisualEvent = ({ event, isApplied, isVetted, isWork, timezone = 'Australia/Melbourne' }: VisualEventProps) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
   const getEventIcon = (title: string = '') => {
@@ -42,6 +44,15 @@ const VisualEvent = ({ event, isApplied, isVetted, isWork }: VisualEventProps) =
   const styles = getEventStyles(event);
   const icon = getEventIcon(event.title);
   const hasDetails = event.location || event.description;
+
+  // Explicitly format using the target timezone to avoid browser local time confusion
+  const formatTime = (isoStr: string) => {
+    try {
+      return formatInTimeZone(parseISO(isoStr), timezone, 'HH:mm');
+    } catch (e) {
+      return format(parseISO(isoStr), 'HH:mm');
+    }
+  };
 
   return (
     <div className={cn(
@@ -82,7 +93,7 @@ const VisualEvent = ({ event, isApplied, isVetted, isWork }: VisualEventProps) =
             <div className="flex items-center gap-3 mt-1">
               <div className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest opacity-50">
                 <Clock size={10} />
-                {format(parseISO(event.start_time), 'HH:mm')} – {format(parseISO(event.end_time), 'HH:mm')}
+                {formatTime(event.start_time)} – {formatTime(event.end_time)}
               </div>
               {event.location && (
                 <div className="flex items-center gap-1 text-[9px] font-bold text-indigo-500/70 truncate max-w-[150px]">
