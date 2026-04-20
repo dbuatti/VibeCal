@@ -82,7 +82,7 @@ const Vet = () => {
   const [statusText, setStatusText] = useState('');
   const [events, setEvents] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [aiExplanations, setAiExplanations] = useState<Record<string, string>>({});
+  const [aiMetadata, setAiMetadata] = useState<Record<string, { explanation: string, confidence: number }>>({});
   
   const [showLocked, setShowLocked] = useState(true);
   const [showUnlocked, setShowUnlocked] = useState(true);
@@ -129,54 +129,51 @@ const Vet = () => {
         batches.push(eventsToClassify.slice(i, i + BATCH_SIZE));
       }
 
-      // Process batches with a delay to avoid 429 errors
-      const processBatches = async () => {
-        const updatedEvents = [...events];
-        const newExplanations = { ...aiExplanations };
+      const updatedEvents = [...events];
+      const newMetadata = { ...aiMetadata };
 
-        for (let i = 0; i < batches.length; i++) {
-          const batch = batches[i];
-          setStatusText(`AI Vetting: Batch ${i + 1}/${batches.length}...`);
-          
-          try {
-            const { data, error } = await supabase.functions.invoke('classify-tasks', {
-              body: {
-                events: batch.map(e => ({ event_id: e.event_id, title: e.title })),
-                movableKeywords: settings?.movable_keywords || [],
-                lockedKeywords: settings?.locked_keywords || [],
-                naturalLanguageRules: settings?.natural_language_rules || '',
-                persist: true
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i];
+        setStatusText(`AI Vetting: Batch ${i + 1}/${batches.length}...`);
+        
+        try {
+          const { data, error } = await supabase.functions.invoke('classify-tasks', {
+            body: {
+              events: batch.map(e => ({ event_id: e.event_id, title: e.title })),
+              movableKeywords: settings?.movable_keywords || [],
+              lockedKeywords: settings?.locked_keywords || [],
+              naturalLanguageRules: settings?.natural_language_rules || '',
+              persist: true
+            }
+          });
+
+          if (data?.classifications) {
+            batch.forEach((event, idx) => {
+              const classification = data.classifications[idx];
+              const eventIdx = updatedEvents.findIndex(e => e.event_id === event.event_id);
+              if (eventIdx !== -1) {
+                updatedEvents[eventIdx].is_locked = !classification.isMovable;
+                newMetadata[event.event_id] = {
+                  explanation: classification.explanation,
+                  confidence: classification.confidence || 1.0
+                };
               }
             });
-
-            if (data?.classifications) {
-              batch.forEach((event, idx) => {
-                const classification = data.classifications[idx];
-                const eventIdx = updatedEvents.findIndex(e => e.event_id === event.event_id);
-                if (eventIdx !== -1) {
-                  updatedEvents[eventIdx].is_locked = !classification.isMovable;
-                  newExplanations[event.event_id] = classification.explanation;
-                }
-              });
-              setEvents([...updatedEvents]);
-              setAiExplanations({...newExplanations});
-            }
-
-            // Small delay between batches to respect rate limits
-            if (i < batches.length - 1) {
-              await new Promise(resolve => setTimeout(resolve, 1500));
-            }
-          } catch (err) {
-            console.error("Batch failed:", err);
+            setEvents([...updatedEvents]);
+            setAiMetadata({...newMetadata});
           }
+
+          if (i < batches.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        } catch (err) {
+          console.error("Batch failed:", err);
         }
+      }
 
-        setIsProcessing(false);
-        setStatusText('');
-        showSuccess("AI vetting complete!");
-      };
-
-      processBatches();
+      setIsProcessing(false);
+      setStatusText('');
+      showSuccess("AI vetting complete!");
 
     } catch (err: any) {
       showError("AI Vetting failed: " + err.message);
@@ -214,10 +211,8 @@ const Vet = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // 1. Update local cache
       await supabase.from('calendar_events_cache').update({ is_locked: newLockedStatus }).eq('event_id', event.event_id);
       
-      // 2. AUTOMATIC LEARNING: Save this as feedback so the AI remembers it next time
       await supabase.from('task_classification_feedback').upsert({
         user_id: user.id,
         task_name: event.title,
@@ -377,40 +372,57 @@ const Vet = () => {
                   </div>
                 </div>
                 <div className="grid grid-cols-1 gap-4">
-                  {groupedEvents[dateKey].map((event) => (
-                    <div key={event.event_id} className={cn("px-6 py-4 rounded-[2rem] border transition-all duration-300 group flex flex-col gap-4 relative overflow-hidden hover:shadow-md", event.is_locked ? "bg-white border-gray-100" : "bg-indigo-50/40 border-indigo-100/50")}>
-                      <div className="flex items-center justify-between relative z-10">
-                        <div className="flex items-center gap-6 flex-1 min-w-0">
-                          <div className={cn("w-14 h-14 rounded-[1.5rem] flex items-center justify-center shrink-0 transition-all duration-500 group-hover:rotate-6 shadow-sm", event.is_locked ? "bg-gray-50 text-gray-400" : "bg-white text-indigo-600")}>
-                            {event.is_locked ? <Lock size={22} /> : <Unlock size={22} />}
+                  {groupedEvents[dateKey].map((event) => {
+                    const metadata = aiMetadata[event.event_id];
+                    const isLowConfidence = metadata && metadata.confidence < 0.7;
+
+                    return (
+                      <div key={event.event_id} className={cn(
+                        "px-6 py-4 rounded-[2rem] border transition-all duration-300 group flex flex-col gap-4 relative overflow-hidden hover:shadow-md", 
+                        event.is_locked ? "bg-white border-gray-100" : "bg-indigo-50/40 border-indigo-100/50",
+                        isLowConfidence && "border-amber-200 ring-2 ring-amber-100/50"
+                      )}>
+                        <div className="flex items-center justify-between relative z-10">
+                          <div className="flex items-center gap-6 flex-1 min-w-0">
+                            <div className={cn("w-14 h-14 rounded-[1.5rem] flex items-center justify-center shrink-0 transition-all duration-500 group-hover:rotate-6 shadow-sm", event.is_locked ? "bg-gray-50 text-gray-400" : "bg-white text-indigo-600")}>
+                              {event.is_locked ? <Lock size={22} /> : <Unlock size={22} />}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-3 mb-2">
+                                <h3 className="font-black text-lg text-gray-900 tracking-tight truncate">{event.title}</h3>
+                                <button onClick={() => { setTrainingTask(event); setIsTrainingModalOpen(true); }} className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100"><Brain size={14} /></button>
+                                {isLowConfidence && (
+                                  <Badge variant="outline" className="bg-amber-50 text-amber-600 border-amber-200 text-[8px] font-black px-2 py-0.5 uppercase tracking-widest animate-pulse">
+                                    <AlertTriangle size={10} className="mr-1" /> Review Needed
+                                  </Badge>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+                                <div className="flex items-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest"><Clock size={14} className="text-indigo-400" />{format(parseISO(event.start_time), 'HH:mm')}</div>
+                                <div className="flex items-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest"><Zap size={14} className="text-indigo-400" />{event.duration_minutes}m</div>
+                              </div>
+                            </div>
                           </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-3 mb-2">
-                              <h3 className="font-black text-lg text-gray-900 tracking-tight truncate">{event.title}</h3>
-                              <button onClick={() => { setTrainingTask(event); setIsTrainingModalOpen(true); }} className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100"><Brain size={14} /></button>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-                              <div className="flex items-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest"><Clock size={14} className="text-indigo-400" />{format(parseISO(event.start_time), 'HH:mm')}</div>
-                              <div className="flex items-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest"><Zap size={14} className="text-indigo-400" />{event.duration_minutes}m</div>
-                            </div>
+                          <div className="flex items-center gap-8 ml-6">
+                            <ProviderLogo provider={event.provider} />
+                            <Switch checked={!event.is_locked} onCheckedChange={() => toggleLock(event)} className="data-[state=checked]:bg-indigo-600 scale-125 shadow-sm" />
                           </div>
                         </div>
-                        <div className="flex items-center gap-8 ml-6">
-                          <ProviderLogo provider={event.provider} />
-                          <Switch checked={!event.is_locked} onCheckedChange={() => toggleLock(event)} className="data-[state=checked]:bg-indigo-600 scale-125 shadow-sm" />
-                        </div>
+                        {metadata && (
+                          <div className={cn(
+                            "mt-2 p-3 rounded-xl border flex items-start gap-3 relative z-10 animate-in slide-in-from-top-1 duration-300",
+                            isLowConfidence ? "bg-amber-50/50 border-amber-100" : "bg-white/50 border-black/5"
+                          )}>
+                            <MessageSquare size={14} className={cn("mt-0.5 shrink-0", isLowConfidence ? "text-amber-500" : "text-indigo-400")} />
+                            <div className="space-y-0.5">
+                              <p className="text-[8px] font-black uppercase tracking-widest text-gray-400">AI Reasoning</p>
+                              <p className="text-[11px] font-bold text-gray-600 leading-tight">{metadata.explanation}</p>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                      {aiExplanations[event.event_id] && (
-                        <div className="mt-2 p-3 bg-white/50 rounded-xl border border-black/5 flex items-start gap-3 relative z-10 animate-in slide-in-from-top-1 duration-300">
-                          <MessageSquare size={14} className="text-indigo-400 mt-0.5 shrink-0" />
-                          <div className="space-y-0.5">
-                            <p className="text-[8px] font-black uppercase tracking-widest text-gray-400">AI Reasoning</p>
-                            <p className="text-[11px] font-bold text-gray-600 leading-tight">{aiExplanations[event.event_id]}</p>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ))

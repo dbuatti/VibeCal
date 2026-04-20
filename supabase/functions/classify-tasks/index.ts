@@ -8,11 +8,21 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// Helper for fuzzy matching titles
-function isFuzzyMatch(title: string, pattern: string) {
-  const t = title.toLowerCase();
-  const p = pattern.toLowerCase();
-  return t.includes(p) || p.includes(t);
+// Advanced fuzzy matching: strips noise and checks for core similarity
+function isSemanticMatch(title: string, pattern: string) {
+  const clean = (s: string) => s.toLowerCase()
+    .replace(/part\s*\d+|v\d+|copy|draft|final|[\(\)\[\]]/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  
+  const t = clean(title);
+  const p = clean(pattern);
+  
+  if (t === p) return true;
+  if (t.length > 5 && p.length > 5) {
+    return t.includes(p) || p.includes(t);
+  }
+  return false;
 }
 
 async function generateWithRetry(model, prompt, functionName, maxRetries = 3) {
@@ -56,49 +66,34 @@ serve(async (req) => {
     const { data: { user } } = await supabaseUser.auth.getUser();
     if (!user) throw new Error("Unauthorized");
 
-    // 1. LAYER 1: FUZZY MEMORY LOOKUP
+    // 1. STAGE 1: SEMANTIC MEMORY LOOKUP
     const { data: feedback } = await supabaseAdmin
       .from('task_classification_feedback')
       .select('task_name, is_movable')
       .eq('user_id', user.id);
 
     const results = taskList.map(title => {
-      const lowerTitle = title.toLowerCase();
-      
-      // Check exact match first
-      const exact = feedback?.find(f => f.task_name.toLowerCase() === lowerTitle);
-      if (exact) {
+      const match = feedback?.find(f => isSemanticMatch(title, f.task_name));
+      if (match) {
         return { 
-          isMovable: exact.is_movable, 
-          explanation: "Matched your previous manual correction.",
+          isMovable: match.is_movable, 
+          explanation: `Semantic match: Similar to "${match.task_name}" which you previously vetted.`,
           confidence: 1.0,
           isPredefined: true 
         };
       }
-
-      // Check fuzzy match (pattern matching)
-      const fuzzy = feedback?.find(f => isFuzzyMatch(lowerTitle, f.task_name));
-      if (fuzzy) {
-        return {
-          isMovable: fuzzy.is_movable,
-          explanation: `Pattern match: Similar to "${fuzzy.task_name}" which you marked as ${fuzzy.is_movable ? 'movable' : 'fixed'}.`,
-          confidence: 0.9,
-          isPredefined: true
-        };
-      }
-
       return null;
     });
 
     const indicesToAI = results.map((r, i) => r === null ? i : null).filter(i => i !== null);
 
-    // 2. LAYER 2: ADVANCED AI REASONING
+    // 2. STAGE 2: COGNITIVE AI ANALYSIS
     if (indicesToAI.length > 0) {
       const tasksForAI = indicesToAI.map(i => taskList[i]);
       
       try {
         const prompt = `
-          You are an elite executive assistant with deep context awareness. Classify these calendar tasks.
+          You are an elite executive assistant. Classify these calendar tasks with high precision.
           
           CONTEXT:
           - MOVABLE: Solo work, drafts, research, chores, or "flexible" blocks.
@@ -115,12 +110,13 @@ serve(async (req) => {
           ${tasksForAI.map((t, idx) => `${idx}: "${t}"`).join('\n')}
           
           INSTRUCTIONS:
-          1. Determine if movable based on title and common sense.
+          1. Think step-by-step: Is this a solo activity or does it involve others?
           2. Detect dependencies: If task B mentions task A (e.g., "Part 2", "Follow up on X"), note that B depends on A.
-          3. Provide a concise, logical explanation for your choice.
+          3. Provide a concise, logical explanation.
+          4. Assign a confidence score (0.0 to 1.0).
           
           Return ONLY a JSON array of objects: 
-          { "isMovable": boolean, "explanation": string, "confidence": number (0-1), "dependsOn": string | null }
+          { "isMovable": boolean, "explanation": string, "confidence": number, "dependsOn": string | null }
         `;
 
         const geminiKey = Deno.env.get('GEMINI_API_KEY');
@@ -129,8 +125,9 @@ serve(async (req) => {
         
         const response = await generateWithRetry(model, prompt, functionName);
         const responseText = response.text();
-        const jsonMatch = responseText.match(/\[.*\]/s);
         
+        // Robust JSON extraction
+        const jsonMatch = responseText.match(/\[\s*\{.*\}\s*\]/s);
         if (jsonMatch) {
           const aiClassifications = JSON.parse(jsonMatch[0]);
           indicesToAI.forEach((originalIdx, aiIdx) => {
@@ -138,33 +135,26 @@ serve(async (req) => {
           });
         }
       } catch (aiError) {
-        console.error(`[${functionName}] AI Layer Failed, using Layer 3 (Heuristic Fallback):`, aiError.message);
+        console.error(`[${functionName}] AI Stage Failed, using Heuristic Fallback:`, aiError.message);
         
-        // 3. LAYER 3: HEURISTIC FALLBACK (Regex + Keywords)
+        // 3. STAGE 3: HEURISTIC FALLBACK
         indicesToAI.forEach(idx => {
           const title = taskList[idx].toLowerCase();
-          
           const isMovableKeyword = movableKeywords.some(kw => title.includes(kw.toLowerCase()));
           const isLockedKeyword = lockedKeywords.some(kw => title.includes(kw.toLowerCase()));
           
-          // Heuristic: Common "Fixed" patterns
           const fixedPatterns = /with|call|meeting|vs|interview|appointment|doctor|dentist|flight|zoom|teams|rehearsal|lesson|performance|gig|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
           const likelyFixed = fixedPatterns.test(title);
-          
-          // Heuristic: Common "Movable" patterns
-          const movablePatterns = /draft|research|solo|practice|tidy|vacuum|clean|read|study|explore|arrangement|email|outreach/i;
-          const likelyMovable = movablePatterns.test(title);
           
           let isMovable = true;
           if (isLockedKeyword) isMovable = false;
           else if (isMovableKeyword) isMovable = true;
           else if (likelyFixed) isMovable = false;
-          else if (likelyMovable) isMovable = true;
 
           results[idx] = {
             isMovable: isMovable,
             explanation: "Classified via Heuristic Engine (AI busy).",
-            confidence: 0.6,
+            confidence: 0.5,
             dependsOn: null
           };
         });
