@@ -1,82 +1,54 @@
 // @ts-nocheck
-import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0'
-
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-serve(async (req) => {
-  const functionName = "push-to-provider";
-
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders })
-  }
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   try {
-    const authHeader = req.headers.get('Authorization')
-    if (!authHeader) {
-      console.error(`[${functionName}] Missing Authorization header`);
-      return new Response(JSON.stringify({ error: "Unauthorized: Missing Authorization header" }), { status: 401, headers: corsHeaders });
-    }
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) throw new Error("Unauthorized");
 
     const body = await req.json().catch(() => ({}));
     const { eventId, provider, startTime, endTime, googleAccessToken, calendarId } = body;
 
     if (!eventId || !provider || !startTime || !endTime) {
-      console.error(`[${functionName}] Missing required parameters`, { eventId, provider, startTime, endTime });
-      return new Response(JSON.stringify({ error: "Missing required parameters: eventId, provider, startTime, and endTime are required." }), { status: 400, headers: corsHeaders });
-    }
-
-    console.log(`[${functionName}] START - Updating ${provider} event: ${eventId}`);
-    console.log(`[${functionName}] Payload - Start: ${startTime}, End: ${endTime}, Calendar: ${calendarId}`);
-
-    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
-
-    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
-    const supabaseUser = createClient(supabaseUrl, supabaseAnonKey, { 
-      global: { headers: { Authorization: authHeader } } 
-    });
-
-    const { data: { user }, error: authError } = await supabaseUser.auth.getUser();
-    if (authError || !user) {
-      console.error(`[${functionName}] Auth error:`, authError?.message || "User not found");
-      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: corsHeaders });
+      throw new Error("Missing required parameters");
     }
 
     if (provider === 'google') {
       let token = googleAccessToken;
+      
+      // If no token provided, we'd usually fetch from DB, but to keep this zero-dep, 
+      // we expect the client to provide it or we'll need a simple fetch to Supabase REST API.
       if (!token) {
-        console.log(`[${functionName}] Token missing from request, checking DB cache...`);
-        const { data: profile, error: profileError } = await supabaseAdmin
-          .from('profiles')
-          .select('google_access_token')
-          .eq('id', user.id)
-          .single();
+        const supabaseUrl = Deno.env.get('SUPABASE_URL');
+        const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
         
-        if (profileError) {
-          console.error(`[${functionName}] Profile fetch error:`, profileError.message);
+        // Get user ID from auth header (simple JWT decode or fetch user)
+        const userRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
+          headers: { 'Authorization': authHeader, 'apikey': Deno.env.get('SUPABASE_ANON_KEY') }
+        });
+        const userData = await userRes.json();
+        const userId = userData.id;
+
+        if (userId) {
+          const profileRes = await fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${userId}&select=google_access_token`, {
+            headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
+          });
+          const profiles = await profileRes.json();
+          token = profiles[0]?.google_access_token;
         }
-        token = profile?.google_access_token;
       }
 
-      if (!token) {
-        console.error(`[${functionName}] Missing Google Access Token for user ${user.id}`);
-        throw new Error("Missing Google Access Token. Please reconnect your Google Calendar.");
-      }
+      if (!token) throw new Error("Missing Google Access Token");
       
       const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId || 'primary')}/events/${eventId}`;
-      console.log(`[${functionName}] PATCHing Google API: ${url}`);
-      
       const res = await fetch(url, {
         method: 'PATCH',
-        headers: { 
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           start: { dateTime: startTime },
           end: { dateTime: endTime }
@@ -84,24 +56,15 @@ serve(async (req) => {
       });
 
       const data = await res.json();
+      if (!res.ok) throw new Error(`Google API Error: ${data.error?.message || 'Unknown'}`);
       
-      if (!res.ok) {
-        console.error(`[${functionName}] Google API Error:`, JSON.stringify(data));
-        // If token is expired, we might want to return a specific error so the client can trigger a sync/refresh
-        if (res.status === 401) {
-          return new Response(JSON.stringify({ error: "Google session expired. Please refresh your calendar.", code: "GOOGLE_AUTH_EXPIRED" }), { status: 401, headers: corsHeaders });
-        }
-        throw new Error(`Google API Error: ${data.error?.message || 'Unknown error'}`);
-      }
-      
-      console.log(`[${functionName}] SUCCESS`);
-      return new Response(JSON.stringify({ success: true, data }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ success: true, data }), { 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      });
     }
 
-    console.warn(`[${functionName}] Unsupported provider: ${provider}`);
-    return new Response(JSON.stringify({ success: false, message: `Unsupported provider: ${provider}` }), { status: 400, headers: corsHeaders });
+    throw new Error(`Unsupported provider: ${provider}`);
   } catch (error) {
-    console.error(`[${functionName}] FATAL ERROR:`, error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })
