@@ -11,7 +11,7 @@ import PlanPageHeader from '@/components/plan/PlanPageHeader';
 import PlanInitialView from '@/components/plan/PlanInitialView';
 import PlanLoadingView from '@/components/plan/PlanLoadingView';
 import { Card } from '@/components/ui/card';
-import { format, nextSaturday, parseISO, addMinutes, startOfDay, endOfDay, isAfter, isBefore } from 'date-fns';
+import { format, nextSaturday, parseISO, addMinutes, isAfter } from 'date-fns';
 import { AlertCircle, LogIn } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -101,44 +101,77 @@ const Plan = () => {
   const runAnalysis = async (skipSync = false) => {
     setIsProcessing(true);
     setTokenMissing(false);
-    setStatusText(skipSync ? 'Loading cached data...' : 'Syncing Calendars...');
     
     try {
       if (!skipSync) {
+        setStatusText('Authenticating...');
         const { data: { session } } = await supabase.auth.getSession();
+        const { data: { user } } = await supabase.auth.getUser();
+        
         let token = session?.provider_token;
 
-        const { data: syncData, error: syncError } = await supabase.functions.invoke('sync-calendar', { 
-          body: { googleAccessToken: token } 
-        });
-
-        if (syncError || syncData?.error) {
-          const errorMsg = syncError?.message || syncData?.error || "";
-          const isAuthError = errorMsg.includes("401") || 
-                             errorMsg.includes("Unauthorized") || 
-                             errorMsg.includes("invalid authentication credentials") ||
-                             errorMsg.includes("Missing Google Access Token");
-
-          if (isAuthError) {
-            setTokenMissing(true);
-            setIsProcessing(false);
-            showError("Google session expired. Please reconnect.");
-            return;
-          }
-          throw new Error(errorMsg);
+        // Token Fallback: If session token is missing, check the profile cache
+        if (!token && user) {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('google_access_token')
+            .eq('id', user.id)
+            .single();
+          token = profile?.google_access_token;
         }
 
-        await supabase.functions.invoke('sync-apple-calendar');
+        setStatusText('Syncing calendars...');
+        
+        // Parallelize Google and Apple syncs
+        const syncPromises = [
+          supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: token } }),
+          supabase.functions.invoke('sync-apple-calendar')
+        ];
+
+        const results = await Promise.allSettled(syncPromises);
+        
+        // Check Google Sync Result (Primary)
+        const googleResult = results[0];
+        if (googleResult.status === 'fulfilled') {
+          const { data, error } = googleResult.value;
+          if (error || data?.error) {
+            const errorMsg = error?.message || data?.error || "";
+            const isAuthError = errorMsg.includes("401") || 
+                               errorMsg.includes("Unauthorized") || 
+                               errorMsg.includes("Missing Google Access Token");
+
+            if (isAuthError) {
+              setTokenMissing(true);
+              setIsProcessing(false);
+              showError("Google session expired. Please reconnect.");
+              return;
+            }
+            // We don't throw here yet, let's see if Apple worked
+          }
+        }
+
+        // Check Apple Sync Result
+        const appleResult = results[1];
+        if (appleResult.status === 'rejected') {
+          console.error("Apple sync failed:", appleResult.reason);
+        }
+      } else {
+        setStatusText('Loading cached data...');
       }
       
-      const { data: fetchedEvents } = await supabase.from('calendar_events_cache').select('*').order('start_time', { ascending: true });
+      setStatusText('Updating local view...');
+      const { data: fetchedEvents } = await supabase
+        .from('calendar_events_cache')
+        .select('*')
+        .order('start_time', { ascending: true });
+        
       setEvents(fetchedEvents || []);
       
       if (currentStep !== 'active_plan') {
         navigate('/vet');
       }
       
-      showSuccess(skipSync ? 'Loaded from cache!' : 'Calendar synced!');
+      showSuccess(skipSync ? 'Loaded from cache!' : 'Calendars synced!');
     } catch (err: any) { 
       showError(err.message); 
     }
@@ -154,19 +187,19 @@ const Plan = () => {
 
   const handleFullReset = async () => {
     setIsProcessing(true);
-    setStatusText('Performing full system reset...');
+    setStatusText('Performing atomic system reset...');
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      // Use the RPC for an atomic reset
+      const { error } = await supabase.rpc('full_reset_user_data');
       
-      await supabase.from('calendar_events_cache').delete().eq('user_id', user.id);
-      await supabase.from('optimisation_history').delete().eq('user_id', user.id);
+      if (error) throw error;
       
       setEvents([]);
       setProposal(null);
       setAppliedChanges([]);
       setCurrentStep('initial');
       
+      showSuccess("System reset complete. Starting fresh sync...");
       await runAnalysis(false);
     } catch (err: any) {
       showError("Reset failed: " + err.message);
@@ -365,8 +398,6 @@ const Plan = () => {
     const change = proposal.proposed_changes[changeIdx];
     const targetDate = parseISO(targetDateStr);
     
-    // Find a slot on the target day
-    // We'll look at existing events on that day to find the last end time
     const dayEvents = [
       ...events.filter(e => format(parseISO(e.start_time), 'yyyy-MM-dd') === targetDateStr),
       ...proposal.proposed_changes.filter((c: any) => 
@@ -376,7 +407,6 @@ const Plan = () => {
     ];
 
     let lastEnd = new Date(targetDate);
-    // Default to work start time if no events
     const [startH, startM] = (settings?.day_start_time || '09:00').split(':').map(Number);
     lastEnd.setHours(startH, startM, 0, 0);
 
@@ -385,7 +415,6 @@ const Plan = () => {
       if (isAfter(end, lastEnd)) lastEnd = end;
     });
 
-    // Add a small buffer
     const newStart = addMinutes(lastEnd, 5);
     const newEnd = addMinutes(newStart, change.duration);
 
