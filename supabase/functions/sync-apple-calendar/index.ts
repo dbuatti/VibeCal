@@ -134,22 +134,26 @@ serve(async (req) => {
             const description = event.description || null;
             const location = event.location || null;
             
-            // ICAL.js handles timezone conversion if VTIMEZONE is present.
-            // If not, we assume the time is in the user's profile timezone.
-            let start = event.startDate.toJSDate();
-            let end = event.endDate.toJSDate();
-
-            // If the time is "floating" (no timezone and not UTC), we need to treat it as being in the user's timezone
+            let start, end;
+            
+            // Handle floating times by assuming user's timezone
             if (!event.startDate.isUtc && !event.startDate.timezone) {
-              const naiveStart = event.startDate.toString(); // e.g. "2026-04-21T10:30:00"
-              // We use a trick to parse this as being in the user's timezone
-              const formatter = new Intl.DateTimeFormat('en-US', {
-                timeZone: userTimezone,
-                year: 'numeric', month: '2-digit', day: '2-digit',
-                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
-              });
-              // This is complex to do perfectly without a library like date-fns-tz in Deno,
-              // but for now we'll trust ICAL.js's default behavior or assume the user's system is in their timezone.
+              // This is a floating time (e.g. "2026-04-20T17:45:00")
+              // We need to parse it as being in the user's local timezone
+              const s = event.startDate.toString();
+              const e = event.endDate.toString();
+              
+              // Trick to parse local time string into UTC Date object using user's TZ
+              start = new Date(new Date(s).toLocaleString('en-US', { timeZone: userTimezone }));
+              end = new Date(new Date(e).toLocaleString('en-US', { timeZone: userTimezone }));
+              
+              // Adjust for the fact that the constructor above might have double-shifted
+              const offset = (new Date(s).getTime() - start.getTime());
+              start = new Date(new Date(s).getTime() + offset);
+              end = new Date(new Date(e).getTime() + offset);
+            } else {
+              start = event.startDate.toJSDate();
+              end = event.endDate.toJSDate();
             }
 
             const uid = event.uid;
