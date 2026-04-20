@@ -1,7 +1,6 @@
 // @ts-nocheck
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0'
-import { GoogleGenerativeAI } from "https://esm.sh/@google/generative-ai@0.21.0"
 import { toDate, formatInTimeZone } from "https://esm.sh/date-fns-tz@3.1.1"
 
 const corsHeaders = {
@@ -35,33 +34,16 @@ serve(async (req) => {
 
     const { data: { user } } = await supabaseClient.auth.getUser()
     
-    const [settingsRes, profileRes, eventsRes, themesRes] = await Promise.all([
+    const [settingsRes, profileRes, eventsRes] = await Promise.all([
       supabaseClient.from('user_settings').select('*').eq('user_id', user.id).single(),
       supabaseClient.from('profiles').select('timezone').eq('id', user.id).single(),
-      supabaseClient.from('calendar_events_cache').select('*').eq('user_id', user.id).order('start_time', { ascending: true }),
-      supabaseClient.from('day_themes').select('*').eq('user_id', user.id)
+      supabaseClient.from('calendar_events_cache').select('*').eq('user_id', user.id).order('start_time', { ascending: true })
     ]);
 
-    const settings = settingsRes.data || { 
-      day_start_time: '09:00', 
-      day_end_time: '17:00', 
-      max_hours_per_day: 6, 
-      max_tasks_per_day: 5,
-      group_similar_tasks: true,
-      work_keywords: [],
-      movable_keywords: [],
-      locked_keywords: [],
-      natural_language_rules: ''
-    };
-    
+    const settings = settingsRes.data || { day_start_time: '09:00', day_end_time: '17:00', max_hours_per_day: 6, max_tasks_per_day: 5 };
     const userTimezone = profileRes.data?.timezone || 'Australia/Melbourne';
     const allEvents = eventsRes.data || [];
-    const dayThemes = themesRes.data || [];
     
-    const workKeywords = settings.work_keywords || [];
-    const movableKeywords = settings.movable_keywords || [];
-    const lockedKeywords = settings.locked_keywords || [];
-
     const maxTasks = maxTasksOverride || settings.max_tasks_per_day || 5;
     const maxWorkHours = settings.max_hours_per_day || 24;
 
@@ -69,27 +51,19 @@ serve(async (req) => {
     const todayStr = formatInTimeZone(now, userTimezone, 'yyyy-MM-dd');
     const localTodayStart = toDate(`${todayStr}T00:00:00`, { timeZone: userTimezone });
 
-    const seenIds = new Set();
-    const uniqueEvents = allEvents.filter(e => {
-      if (seenIds.has(e.event_id)) return false;
-      seenIds.add(e.event_id);
-      return new Date(e.start_time) >= localTodayStart;
-    });
-
     // 1. CLASSIFY TASKS (Including Dependencies)
-    console.log(`[${functionName}] Requesting AI classification for ${uniqueEvents.length} tasks...`);
     const { data: classificationData } = await supabaseClient.functions.invoke('classify-tasks', {
       body: {
-        tasks: uniqueEvents.map(e => e.title),
-        movableKeywords,
-        lockedKeywords,
-        naturalLanguageRules: settings.natural_language_rules
+        tasks: allEvents.map(e => e.title),
+        movableKeywords: settings.movable_keywords || [],
+        lockedKeywords: settings.locked_keywords || [],
+        naturalLanguageRules: settings.natural_language_rules || ''
       }
     });
 
     const classifications = classificationData?.classifications || [];
 
-    const processedEvents = uniqueEvents.map((e, i) => {
+    const processedEvents = allEvents.map((e, i) => {
       const classification = classifications[i];
       const isMovable = classification?.isMovable ?? !e.is_locked;
       const dependsOn = classification?.dependsOn || null;
@@ -104,7 +78,7 @@ serve(async (req) => {
     const fixedEvents = processedEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
     const movableEvents = processedEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
 
-    // 2. SORT MOVABLE TASKS
+    // 2. SORT MOVABLE TASKS (Prerequisites first)
     const sortedMovable = [...movableEvents].sort((a, b) => {
       if (!a.dependsOn && b.dependsOn) return -1;
       if (a.dependsOn && !b.dependsOn) return 1;
@@ -175,13 +149,15 @@ serve(async (req) => {
 
           let searchPointer = new Date(stats.lastPointer);
 
+          // Ensure we start after the dependency
           if (dependencyEndTime) {
             const depDayKey = formatInTimeZone(dependencyEndTime, userTimezone, 'yyyy-MM-dd');
             if (depDayKey === dayKey) {
               if (dependencyEndTime > searchPointer) {
                 searchPointer = alignTime(dependencyEndTime, slotAlignment);
               }
-            } else if (depDayKey > dayKey) {
+            } else if (dependencyEndTime > new Date(dayEnd.getTime())) {
+              // Dependency is in the future relative to this day
               dayOffset++; continue;
             }
           }
@@ -201,8 +177,7 @@ serve(async (req) => {
             } else {
               foundSlot = true;
               stats.tasks += 1;
-              const isWork = workKeywords.some(kw => event.title.toLowerCase().includes(kw.toLowerCase()));
-              if (isWork) stats.hours += (effectiveDuration / 60);
+              stats.hours += (effectiveDuration / 60);
               stats.lastPointer = alignTime(new Date(potentialEnd.getTime()), slotAlignment);
 
               proposedChanges.push({
@@ -213,7 +188,6 @@ serve(async (req) => {
                 new_start: searchPointer.toISOString(),
                 new_end: potentialEnd.toISOString(),
                 duration: effectiveDuration,
-                is_work: isWork,
                 is_surplus: false,
                 dependsOn: event.dependsOn
               });
@@ -236,7 +210,6 @@ serve(async (req) => {
           new_start: pStart.toISOString(),
           new_end: pEnd.toISOString(),
           duration: effectiveDuration,
-          is_work: false,
           is_surplus: true,
           dependsOn: event.dependsOn
         });

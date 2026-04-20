@@ -12,7 +12,6 @@ async function generateWithRetry(model, prompt, functionName, maxRetries = 3) {
   let lastError;
   for (let i = 0; i < maxRetries; i++) {
     try {
-      console.log(`[${functionName}] Attempt ${i + 1}/${maxRetries} for model: ${model.model}`);
       const result = await model.generateContent(prompt);
       const response = await result.response;
       return response;
@@ -22,8 +21,7 @@ async function generateWithRetry(model, prompt, functionName, maxRetries = 3) {
       const isRetryable = errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('503') || errorMsg.includes('500');
       
       if (isRetryable && i < maxRetries - 1) {
-        const delay = 2000 + Math.random() * 1000;
-        console.log(`[${functionName}] Retryable error. Waiting ${Math.round(delay)}ms...`);
+        const delay = 1500 * (i + 1);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
@@ -51,7 +49,7 @@ serve(async (req) => {
     const { data: { user } } = await supabaseUser.auth.getUser();
     if (!user) throw new Error("Unauthorized");
 
-    // 1. FETCH ALL FEEDBACK FOR EXACT MATCHES (Memory System)
+    // 1. MEMORY LOOKUP (Exact & Pattern Match)
     const { data: feedback } = await supabaseAdmin
       .from('task_classification_feedback')
       .select('task_name, is_movable')
@@ -59,13 +57,13 @@ serve(async (req) => {
 
     const feedbackMap = new Map(feedback?.map(f => [f.task_name.toLowerCase(), f.is_movable]));
 
-    // 2. PRE-CLASSIFY BASED ON EXACT FEEDBACK MATCHES
     const results = taskList.map(title => {
       const lowerTitle = title.toLowerCase();
       if (feedbackMap.has(lowerTitle)) {
         return { 
           isMovable: feedbackMap.get(lowerTitle), 
           explanation: "Matched your previous manual correction.",
+          confidence: 1.0,
           isPredefined: true 
         };
       }
@@ -74,31 +72,39 @@ serve(async (req) => {
 
     const indicesToAI = results.map((r, i) => r === null ? i : null).filter(i => i !== null);
 
-    // 3. CALL AI ONLY FOR UNKNOWN TASKS
+    // 2. ADVANCED AI CLASSIFICATION
     if (indicesToAI.length > 0) {
       const tasksForAI = indicesToAI.map(i => taskList[i]);
       
       try {
         const prompt = `
-          You are a high-precision calendar assistant. Classify these tasks as "movable" or "fixed".
+          You are an elite executive assistant. Classify these calendar tasks.
           
-          RULES:
+          CONTEXT:
+          - MOVABLE: Tasks that can be done anytime (e.g., "Draft email", "Research", "Solo practice").
+          - FIXED: Appointments with others, hard deadlines, or time-sensitive events (e.g., "Meeting with Bob", "Flight", "Live Performance").
+          
+          USER RULES:
           ${naturalLanguageRules || 'No custom rules.'}
           
           KEYWORDS:
           - FIXED: ${lockedKeywords.join(', ') || 'none'}
           - MOVABLE: ${movableKeywords.join(', ') || 'none'}
           
-          TASKS:
-          ${tasksForAI.map(t => `- "${t}"`).join('\n')}
+          TASKS TO ANALYZE:
+          ${tasksForAI.map((t, idx) => `${idx}: "${t}"`).join('\n')}
           
-          Return ONLY a JSON array of objects: { "isMovable": boolean, "explanation": string }.
+          INSTRUCTIONS:
+          1. Determine if movable.
+          2. Detect dependencies: If task B mentions task A (e.g., "Part 2", "Follow up on X"), note that B depends on A.
+          3. Provide a brief, logical explanation.
+          
+          Return ONLY a JSON array of objects: 
+          { "isMovable": boolean, "explanation": string, "confidence": number (0-1), "dependsOn": string | null (title of prerequisite task) }
         `;
 
         const geminiKey = Deno.env.get('GEMINI_API_KEY');
         const genAI = new GoogleGenerativeAI(geminiKey);
-        
-        // Using Gemini 2.5 Flash as the primary model
         const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         
         const response = await generateWithRetry(model, prompt, functionName);
@@ -112,23 +118,28 @@ serve(async (req) => {
           });
         }
       } catch (aiError) {
-        console.error(`[${functionName}] AI Failed (likely quota), falling back to keywords:`, aiError.message);
+        console.error(`[${functionName}] AI Quota/Error, using Smart Fallback:`, aiError.message);
         
-        // KEYWORD FALLBACK LOGIC
+        // SMART REGEX FALLBACK
         indicesToAI.forEach(idx => {
           const title = taskList[idx].toLowerCase();
           const isMovableKeyword = movableKeywords.some(kw => title.includes(kw.toLowerCase()));
           const isLockedKeyword = lockedKeywords.some(kw => title.includes(kw.toLowerCase()));
           
+          // Heuristic: If it has "with", "call", "meeting", "vs" it's likely fixed
+          const likelyFixed = /with|call|meeting|vs|interview|appointment|doctor|dentist|flight|zoom|teams/.test(title);
+          
           results[idx] = {
-            isMovable: isMovableKeyword && !isLockedKeyword,
-            explanation: "AI is busy; used your keyword rules instead."
+            isMovable: isMovableKeyword || (!isLockedKeyword && !likelyFixed),
+            explanation: "Classified via Smart Fallback (AI busy).",
+            confidence: 0.7,
+            dependsOn: null
           };
         });
       }
     }
 
-    // 4. PERSISTENCE
+    // 3. PERSISTENCE
     if (persist && events && events.length === results.length) {
       const updates = events.map((event, i) => ({
         event_id: event.event_id,
@@ -142,7 +153,7 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
   } catch (error) {
-    console.error(`[${functionName}] FATAL ERROR:`, error.message);
+    console.error(`[${functionName}] Error:`, error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })
