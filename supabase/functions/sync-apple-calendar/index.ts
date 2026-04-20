@@ -30,6 +30,7 @@ Deno.serve(async (req) => {
     const profile = profiles[0];
     
     if (!profile?.apple_id || !profile?.apple_app_password) {
+      console.log(`[${functionName}] No Apple credentials found for user ${user.id}`);
       return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
     }
 
@@ -168,13 +169,13 @@ Deno.serve(async (req) => {
               icsData = icsData.match(/<!\[CDATA\[([\s\S]*?)\]\]>/i)?.[1] || icsData;
             }
 
-            // 3. Log first 100 characters for debugging (as requested)
-            const debugSnippet = icsData.substring(0, 100).replace(/\r/g, '\\r').replace(/\n/g, '\\n');
-            console.log(`[${functionName}] Raw Snippet (100 chars): ${debugSnippet}`);
+            // 3. Log first 200 characters for debugging (Logging Blitz)
+            const debugSnippet = icsData.substring(0, 200).replace(/\r/g, '\\r').replace(/\n/g, '\\n');
+            console.log(`[${functionName}] [Debug] Raw Data (200 chars): ${debugSnippet}`);
 
             // 4. Unfold lines (iCal standard: CRLF followed by a space means the line continues)
             const unfolded = icsData.replace(/\r\n\s/g, '');
-
+            
             // 5. Brute Force Regex for key fields
             const summaryMatch = unfolded.match(/SUMMARY:(.*)/i);
             const uidMatch = unfolded.match(/UID:(.*)/i);
@@ -182,6 +183,11 @@ Deno.serve(async (req) => {
             // Specific regex for dates accounting for TZID and semicolons
             const startMatch = unfolded.match(/DTSTART(?:;TZID=[^:]+)?[:](\d{8}T\d{6}Z?)/i);
             const endMatch = unfolded.match(/DTEND(?:;TZID=[^:]+)?[:](\d{8}T\d{6}Z?)/i);
+
+            console.log(`[${functionName}] [Debug] Regex Match SUMMARY: ${summaryMatch ? 'FOUND' : 'null'}`);
+            console.log(`[${functionName}] [Debug] Regex Match UID: ${uidMatch ? 'FOUND' : 'null'}`);
+            console.log(`[${functionName}] [Debug] Regex Match DTSTART: ${startMatch ? 'FOUND' : 'null'}`);
+            console.log(`[${functionName}] [Debug] Regex Match DTEND: ${endMatch ? 'FOUND' : 'null'}`);
 
             const summary = summaryMatch?.[1]?.trim() || 'Untitled';
             const uid = uidMatch?.[1]?.trim();
@@ -193,14 +199,12 @@ Deno.serve(async (req) => {
                 // Handle 20260310T120000 format
                 const y = str.substring(0, 4), m = str.substring(4, 6), d = str.substring(6, 8);
                 const h = str.substring(9, 11), min = str.substring(11, 13), s = str.substring(13, 15);
-                // Note: This creates a local date object. If 'Z' is present, it's UTC.
-                // Apple usually provides local time + TZID, so we treat as local if no Z.
                 const dateStr = `${y}-${m}-${d}T${h}:${min}:${s}${str.endsWith('Z') ? 'Z' : ''}`;
                 return new Date(dateStr).toISOString();
               };
 
               try {
-                allEvents.push({
+                const eventObj = {
                   user_id: user.id,
                   event_id: uid,
                   title: summary,
@@ -210,11 +214,16 @@ Deno.serve(async (req) => {
                   source_calendar: cal.calendar_name,
                   source_calendar_id: cal.calendar_id,
                   last_synced_at: new Date().toISOString()
-                });
+                };
+                
+                console.log(`[${functionName}] [Debug] Final Event Object:`, JSON.stringify(eventObj));
+                allEvents.push(eventObj);
                 parsedCount++;
               } catch (e) {
-                console.error(`[${functionName}] Date Parse Error for ${summary}:`, e.message);
+                console.error(`[${functionName}] [Debug] Parsing Error: Invalid Date for ${summary} - ${e.message}`);
               }
+            } else {
+              console.log(`[${functionName}] [Debug] Skipping event due to missing fields: UID=${!!uid}, START=${!!dtstart}, END=${!!dtend}`);
             }
           }
         }
@@ -246,6 +255,9 @@ Deno.serve(async (req) => {
         },
         body: JSON.stringify(allEvents)
       });
+      if (!upsertRes.ok) {
+        console.error(`[${functionName}] Upsert Error:`, await upsertRes.text());
+      }
     }
 
     return new Response(JSON.stringify({ count: allEvents.length }), { 
