@@ -33,7 +33,6 @@ async function refreshGoogleToken(refreshToken: string, functionName: string) {
   const data = await res.json();
   if (!res.ok) {
     console.error(`[${functionName}] Google Token Refresh Error Response:`, JSON.stringify(data));
-    // If it's an invalid_grant, it means the refresh token is dead
     const errorMsg = data.error_description || data.error || 'Unknown error';
     throw new Error(`Google Refresh Failed (${data.error || 'error'}): ${errorMsg}`);
   }
@@ -53,11 +52,13 @@ serve(async (req) => {
     const authHeader = req.headers.get('Authorization')
     let { googleAccessToken } = await req.json();
 
-    const supabaseAdmin = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_ANON_KEY') ?? '')
+    const supabaseAdmin = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '')
     const supabaseUser = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_ANON_KEY') ?? '', { global: { headers: { Authorization: authHeader } } })
     
     const { data: { user } } = await supabaseUser.auth.getUser()
     if (!user) throw new Error("Unauthorized");
+
+    console.log(`[${functionName}] Processing for User ID: ${user.id}`);
 
     const { data: profile } = await supabaseAdmin.from('profiles').select('google_access_token, google_refresh_token, timezone').eq('id', user.id).single();
     const userTimezone = profile?.timezone || 'Australia/Melbourne';
@@ -77,19 +78,18 @@ serve(async (req) => {
 
     if (listRes.status === 401) {
       if (refreshToken) {
-        console.log(`[${functionName}] Access token expired, attempting refresh with stored refresh token...`);
+        console.log(`[${functionName}] Access token expired, attempting refresh...`);
         try {
           token = await refreshGoogleToken(refreshToken, functionName);
           await supabaseAdmin.from('profiles').update({ google_access_token: token }).eq('id', user.id);
           console.log(`[${functionName}] Token refreshed and saved to profile`);
         } catch (refreshErr) {
           console.error(`[${functionName}] Refresh process failed:`, refreshErr.message);
-          // Return 401 so the frontend knows it needs a full re-login
           return new Response(JSON.stringify({ error: "Authentication expired", details: refreshErr.message }), { status: 401, headers: corsHeaders });
         }
       } else {
         console.error(`[${functionName}] Token expired and no refresh token available in profile`);
-        return new Response(JSON.stringify({ error: "Session expired. Please log in again to grant calendar access." }), { status: 401, headers: corsHeaders });
+        return new Response(JSON.stringify({ error: "Session expired. Please log in again." }), { status: 401, headers: corsHeaders });
       }
     }
 
@@ -106,6 +106,7 @@ serve(async (req) => {
 
     const listData = await fullListRes.json();
     if (listData.items) {
+      console.log(`[${functionName}] Found ${listData.items.length} calendars on Google`);
       const discovered = listData.items.filter(cal => !cal.id.includes('@import.calendar.google.com')).map(cal => ({
         user_id: user.id, 
         calendar_id: cal.id, 
@@ -113,16 +114,34 @@ serve(async (req) => {
         provider: 'google', 
         color: cal.backgroundColor || '#6366f1'
       }));
+      
       if (discovered.length > 0) {
+        // Use upsert but don't overwrite is_enabled if it already exists
+        // We do this by fetching existing ones first or just letting the DB handle it
         await supabaseAdmin.from('user_calendars').upsert(discovered, { onConflict: 'user_id, calendar_id' });
       }
     }
 
-    const { data: allCals } = await supabaseAdmin.from('user_calendars').select('calendar_id, calendar_name, is_enabled').eq('user_id', user.id).eq('provider', 'google');
+    const { data: allCals, error: dbError } = await supabaseAdmin
+      .from('user_calendars')
+      .select('calendar_id, calendar_name, is_enabled')
+      .eq('user_id', user.id)
+      .eq('provider', 'google');
+
+    if (dbError) {
+      console.error(`[${functionName}] Database error fetching calendars:`, dbError);
+      throw dbError;
+    }
+
+    console.log(`[${functionName}] Database check: Found ${allCals?.length || 0} Google calendars in DB for this user.`);
+    if (allCals) {
+      allCals.forEach(c => console.log(`[${functionName}]   - ${c.calendar_name}: enabled=${c.is_enabled}`));
+    }
+
     const enabledCalendars = (allCals || []).filter(c => c.is_enabled);
     
     if (enabledCalendars.length === 0) {
-      console.log(`[${functionName}] No Google calendars enabled for user`);
+      console.warn(`[${functionName}] No Google calendars are marked as 'enabled' in the database.`);
       return new Response(JSON.stringify({ count: 0, message: "No calendars enabled" }), { headers: corsHeaders });
     }
 
@@ -150,6 +169,7 @@ serve(async (req) => {
     };
 
     for (const cal of enabledCalendars) {
+      console.log(`[${functionName}] Syncing events for: ${cal.calendar_name}`);
       const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.calendar_id)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`;
       let res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) {
@@ -159,6 +179,7 @@ serve(async (req) => {
       
       const data = await res.json();
       const items = data.items || [];
+      console.log(`[${functionName}]   - Found ${items.length} events`);
 
       items.forEach(event => {
         const title = event.summary || 'Untitled';
