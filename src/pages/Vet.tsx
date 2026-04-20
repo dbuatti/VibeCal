@@ -123,50 +123,60 @@ const Vet = () => {
     try {
       const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, natural_language_rules').single();
       
-      const BATCH_SIZE = 25;
+      const BATCH_SIZE = 20;
       const batches = [];
       for (let i = 0; i < eventsToClassify.length; i += BATCH_SIZE) {
         batches.push(eventsToClassify.slice(i, i + BATCH_SIZE));
       }
 
-      // Trigger all batches in parallel and don't block navigation
-      // We use 'persist: true' so the Edge Function updates the DB itself
-      const classificationPromises = batches.map(batch => 
-        supabase.functions.invoke('classify-tasks', {
-          body: {
-            events: batch.map(e => ({ event_id: e.event_id, title: e.title })),
-            movableKeywords: settings?.movable_keywords || [],
-            lockedKeywords: settings?.locked_keywords || [],
-            naturalLanguageRules: settings?.natural_language_rules || '',
-            persist: true
-          }
-        })
-      );
-
-      // We await them here just to update the local UI if the user stays on the page
-      Promise.all(classificationPromises).then(results => {
+      // Process batches with a delay to avoid 429 errors
+      const processBatches = async () => {
         const updatedEvents = [...events];
         const newExplanations = { ...aiExplanations };
 
-        results.forEach((res, batchIdx) => {
-          if (res.data?.classifications) {
-            batches[batchIdx].forEach((event, idx) => {
-              const classification = res.data.classifications[idx];
-              const eventIdx = updatedEvents.findIndex(e => e.event_id === event.event_id);
-              if (eventIdx !== -1) {
-                updatedEvents[eventIdx].is_locked = !classification.isMovable;
-                newExplanations[event.event_id] = classification.explanation;
+        for (let i = 0; i < batches.length; i++) {
+          const batch = batches[i];
+          setStatusText(`AI Vetting: Batch ${i + 1}/${batches.length}...`);
+          
+          try {
+            const { data, error } = await supabase.functions.invoke('classify-tasks', {
+              body: {
+                events: batch.map(e => ({ event_id: e.event_id, title: e.title })),
+                movableKeywords: settings?.movable_keywords || [],
+                lockedKeywords: settings?.locked_keywords || [],
+                naturalLanguageRules: settings?.natural_language_rules || '',
+                persist: true
               }
             });
-          }
-        });
 
-        setEvents(updatedEvents);
-        setAiExplanations(newExplanations);
+            if (data?.classifications) {
+              batch.forEach((event, idx) => {
+                const classification = data.classifications[idx];
+                const eventIdx = updatedEvents.findIndex(e => e.event_id === event.event_id);
+                if (eventIdx !== -1) {
+                  updatedEvents[eventIdx].is_locked = !classification.isMovable;
+                  newExplanations[event.event_id] = classification.explanation;
+                }
+              });
+              setEvents([...updatedEvents]);
+              setAiExplanations({...newExplanations});
+            }
+
+            // Small delay between batches to respect rate limits
+            if (i < batches.length - 1) {
+              await new Promise(resolve => setTimeout(resolve, 1500));
+            }
+          } catch (err) {
+            console.error("Batch failed:", err);
+          }
+        }
+
         setIsProcessing(false);
         setStatusText('');
-        showSuccess("AI vetting is processing in the background!");
-      });
+        showSuccess("AI vetting complete!");
+      };
+
+      processBatches();
 
     } catch (err: any) {
       showError("AI Vetting failed: " + err.message);
@@ -198,11 +208,27 @@ const Vet = () => {
     }
   };
 
-  const toggleLock = async (eventId: string, currentStatus: boolean) => {
+  const toggleLock = async (event: any) => {
+    const newLockedStatus = !event.is_locked;
     try {
-      await supabase.from('calendar_events_cache').update({ is_locked: !currentStatus }).eq('event_id', eventId);
-      setEvents(events.map(e => e.event_id === eventId ? { ...e, is_locked: !currentStatus } : e));
-    } catch (err) { showError("Failed to update status"); }
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      // 1. Update local cache
+      await supabase.from('calendar_events_cache').update({ is_locked: newLockedStatus }).eq('event_id', event.event_id);
+      
+      // 2. AUTOMATIC LEARNING: Save this as feedback so the AI remembers it next time
+      await supabase.from('task_classification_feedback').upsert({
+        user_id: user.id,
+        task_name: event.title,
+        is_movable: !newLockedStatus
+      }, { onConflict: 'user_id, task_name' });
+
+      setEvents(events.map(e => e.event_id === event.event_id ? { ...e, is_locked: newLockedStatus } : e));
+      showSuccess(`AI learned: "${event.title}" is now ${newLockedStatus ? 'Fixed' : 'Movable'}`);
+    } catch (err) { 
+      showError("Failed to update status"); 
+    }
   };
 
   const bulkAction = async (action: 'lock_all' | 'unlock_all') => {
@@ -371,7 +397,7 @@ const Vet = () => {
                         </div>
                         <div className="flex items-center gap-8 ml-6">
                           <ProviderLogo provider={event.provider} />
-                          <Switch checked={!event.is_locked} onCheckedChange={() => toggleLock(event.event_id, event.is_locked)} className="data-[state=checked]:bg-indigo-600 scale-125 shadow-sm" />
+                          <Switch checked={!event.is_locked} onCheckedChange={() => toggleLock(event)} className="data-[state=checked]:bg-indigo-600 scale-125 shadow-sm" />
                         </div>
                       </div>
                       {aiExplanations[event.event_id] && (

@@ -8,7 +8,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-async function generateWithRetry(model, prompt, functionName, maxRetries = 3) {
+async function generateWithRetry(model, prompt, functionName, maxRetries = 2) {
   let lastError;
   for (let i = 0; i < maxRetries; i++) {
     try {
@@ -22,7 +22,7 @@ async function generateWithRetry(model, prompt, functionName, maxRetries = 3) {
       const isRetryable = errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('503') || errorMsg.includes('500');
       
       if (isRetryable && i < maxRetries - 1) {
-        const delay = Math.pow(2, i) * 2000 + Math.random() * 1000;
+        const delay = 2000 + Math.random() * 1000;
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
@@ -38,80 +38,104 @@ serve(async (req) => {
   const functionName = "classify-tasks";
 
   try {
-    const { events, tasks, movableKeywords, lockedKeywords, naturalLanguageRules, persist = false } = await req.json();
+    const { events, tasks, movableKeywords = [], lockedKeywords = [], naturalLanguageRules = '', persist = false } = await req.json();
     const authHeader = req.headers.get('Authorization');
     
-    // Support both old 'tasks' array and new 'events' array
     const taskList = events ? events.map(e => e.title) : (tasks || []);
-    
-    if (taskList.length === 0) {
-      return new Response(JSON.stringify({ classifications: [] }), { headers: corsHeaders });
-    }
+    if (taskList.length === 0) return new Response(JSON.stringify({ classifications: [] }), { headers: corsHeaders });
 
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
-
-    const supabaseUser = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: authHeader } } }
-    );
+    const supabaseAdmin = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
+    const supabaseUser = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_ANON_KEY') ?? '', { global: { headers: { Authorization: authHeader } } });
 
     const { data: { user } } = await supabaseUser.auth.getUser();
     if (!user) throw new Error("Unauthorized");
 
+    // 1. FETCH ALL FEEDBACK FOR EXACT MATCHES
     const { data: feedback } = await supabaseAdmin
       .from('task_classification_feedback')
       .select('task_name, is_movable')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false })
-      .limit(30);
+      .eq('user_id', user.id);
 
-    const prompt = `
-      You are a high-precision calendar assistant. Your job is to classify tasks as "movable" or "fixed".
-      
-      PRIORITY 1: USER'S CUSTOM RULES
-      ${naturalLanguageRules || 'No custom rules provided.'}
-      
-      PRIORITY 2: USER'S PAST CORRECTIONS
-      ${feedback?.map(f => `- "${f.task_name}" is ${f.is_movable ? 'movable' : 'fixed'}`).join('\n') || 'No past corrections.'}
+    const feedbackMap = new Map(feedback?.map(f => [f.task_name.toLowerCase(), f.is_movable]));
 
-      PRIORITY 3: KEYWORD RULES
-      - FIXED: ${lockedKeywords?.join(', ') || 'none'}.
-      - MOVABLE: ${movableKeywords?.join(', ') || 'none'}.
-      
-      Tasks to classify:
-      ${taskList.map(t => `- "${t}"`).join('\n')}
-      
-      Return ONLY a JSON array of objects: { "isMovable": boolean, "explanation": string, "dependsOn": string | null }.
-    `;
+    // 2. PRE-CLASSIFY BASED ON EXACT FEEDBACK MATCHES
+    const results = taskList.map(title => {
+      const lowerTitle = title.toLowerCase();
+      if (feedbackMap.has(lowerTitle)) {
+        return { 
+          isMovable: feedbackMap.get(lowerTitle), 
+          explanation: "Matched your previous manual correction.",
+          isPredefined: true 
+        };
+      }
+      return null;
+    });
 
-    const geminiKey = Deno.env.get('GEMINI_API_KEY');
-    const genAI = new GoogleGenerativeAI(geminiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-    
-    const response = await generateWithRetry(model, prompt, functionName);
-    const responseText = response.text();
-    const jsonMatch = responseText.match(/\[.*\]/s);
-    
-    if (!jsonMatch) throw new Error("Invalid AI response");
-    const classifications = JSON.parse(jsonMatch[0]);
+    const indicesToAI = results.map((r, i) => r === null ? i : null).filter(i => i !== null);
 
-    // BACKGROUND PERSISTENCE
-    if (persist && events && events.length === classifications.length) {
-      console.log(`[${functionName}] Persisting ${events.length} classifications to DB...`);
+    // 3. CALL AI ONLY FOR UNKNOWN TASKS
+    if (indicesToAI.length > 0) {
+      const tasksForAI = indicesToAI.map(i => taskList[i]);
+      
+      try {
+        const prompt = `
+          You are a high-precision calendar assistant. Classify these tasks as "movable" or "fixed".
+          
+          RULES:
+          ${naturalLanguageRules || 'No custom rules.'}
+          
+          KEYWORDS:
+          - FIXED: ${lockedKeywords.join(', ') || 'none'}
+          - MOVABLE: ${movableKeywords.join(', ') || 'none'}
+          
+          TASKS:
+          ${tasksForAI.map(t => `- "${t}"`).join('\n')}
+          
+          Return ONLY a JSON array of objects: { "isMovable": boolean, "explanation": string }.
+        `;
+
+        const geminiKey = Deno.env.get('GEMINI_API_KEY');
+        const genAI = new GoogleGenerativeAI(geminiKey);
+        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        
+        const response = await generateWithRetry(model, prompt, functionName);
+        const responseText = response.text();
+        const jsonMatch = responseText.match(/\[.*\]/s);
+        
+        if (jsonMatch) {
+          const aiClassifications = JSON.parse(jsonMatch[0]);
+          indicesToAI.forEach((originalIdx, aiIdx) => {
+            results[originalIdx] = aiClassifications[aiIdx];
+          });
+        }
+      } catch (aiError) {
+        console.error(`[${functionName}] AI Failed (likely quota), falling back to keywords:`, aiError.message);
+        
+        // KEYWORD FALLBACK LOGIC
+        indicesToAI.forEach(idx => {
+          const title = taskList[idx].toLowerCase();
+          const isMovableKeyword = movableKeywords.some(kw => title.includes(kw.toLowerCase()));
+          const isLockedKeyword = lockedKeywords.some(kw => title.includes(kw.toLowerCase()));
+          
+          results[idx] = {
+            isMovable: isMovableKeyword && !isLockedKeyword,
+            explanation: "AI is busy; used your keyword rules instead."
+          };
+        });
+      }
+    }
+
+    // 4. PERSISTENCE
+    if (persist && events && events.length === results.length) {
       const updates = events.map((event, i) => ({
         event_id: event.event_id,
         user_id: user.id,
-        is_locked: !classifications[i].isMovable
+        is_locked: !results[i].isMovable
       }));
-
       await supabaseAdmin.from('calendar_events_cache').upsert(updates, { onConflict: 'user_id, event_id' });
     }
 
-    return new Response(JSON.stringify({ classifications }), { 
+    return new Response(JSON.stringify({ classifications: results }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
   } catch (error) {
