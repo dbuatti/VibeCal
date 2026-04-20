@@ -1,4 +1,7 @@
 // @ts-nocheck
+import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
+import { formatInTimeZone } from 'https://esm.sh/date-fns-tz@3.2.0?deps=date-fns@3.6.0'
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -62,11 +65,12 @@ Deno.serve(async (req) => {
     if (!user?.id) throw new Error("Unauthorized");
 
     // 2. Get Profile
-    const profileRes = await fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${user.id}&select=google_access_token,google_refresh_token`, {
+    const profileRes = await fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${user.id}&select=google_access_token,google_refresh_token,timezone`, {
       headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
     });
     const profiles = await profileRes.json();
     const profile = profiles[0];
+    const userTimezone = profile?.timezone || 'Australia/Melbourne';
     
     let token = googleAccessToken || profile?.google_access_token;
     
@@ -100,11 +104,18 @@ Deno.serve(async (req) => {
 
     if (!token) throw new Error("AUTH_EXPIRED");
 
-    // 4. Fetch Calendars
+    // 4. Cleanup Step: Delete past Google events to fix "Ghost" data
+    const todayStr = formatInTimeZone(new Date(), userTimezone, "yyyy-MM-dd'T'00:00:00XXX");
+    await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&provider=eq.google&start_time=lt.${todayStr}`, {
+      method: 'DELETE',
+      headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
+    });
+
+    // 5. Fetch Calendars
     const listData = await fetchWithRetry('https://www.googleapis.com/calendar/v3/users/me/calendarList');
     const googleCalendars = (listData.items || []).filter(cal => !cal.id.includes('@import.calendar.google.com'));
 
-    // 5. Sync Calendar List
+    // 6. Sync Calendar List
     const existingCalsRes = await fetch(`${supabaseUrl}/rest/v1/user_calendars?user_id=eq.${user.id}&provider=eq.google`, {
       headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
     });
@@ -141,10 +152,8 @@ Deno.serve(async (req) => {
 
     const enabledCalendarIds = calendarsToUpsert.filter(c => c.is_enabled).map(c => c.calendar_id);
 
-    // 6. Sync Events
-    const syncStartTime = customMin ? new Date(customMin) : new Date();
-    if (!customMin) syncStartTime.setDate(syncStartTime.getDate() - 7);
-    
+    // 7. Sync Events (Today onwards only)
+    const syncStartTime = customMin ? new Date(customMin) : new Date(todayStr);
     const syncEndTime = customMax ? new Date(customMax) : new Date();
     if (!customMax) syncEndTime.setFullYear(syncEndTime.getFullYear() + 1);
 

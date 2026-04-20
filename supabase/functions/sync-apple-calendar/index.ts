@@ -123,7 +123,7 @@ Deno.serve(async (req) => {
     const allEvents = [];
     
     const startRange = customMin ? new Date(customMin).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z' : 
-                      new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'; // Default to NOW
+                      new Date(todayStr).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endRange = customMax ? new Date(customMax).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z' : 
                     new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
@@ -172,7 +172,6 @@ Deno.serve(async (req) => {
             if (endMatch?.[1]) {
               endTime = parseIcalDate(endMatch[1].trim(), userTimezone);
             } else {
-              // Default to 30 minutes if DTEND is missing
               endTime = addMinutes(parseISO(startTime), 30).toISOString();
             }
 
@@ -180,9 +179,7 @@ Deno.serve(async (req) => {
             const durationMinutes = Math.round((new Date(endTime).getTime() - new Date(startTime).getTime()) / 60000);
 
             // Only include if it's today or future
-            if (!isBefore(parseISO(startTime), startOfDay(new Date()))) {
-              console.log(`[${functionName}] [Debug] Event: ${title} | Start: ${startTime} | End: ${endTime} | Duration: ${durationMinutes}min`);
-
+            if (!isBefore(parseISO(startTime), parseISO(todayStr))) {
               allEvents.push({
                 user_id: user.id,
                 event_id: uidMatch[1].trim(),
