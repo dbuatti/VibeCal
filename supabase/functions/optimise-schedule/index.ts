@@ -143,9 +143,6 @@ serve(async (req) => {
       const durationMs = effectiveDuration * 60000;
       let foundSlot = false;
 
-      // Pass 0: Try Today (dayOffset 0) regardless of theme
-      // Pass 1: Try future days matching theme
-      // Pass 2: Try all days regardless of theme
       for (let pass = 0; pass <= 2; pass++) {
         if (foundSlot) break;
         
@@ -156,12 +153,8 @@ serve(async (req) => {
           const dayOfWeek = toDate(currentDay, { timeZone: userTimezone }).getDay();
           const dayTheme = dayThemes.find(t => t.day_of_week === dayOfWeek)?.theme || "General";
           
-          // Pass 0 logic: Only check today
           if (pass === 0 && dayOffset !== 0) break; 
-          
-          // Pass 1 logic: Skip if theme doesn't match
           if (pass === 1 && event.temp_category !== "General" && dayTheme !== event.temp_category) { dayOffset++; continue; }
-          
           if (!selectedDays.includes(dayOfWeek)) { dayOffset++; continue; }
 
           if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
@@ -185,9 +178,18 @@ serve(async (req) => {
             const potentialEnd = new Date(searchPointer.getTime() + durationMs);
             const taskWorkHours = event.is_work ? (effectiveDuration / 60) : 0;
             
-            if (potentialEnd > dayEnd) break;
-            if ((stats.hours + taskWorkHours) > maxWorkHours) break;
-            if (stats.tasks >= maxTasks) break;
+            if (potentialEnd > dayEnd) {
+              console.log(`[${functionName}] Task "${event.title}" exceeds day end on ${dayKey}.`);
+              break;
+            }
+            if ((stats.hours + taskWorkHours) > maxWorkHours) {
+              console.log(`[${functionName}] Task "${event.title}" exceeds max hours (${maxWorkHours}) on ${dayKey}. Current: ${stats.hours.toFixed(2)}`);
+              break;
+            }
+            if (stats.tasks >= maxTasks) {
+              console.log(`[${functionName}] Task "${event.title}" exceeds max tasks (${maxTasks}) on ${dayKey}.`);
+              break;
+            }
 
             const collision = fixedEvents.find(f => {
               const fStart = new Date(f.start_time);
@@ -196,13 +198,12 @@ serve(async (req) => {
             });
 
             if (collision) {
-              // Removed 1-minute buffer
+              console.log(`[${functionName}] Collision for "${event.title}" with "${collision.title}" at ${searchPointer.toISOString()}`);
               searchPointer = alignTime(new Date(new Date(collision.end_time).getTime()), slotAlignment);
             } else {
               foundSlot = true;
               stats.tasks += 1;
               stats.hours += taskWorkHours;
-              // Removed 5-minute buffer
               stats.lastPointer = alignTime(new Date(potentialEnd.getTime()), slotAlignment);
 
               proposedChanges.push({
