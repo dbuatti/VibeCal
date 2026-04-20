@@ -136,6 +136,11 @@ serve(async (req) => {
       if (isTask) stats.tasks += 1;
     });
 
+    // Log the starting load for each day
+    dailyStats.forEach((stats, dayKey) => {
+      console.log(`[${functionName}] Starting Load for ${dayKey}: ${stats.tasks} tasks, ${stats.hours.toFixed(1)}h`);
+    });
+
     let surplusCount = 0;
 
     for (const event of categorizedEvents) {
@@ -160,9 +165,7 @@ serve(async (req) => {
           if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
           const stats = dailyStats.get(dayKey);
           
-          // CAPACITY CHECK: If the day is already full, skip it immediately
           if (stats.tasks >= maxTasks || stats.hours >= maxWorkHours) {
-            console.log(`[${functionName}] Skipping ${dayKey} for "${event.title}" - Capacity reached (${stats.tasks}/${maxTasks} tasks, ${stats.hours.toFixed(1)}/${maxWorkHours}h)`);
             dayOffset++;
             continue;
           }
