@@ -24,88 +24,53 @@ serve(async (req) => {
     const { data: { user } } = await supabaseUser.auth.getUser()
     if (!user) throw new Error("Unauthorized");
 
-    // FALLBACK: If token is missing from request, check the database cache
     if (!googleAccessToken) {
-      console.log(`[${functionName}] Token missing from request body, checking database cache for user: ${user.id}`);
       const { data: profile } = await supabaseAdmin.from('profiles').select('google_access_token').eq('id', user.id).single();
       googleAccessToken = profile?.google_access_token;
-      
-      if (googleAccessToken) {
-        console.log(`[${functionName}] Found cached token in database (starts with: ${googleAccessToken.substring(0, 10)}...)`);
-      } else {
-        console.log(`[${functionName}] No token found in database cache.`);
-      }
-    } else {
-      console.log(`[${functionName}] Using token provided in request body.`);
     }
 
     if (!googleAccessToken) {
-      console.error(`[${functionName}] No Google Access Token found. User needs to re-authenticate.`);
-      return new Response(JSON.stringify({ error: "Missing Google Access Token. Please reconnect your account." }), { status: 401, headers: corsHeaders });
+      return new Response(JSON.stringify({ error: "Missing Google Access Token" }), { status: 401, headers: corsHeaders });
     }
 
-    console.log(`[${functionName}] Fetching existing lock statuses from DB...`);
-    const { data: existingEvents } = await supabaseAdmin
-      .from('calendar_events_cache')
-      .select('event_id, is_locked')
-      .eq('user_id', user.id);
-    
-    const existingLockStatus = new Map(existingEvents?.map(e => [e.event_id, e.is_locked]) || []);
-
-    console.log(`[${functionName}] Fetching user settings...`);
-    const { data: settings } = await supabaseAdmin.from('user_settings').select('movable_keywords, locked_keywords, work_keywords').eq('user_id', user.id).single();
-    const movableKeywords = settings?.movable_keywords || [];
-    const lockedKeywords = settings?.locked_keywords || [];
-    const workKeywords = settings?.work_keywords || ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session', 'work session'];
-
-    console.log(`[${functionName}] Fetching Google Calendar list...`);
+    // 1. Discover Calendars
     const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { headers: { Authorization: `Bearer ${googleAccessToken}` } })
-    
-    if (!listRes.ok) {
-      const errorData = await listRes.json();
-      console.error(`[${functionName}] Google API Error (CalendarList):`, JSON.stringify(errorData));
-      
-      // If it's a 401, we explicitly tell the frontend
-      if (listRes.status === 401) {
-        return new Response(JSON.stringify({ 
-          error: "Google authentication expired", 
-          details: errorData.error?.message 
-        }), { status: 401, headers: corsHeaders });
+    if (listRes.ok) {
+      const listData = await listRes.json()
+      if (listData.items) {
+        const discovered = listData.items.filter(cal => !cal.id.includes('@import.calendar.google.com')).map(cal => ({
+          user_id: user.id, calendar_id: cal.id, calendar_name: cal.summary, provider: 'google', color: cal.backgroundColor || '#6366f1'
+        }));
+        if (discovered.length > 0) await supabaseAdmin.from('user_calendars').upsert(discovered, { onConflict: 'user_id, calendar_id' });
       }
-      
-      return new Response(JSON.stringify({ error: `Google API Error: ${errorData.error?.message || listRes.statusText}` }), { status: listRes.status, headers: corsHeaders });
-    }
-
-    const listData = await listRes.json()
-    if (listData.items) {
-      const discovered = listData.items.filter(cal => !cal.id.includes('@import.calendar.google.com')).map(cal => ({
-        user_id: user.id, calendar_id: cal.id, calendar_name: cal.summary, provider: 'google', color: cal.backgroundColor || '#6366f1'
-      }));
-      if (discovered.length > 0) await supabaseAdmin.from('user_calendars').upsert(discovered, { onConflict: 'user_id, calendar_id' });
     }
 
     const { data: enabled } = await supabaseAdmin.from('user_calendars').select('calendar_id, calendar_name, is_enabled').eq('user_id', user.id).eq('provider', 'google');
     const enabledCalendars = (enabled || []).filter(c => c.is_enabled);
     if (enabledCalendars.length === 0) return new Response(JSON.stringify({ count: 0 }), { headers: corsHeaders });
 
+    // 2. Sync Window: Start from 24 hours ago to catch timezone shifts
     const syncStartTime = new Date();
-    syncStartTime.setHours(0, 0, 0, 0);
+    syncStartTime.setDate(syncStartTime.getDate() - 1);
     const syncEndTime = new Date();
     syncEndTime.setDate(syncEndTime.getDate() + 365);
     
-    const eventMap = new Map();
     const syncTimestamp = new Date().toISOString();
+    const eventMap = new Map();
     
+    const { data: existingEvents } = await supabaseAdmin.from('calendar_events_cache').select('event_id, is_locked').eq('user_id', user.id);
+    const existingLockStatus = new Map(existingEvents?.map(e => [e.event_id, e.is_locked]) || []);
+
+    const { data: settings } = await supabaseAdmin.from('user_settings').select('movable_keywords, locked_keywords, work_keywords').eq('user_id', user.id).single();
+    const movableKeywords = settings?.movable_keywords || [];
+    const lockedKeywords = settings?.locked_keywords || [];
+    const workKeywords = settings?.work_keywords || ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session', 'work session'];
+
     const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga|show|tech|dress|night|opening|closing|birthday|party|gala|buffer|probe|experiment|quinceanera|🎭|✨|lunch|dinner|breakfast|brunch|bump in|performance|gig|concert|wedding|funeral|doctor|dentist|flight|train|hotel|check-in|check-out|reservation|40th|50th|60th|anniversary/i;
-    const fixedPatterns = [/\$\d+/, /\d+\s*min/i, /between|with/i];
 
     for (const cal of enabledCalendars) {
       let res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.calendar_id)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`, { headers: { Authorization: `Bearer ${googleAccessToken}` } });
-      
-      if (!res.ok) {
-        console.error(`[${functionName}] Error fetching events for ${cal.calendar_name}:`, res.statusText);
-        continue;
-      }
+      if (!res.ok) continue;
       
       const data = await res.json()
       if (data.items) {
@@ -114,15 +79,11 @@ serve(async (req) => {
           let start = event.start.dateTime ? new Date(event.start.dateTime) : new Date(event.start.date + "T09:00:00");
           let end = event.end.dateTime ? new Date(event.end.dateTime) : new Date(event.end.date + "T09:30:00");
           
-          if (start < syncStartTime) return;
-
           let isLocked = existingLockStatus.has(event.id) ? existingLockStatus.get(event.id) : null;
-
           if (isLocked === null) {
             const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
             const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
-            const isHighPriorityFixed = /lunch|dinner|birthday|party|quinceanera|wedding|funeral/i.test(title);
-            isLocked = isExplicitlyLocked || isHighPriorityFixed || (!isExplicitlyMovable && ((event.attendees?.length > 1) || fixedKeywords.test(title) || fixedPatterns.some(p => p.test(title))));
+            isLocked = isExplicitlyLocked || (!isExplicitlyMovable && ((event.attendees?.length > 1) || fixedKeywords.test(title)));
           }
 
           const isWork = workKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
@@ -130,7 +91,8 @@ serve(async (req) => {
           eventMap.set(event.id, {
             user_id: user.id, event_id: event.id, title: title, start_time: start.toISOString(), end_time: end.toISOString(),
             duration_minutes: Math.round((end.getTime() - start.getTime()) / 60000) || 30, is_locked: isLocked, is_work: isWork,
-            provider: 'google', source_calendar: cal.calendar_name, source_calendar_id: cal.calendar_id, last_synced_at: syncTimestamp
+            provider: 'google', source_calendar: cal.calendar_name, source_calendar_id: cal.calendar_id, 
+            last_synced_at: syncTimestamp, last_seen_at: syncTimestamp
           });
         });
       }
@@ -141,7 +103,13 @@ serve(async (req) => {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
     }
     
-    await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google').lt('start_time', syncStartTime.toISOString());
+    // 3. Cleanup: Remove events that were NOT seen in this sync but are within the sync window
+    await supabaseAdmin.from('calendar_events_cache')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('provider', 'google')
+      .gte('start_time', syncStartTime.toISOString())
+      .lt('last_seen_at', syncTimestamp);
     
     console.log(`[${functionName}] SUCCESS - Synced ${uniqueEvents.length} events.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: corsHeaders })
