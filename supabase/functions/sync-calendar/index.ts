@@ -66,8 +66,6 @@ serve(async (req) => {
       .eq('user_id', user.id)
       .eq('provider', 'google');
 
-    const enabledIds = new Set((dbCalendars || []).filter(c => c.is_enabled).map(c => c.calendar_id));
-
     // 2. Fetch current list from Google
     const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { 
       headers: { Authorization: `Bearer ${token}` } 
@@ -81,7 +79,7 @@ serve(async (req) => {
     const listData = await listRes.json();
     const googleCalendars = (listData.items || []).filter(cal => !cal.id.includes('@import.calendar.google.com'));
 
-    // 3. Discovery: Upsert new calendars to DB (default to enabled if DB was empty)
+    // 3. Discovery: Upsert new calendars to DB
     const discoveryPayload = googleCalendars.map(cal => ({
       user_id: user.id,
       calendar_id: cal.id,
@@ -139,12 +137,21 @@ serve(async (req) => {
     }
 
     // 5. PURGE: Remove events from calendars that are now disabled
-    await supabaseAdmin
-      .from('calendar_events_cache')
-      .delete()
-      .eq('user_id', user.id)
-      .eq('provider', 'google')
-      .not('source_calendar_id', 'in', `(${finalEnabledIds.map(id => `"${id}"`).join(',')})`);
+    if (finalEnabledIds.length > 0) {
+      await supabaseAdmin
+        .from('calendar_events_cache')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('provider', 'google')
+        .not('source_calendar_id', 'in', `(${finalEnabledIds.map(id => `"${id}"`).join(',')})`);
+    } else {
+      // If no calendars are enabled, wipe all Google events for this user
+      await supabaseAdmin
+        .from('calendar_events_cache')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('provider', 'google');
+    }
 
     return new Response(JSON.stringify({ count: allEvents.length }), { headers: corsHeaders });
   } catch (error) {

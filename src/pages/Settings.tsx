@@ -214,8 +214,23 @@ const Settings = () => {
 
   const toggleCalendar = async (id: string, enabled: boolean) => {
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
       const { error } = await supabase.from('user_calendars').update({ is_enabled: enabled }).eq('id', id);
       if (error) throw error;
+
+      // Immediate cleanup of cache if disabled
+      if (!enabled) {
+        const cal = calendars.find(c => c.id === id);
+        if (cal) {
+          await supabase.from('calendar_events_cache')
+            .delete()
+            .eq('user_id', user.id)
+            .eq('source_calendar_id', cal.calendar_id);
+        }
+      }
+
       setCalendars(calendars.map(c => c.id === id ? { ...c, is_enabled: enabled } : c));
       showSuccess(`Calendar ${enabled ? 'enabled' : 'disabled'}`);
     } catch (err: any) {
@@ -235,6 +250,14 @@ const Settings = () => {
         .eq('provider', provider);
 
       if (error) throw error;
+
+      // Immediate cleanup of cache for all disabled calendars in this provider
+      if (!enabled) {
+        await supabase.from('calendar_events_cache')
+          .delete()
+          .eq('user_id', user.id)
+          .eq('provider', provider);
+      }
 
       setCalendars(prev => prev.map(c => 
         c.provider === provider ? { ...c, is_enabled: enabled } : c
