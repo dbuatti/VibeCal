@@ -48,25 +48,18 @@ serve(async (req) => {
     
     const principalText = await principalRes.text();
     const principalMatch = principalText.match(/<[^:]*:?current-user-principal[^>]*>\s*<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i);
-    if (!principalMatch) {
-      console.error(`[${functionName}] XML Response:`, principalText);
-      throw new Error("Could not find principal href");
-    }
+    if (!principalMatch) throw new Error("Could not find principal href");
     const principalHref = principalMatch[1];
-    console.log(`[${functionName}] Found Principal Href: ${principalHref}`);
 
     // 2. Discover Calendar Home Set
-    console.log(`[${functionName}] Discovering Calendar Home Set...`);
     const propfindHome = `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><C:calendar-home-set/></D:prop></D:propfind>`;
     const homeRes = await fetch(`https://caldav.icloud.com${principalHref}`, { method: 'PROPFIND', headers, body: propfindHome });
     const homeText = await homeRes.text();
     const homeMatch = homeText.match(/<[^:]*:?calendar-home-set[^>]*>\s*<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i);
     if (!homeMatch) throw new Error("Could not find calendar home set");
     const homeHref = homeMatch[1];
-    console.log(`[${functionName}] Found Home Href: ${homeHref}`);
 
     // 3. Discover Calendars
-    console.log(`[${functionName}] Discovering Calendars...`);
     const propfindCals = `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><D:displayname/><D:resourcetype/></D:prop></D:propfind>`;
     const calsRes = await fetch(homeHref, { method: 'PROPFIND', headers: { ...headers, 'Depth': '1' }, body: propfindCals });
     const calsText = await calsRes.text();
@@ -75,31 +68,18 @@ serve(async (req) => {
     const responses = calsText.split(/<[^:]*:?response/i);
     
     for (const resp of responses) {
-      // Look for calendar resource type more flexibly
       if (/<[^:]*:?resourcetype[^>]*>.*?<[^:]*:?calendar/is.test(resp)) {
         const hrefMatch = resp.match(/<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i);
         const nameMatch = resp.match(/<[^:]*:?displayname[^>]*>([^<]+)<\/[^>]*>/i);
-        
         if (hrefMatch) {
           let href = hrefMatch[1];
-          // Ensure href is a full URL if it's relative
           if (href.startsWith('/')) {
             const urlObj = new URL(homeHref);
             href = `${urlObj.protocol}//${urlObj.host}${href}`;
           }
-          
-          calendarPaths.push({
-            href: href,
-            name: nameMatch ? nameMatch[1] : 'Untitled'
-          });
+          calendarPaths.push({ href, name: nameMatch ? nameMatch[1] : 'Untitled' });
         }
       }
-    }
-
-    if (calendarPaths.length === 0) {
-      console.warn(`[${functionName}] No calendars found in response. Raw XML:`, calsText);
-    } else {
-      console.log(`[${functionName}] Found ${calendarPaths.length} calendars.`);
     }
 
     // 4. Fetch Events
@@ -133,12 +113,8 @@ serve(async (req) => {
     const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga|show|tech|dress|night|opening|closing|birthday|party|gala|buffer|probe|experiment|quinceanera|🎭|✨|lunch|dinner|breakfast|brunch|bump in|performance|gig|concert|wedding|funeral|doctor|dentist|flight|train|hotel|check-in|check-out|reservation|40th|50th|60th|anniversary/i;
 
     for (const cal of calendarPaths) {
-      console.log(`[${functionName}] Fetching events for: ${cal.name} (${cal.href})`);
       const eventsRes = await fetch(cal.href, { method: 'REPORT', headers: { ...headers, 'Depth': '1' }, body: reportQuery });
-      if (!eventsRes.ok) {
-        console.warn(`[${functionName}] Failed to fetch events for ${cal.name}: ${eventsRes.status}`);
-        continue;
-      }
+      if (!eventsRes.ok) continue;
       
       const eventsText = await eventsRes.text();
       const icsDatas = eventsText.match(/BEGIN:VCALENDAR.*?END:VCALENDAR/gs) || [];
@@ -152,8 +128,10 @@ serve(async (req) => {
           for (const vevent of vevents) {
             const event = new ICAL.Event(vevent);
             const title = event.summary || 'Untitled';
-            const start = event.startDate.toJSDate();
-            const end = event.endDate.toJSDate();
+            
+            // CRITICAL: Convert to UTC before getting JS Date
+            const start = event.startDate.convertToZone(ICAL.Timezone.utcTimezone).toJSDate();
+            const end = event.endDate.convertToZone(ICAL.Timezone.utcTimezone).toJSDate();
             const uid = event.uid;
 
             const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
@@ -188,7 +166,6 @@ serve(async (req) => {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
     }
 
-    // Cleanup stale Apple events
     const cleanupThreshold = new Date(new Date(syncTimestamp).getTime() - 60000).toISOString();
     await supabaseAdmin.from('calendar_events_cache')
       .delete()
