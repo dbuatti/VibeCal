@@ -51,6 +51,7 @@ serve(async (req) => {
       return new Response(JSON.stringify({ error: "Missing Google Access Token" }), { status: 401, headers: corsHeaders });
     }
 
+    // Refresh token if needed
     let listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1', { 
       headers: { Authorization: `Bearer ${token}` } 
     });
@@ -58,11 +59,9 @@ serve(async (req) => {
     if (listRes.status === 401 && refreshToken) {
       token = await refreshGoogleToken(refreshToken);
       await supabaseAdmin.from('profiles').update({ google_access_token: token }).eq('id', user.id);
-      listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1', { 
-        headers: { Authorization: `Bearer ${token}` } 
-      });
     }
 
+    // Discover calendars
     const fullListRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { 
       headers: { Authorization: `Bearer ${token}` } 
     });
@@ -100,11 +99,12 @@ serve(async (req) => {
     const fixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
 
     const interpretToUtc = (isoStr, timeZone) => {
-      if (isoStr.includes('Z') || isoStr.includes('+') || isoStr.includes('-')) {
+      // If it has an explicit offset or Z, use it directly
+      if (isoStr.includes('Z') || isoStr.includes('+') || (isoStr.includes('-') && isoStr.includes('T'))) {
         return new Date(isoStr).toISOString();
       }
       
-      // Floating time
+      // Floating time: Treat as local in the provided timeZone
       const [datePart, timePart] = isoStr.split('T');
       const [y, m, d] = datePart.split('-').map(Number);
       const [h, min, sec] = (timePart || '00:00:00').split(':').map(Number);
@@ -149,15 +149,16 @@ serve(async (req) => {
         const title = event.summary || 'Untitled';
         let startIso, endIso;
 
+        // Prioritize event's own timezone over user's profile timezone
+        const eventTimeZone = event.start.timeZone || userTimezone;
+
         if (event.start.dateTime) {
-          startIso = interpretToUtc(event.start.dateTime, userTimezone);
-          endIso = interpretToUtc(event.end.dateTime, userTimezone);
+          startIso = interpretToUtc(event.start.dateTime, eventTimeZone);
+          endIso = interpretToUtc(event.end.dateTime, eventTimeZone);
         } else {
-          // All-day event: Place it at the start of the work day in user's timezone
-          const [y, m, d] = event.start.date.split('-').map(Number);
+          // All-day event: Place it at the start of the work day in the event's timezone
           const [h, min] = dayStartStr.split(':').map(Number);
-          
-          startIso = interpretToUtc(`${event.start.date}T${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}:00`, userTimezone);
+          startIso = interpretToUtc(`${event.start.date}T${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}:00`, eventTimeZone);
           endIso = new Date(new Date(startIso).getTime() + 30 * 60000).toISOString();
         }
         

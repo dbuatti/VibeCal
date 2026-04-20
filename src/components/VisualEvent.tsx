@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { format, parseISO } from 'date-fns';
-import { Lock, Sparkles, Clock, Utensils, Music, Laptop, Coffee, Inbox, Briefcase, ChevronRight, MapPin, AlignLeft, ChevronDown, ChevronUp } from 'lucide-react';
+import { Lock, Sparkles, Clock, Utensils, Music, Laptop, Coffee, Inbox, Briefcase, ChevronRight, MapPin, AlignLeft, ChevronDown, ChevronUp, Link as LinkIcon } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
@@ -84,13 +84,19 @@ const VisualEvent = ({ event, isApplied, isVetted, isWork }: VisualEventProps) =
                 <Clock size={10} />
                 {format(parseISO(event.start_time), 'HH:mm')} – {format(parseISO(event.end_time), 'HH:mm')}
               </div>
+              {event.location && (
+                <div className="flex items-center gap-1 text-[9px] font-bold text-indigo-500/70 truncate max-w-[150px]">
+                  <MapPin size={10} />
+                  {event.location}
+                </div>
+              )}
               {hasDetails && (
                 <button 
                   onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
-                  className="flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-indigo-500 hover:text-indigo-700 transition-colors"
+                  className="flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-indigo-600 hover:text-indigo-800 transition-colors bg-indigo-50 px-2 py-0.5 rounded-full"
                 >
                   {isExpanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
-                  Details
+                  {isExpanded ? 'Hide' : 'Details'}
                 </button>
               )}
             </div>
@@ -113,19 +119,31 @@ const VisualEvent = ({ event, isApplied, isVetted, isWork }: VisualEventProps) =
 
       {/* Expanded Details */}
       {isExpanded && hasDetails && (
-        <div className="mt-4 pt-4 border-t border-black/5 space-y-3 animate-in slide-in-from-top-2 duration-300 relative z-10">
+        <div className="mt-4 pt-4 border-t border-black/5 space-y-4 animate-in slide-in-from-top-2 duration-300 relative z-10">
           {event.location && (
-            <div className="flex items-start gap-2">
-              <MapPin size={12} className="text-gray-400 mt-0.5 shrink-0" />
-              <p className="text-[10px] font-bold text-gray-600 leading-tight">{event.location}</p>
+            <div className="flex items-start gap-3 bg-white/50 p-3 rounded-xl border border-black/5">
+              <MapPin size={14} className="text-indigo-500 mt-0.5 shrink-0" />
+              <div className="space-y-1">
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Location</p>
+                <p className="text-xs font-bold text-gray-700 leading-tight">{event.location}</p>
+              </div>
             </div>
           )}
           {event.description && (
-            <div className="flex items-start gap-2">
-              <AlignLeft size={12} className="text-gray-400 mt-0.5 shrink-0" />
-              <p className="text-[10px] font-medium text-gray-500 leading-relaxed whitespace-pre-wrap">
-                {event.description}
-              </p>
+            <div className="flex items-start gap-3 bg-white/50 p-3 rounded-xl border border-black/5">
+              <AlignLeft size={14} className="text-indigo-500 mt-0.5 shrink-0" />
+              <div className="space-y-1 w-full">
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Notes & Details</p>
+                <div className="text-[11px] font-medium text-gray-600 leading-relaxed whitespace-pre-wrap break-words">
+                  {event.description}
+                </div>
+              </div>
+            </div>
+          )}
+          {event.description?.includes('http') && (
+            <div className="flex items-center gap-2 text-[9px] font-black text-indigo-600 uppercase tracking-widest">
+              <LinkIcon size={12} />
+              Links detected in notes
             </div>
           )}
         </div>
