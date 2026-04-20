@@ -23,7 +23,7 @@ const Login = () => {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#F8F9FC] p-4">
-      <Card className="w-full max-md border-none shadow-2xl rounded-[2.5rem] overflow-hidden bg-white">
+      <Card className="w-full max-w-md border-none shadow-2xl rounded-[2.5rem] overflow-hidden bg-white">
         <CardHeader className="bg-indigo-600 text-white text-center pt-12 pb-10">
           <div className="w-20 h-20 bg-white/20 rounded-3xl flex items-center justify-center mx-auto mb-6 backdrop-blur-sm">
             <Calendar size={40} />

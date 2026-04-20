@@ -12,7 +12,7 @@ import PlanInitialView from '@/components/plan/PlanInitialView';
 import PlanLoadingView from '@/components/plan/PlanLoadingView';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { format, nextSaturday, parseISO, addMinutes, isAfter } from 'date-fns';
-import { AlertCircle, LogIn, Sparkles, Calendar } from 'lucide-react';
+import { AlertCircle, LogIn, Sparkles, Calendar, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 type PlanStep = 'initial' | 'analysis' | 'vetting_tasks' | 'requirements' | 'active_plan';
@@ -46,6 +46,8 @@ const Plan = () => {
       if (!user) return;
 
       const { data: { session } } = await supabase.auth.getSession();
+      
+      // If we have a fresh provider token from the session, update the profile immediately
       if (session?.provider_token) {
         await supabase.from('profiles').update({ google_access_token: session.provider_token }).eq('id', user.id);
       }
@@ -115,6 +117,7 @@ const Plan = () => {
         
         let token = session?.provider_token;
 
+        // If session token is missing, try to get the cached one from the profile
         if (!token && user) {
           const { data: profile } = await supabase
             .from('profiles')
@@ -136,11 +139,14 @@ const Plan = () => {
         const googleResult = results[0];
         if (googleResult.status === 'fulfilled') {
           const { data, error } = googleResult.value;
+          
+          // Check for 401 or specific Google auth errors
           if (error || data?.error) {
-            const errorMsg = error?.message || data?.error || "";
+            const errorMsg = (error?.message || data?.error || "").toLowerCase();
             const isAuthError = errorMsg.includes("401") || 
-                               errorMsg.includes("Unauthorized") || 
-                               errorMsg.includes("Missing Google Access Token");
+                               errorMsg.includes("unauthorized") || 
+                               errorMsg.includes("invalid credentials") ||
+                               errorMsg.includes("missing google access token");
 
             if (isAuthError) {
               setTokenMissing(true);
@@ -148,6 +154,9 @@ const Plan = () => {
               showError("Google session expired. Please reconnect.");
               return;
             }
+            
+            // If it's not an auth error but still an error, show it
+            if (errorMsg) showError(`Google Sync: ${errorMsg}`);
           } else {
             totalSynced += (data?.count || 0);
           }
@@ -163,10 +172,11 @@ const Plan = () => {
       }
       
       setStatusText('Updating local view...');
+      const { data: { user } } = await supabase.auth.getUser();
       const { data: fetchedEvents } = await supabase
         .from('calendar_events_cache')
         .select('*')
-        .eq('user_id', (await supabase.auth.getUser()).data.user?.id)
+        .eq('user_id', user?.id)
         .order('start_time', { ascending: true });
         
       const newEvents = fetchedEvents || [];
@@ -194,6 +204,7 @@ const Plan = () => {
   };
 
   const handleReauth = async () => {
+    // Force a sign out to clear all session data and force a fresh Google login
     await supabase.auth.signOut();
     navigate('/login');
   };
@@ -484,20 +495,25 @@ const Plan = () => {
       />
 
       {tokenMissing && (
-        <Card className="border-none shadow-xl rounded-[2rem] overflow-hidden bg-white mb-8 animate-in zoom-in-95 duration-300">
-          <div className="p-10 text-center space-y-6">
-            <div className="w-16 h-16 bg-amber-50 rounded-2xl flex items-center justify-center mx-auto">
-              <AlertCircle className="text-amber-500" size={32} />
+        <Card className="border-none shadow-2xl rounded-[2.5rem] overflow-hidden bg-white mb-10 animate-in zoom-in-95 duration-500 border-l-8 border-l-amber-400">
+          <div className="p-12 text-center space-y-8">
+            <div className="w-20 h-20 bg-amber-50 rounded-3xl flex items-center justify-center mx-auto shadow-inner">
+              <AlertCircle className="text-amber-500" size={40} />
             </div>
-            <div className="space-y-2">
-              <h2 className="text-2xl font-black text-gray-900 tracking-tight">Google Connection Expired</h2>
-              <p className="text-gray-500 font-medium max-w-md mx-auto">
-                Your Google session has timed out. Please reconnect to continue syncing your calendar.
+            <div className="space-y-3">
+              <h2 className="text-3xl font-black text-gray-900 tracking-tight">Google Connection Expired</h2>
+              <p className="text-gray-500 font-medium max-w-md mx-auto leading-relaxed">
+                Your Google session has timed out or the credentials are no longer valid. Please reconnect to continue syncing your calendar.
               </p>
             </div>
-            <Button onClick={handleReauth} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-8 py-6 font-black">
-              <LogIn className="mr-2" size={18} /> Reconnect Google
-            </Button>
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+              <Button onClick={handleReauth} className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl px-10 py-8 text-lg font-black shadow-xl shadow-indigo-100 transition-all hover:scale-[1.02] active:scale-[0.98]">
+                <LogIn className="mr-3" size={20} /> Reconnect Google
+              </Button>
+              <Button variant="ghost" onClick={() => setTokenMissing(false)} className="text-gray-400 font-black text-xs uppercase tracking-widest hover:bg-gray-50 rounded-xl">
+                Dismiss
+              </Button>
+            </div>
           </div>
         </Card>
       )}
