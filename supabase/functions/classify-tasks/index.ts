@@ -8,15 +8,20 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-async function generateWithRetry(model, prompt, maxRetries = 3) {
+async function generateWithRetry(model, prompt, functionName, maxRetries = 3) {
   let lastError;
   for (let i = 0; i < maxRetries; i++) {
     try {
+      console.log(`[${functionName}] Attempt ${i + 1}/${maxRetries} for model: ${model.model}`);
       const result = await model.generateContent(prompt);
-      return await result.response;
+      const response = await result.response;
+      console.log(`[${functionName}] Success on attempt ${i + 1}`);
+      return response;
     } catch (err) {
       lastError = err;
       const errorMsg = err.message?.toLowerCase() || "";
+      console.error(`[${functionName}] Attempt ${i + 1} failed:`, err.message);
+      
       // Retry on Quota (429), Service Unavailable (503), or Internal Error (500)
       const isRetryable = errorMsg.includes('429') || 
                           errorMsg.includes('quota') || 
@@ -26,11 +31,11 @@ async function generateWithRetry(model, prompt, maxRetries = 3) {
       
       if (isRetryable && i < maxRetries - 1) {
         const delay = Math.pow(2, i) * 2000 + Math.random() * 1000;
-        console.log(`[classify-tasks] Retryable error detected. Retrying in ${Math.round(delay)}ms... (Attempt ${i + 1}/${maxRetries})`);
+        console.log(`[${functionName}] Retryable error. Waiting ${Math.round(delay)}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
-      throw err;
+      break; // Not retryable or last attempt
     }
   }
   throw lastError;
@@ -47,9 +52,11 @@ serve(async (req) => {
     const { tasks, movableKeywords, lockedKeywords, naturalLanguageRules } = await req.json();
     const authHeader = req.headers.get('Authorization')
     
-    console.log(`[${functionName}] Received request to classify ${tasks?.length || 0} tasks`);
+    console.log(`[${functionName}] --- NEW REQUEST ---`);
+    console.log(`[${functionName}] Tasks to classify: ${tasks?.length || 0}`);
 
     if (!tasks || tasks.length === 0) {
+      console.log(`[${functionName}] No tasks provided, returning empty.`);
       return new Response(JSON.stringify({ classifications: [] }), { headers: corsHeaders });
     }
 
@@ -60,14 +67,22 @@ serve(async (req) => {
     )
 
     const { data: { user } } = await supabaseClient.auth.getUser()
-    if (!user) throw new Error("Unauthorized");
+    if (!user) {
+      console.error(`[${functionName}] Unauthorized access attempt`);
+      throw new Error("Unauthorized");
+    }
 
-    const { data: feedback } = await supabaseClient
+    console.log(`[${functionName}] Fetching user feedback for ${user.id}...`);
+    const { data: feedback, error: feedbackError } = await supabaseClient
       .from('task_classification_feedback')
       .select('task_name, is_movable')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
       .limit(30);
+
+    if (feedbackError) {
+      console.warn(`[${functionName}] Error fetching feedback:`, feedbackError.message);
+    }
 
     let classifications = tasks.map(() => ({ isMovable: false, explanation: "Default fallback", dependsOn: null }));
 
@@ -99,49 +114,55 @@ serve(async (req) => {
       Keep explanations under 12 words.
     `;
 
+    const geminiKey = Deno.env.get('GEMINI_API_KEY');
+    if (!geminiKey) {
+      console.error(`[${functionName}] CRITICAL: GEMINI_API_KEY is missing from environment`);
+      throw new Error("AI Configuration Error");
+    }
+
+    const genAI = new GoogleGenerativeAI(geminiKey);
+    let responseText = "";
+
     try {
-      const geminiKey = Deno.env.get('GEMINI_API_KEY');
-      if (geminiKey) {
-        const genAI = new GoogleGenerativeAI(geminiKey);
-        let model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-        let responseText = "";
-
-        try {
-          console.log(`[${functionName}] Calling Gemini API (gemini-2.5-flash)...`);
-          const response = await generateWithRetry(model, prompt);
-          responseText = response.text();
-        } catch (primaryError) {
-          console.warn(`[${functionName}] Primary model failed or busy, trying fallback (gemini-1.5-flash)...`);
-          model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-          const response = await generateWithRetry(model, prompt);
-          responseText = response.text();
-        }
-
-        const jsonMatch = responseText.match(/\[.*\]/s);
-        if (jsonMatch) {
-          classifications = JSON.parse(jsonMatch[0]);
-        }
+      console.log(`[${functionName}] Initializing primary model: gemini-2.5-flash`);
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+      const response = await generateWithRetry(model, prompt, functionName);
+      responseText = response.text();
+    } catch (primaryError) {
+      console.warn(`[${functionName}] Primary model failed. Error:`, primaryError.message);
+      console.log(`[${functionName}] Trying fallback model: gemini-2.0-flash`);
+      
+      try {
+        const fallbackModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        const response = await generateWithRetry(fallbackModel, prompt, functionName);
+        responseText = response.text();
+      } catch (fallbackError) {
+        console.error(`[${functionName}] Fallback model also failed:`, fallbackError.message);
+        throw fallbackError;
       }
-    } catch (aiError) {
-      console.error(`[${functionName}] AI classification failed completely:`, aiError.message);
-      // Final fallback to keyword matching if AI is totally down
-      classifications = tasks.map(title => {
-        const lowerTitle = title.toLowerCase();
-        const isLocked = lockedKeywords?.some(kw => lowerTitle.includes(kw.toLowerCase()));
-        const isMovable = movableKeywords?.some(kw => lowerTitle.includes(kw.toLowerCase()));
-        return {
-          isMovable: isMovable && !isLocked,
-          explanation: "Keyword fallback (AI unavailable)",
-          dependsOn: null
-        };
-      });
+    }
+
+    console.log(`[${functionName}] Parsing AI response...`);
+    const jsonMatch = responseText.match(/\[.*\]/s);
+    if (jsonMatch) {
+      classifications = JSON.parse(jsonMatch[0]);
+      console.log(`[${functionName}] Successfully parsed ${classifications.length} classifications`);
+    } else {
+      console.error(`[${functionName}] AI response did not contain a valid JSON array:`, responseText.substring(0, 200));
+      throw new Error("Invalid AI response format");
     }
 
     return new Response(JSON.stringify({ classifications }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
   } catch (error) {
-    console.error(`[${functionName}] Fatal Error:`, error.message);
-    return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders })
+    console.error(`[${functionName}] FATAL ERROR:`, error.message);
+    
+    // Final fallback to keyword matching if AI is totally down
+    console.log(`[${functionName}] Executing keyword-only fallback...`);
+    return new Response(JSON.stringify({ 
+      error: error.message,
+      isFallback: true
+    }), { status: 200, headers: corsHeaders });
   }
 })
