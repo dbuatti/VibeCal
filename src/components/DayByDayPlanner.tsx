@@ -95,7 +95,6 @@ const DayByDayPlanner = ({
       return dayChanges.every(c => appliedChanges.includes(c.event_id));
     }
     
-    // Timezone-aware day of week check (0=Sun, 1=Mon, etc)
     const dayOfWeek = parseInt(formatInTimeZone(currentDate, timezone, 'e')) - 1;
     if (!selectedDays.includes(dayOfWeek)) return true;
     
@@ -131,8 +130,11 @@ const DayByDayPlanner = ({
   }, [allDates, changes, appliedChanges, hasAutoDefaulted]);
 
   const stats = useMemo(() => {
+    // DEDUPLICATION: Ensure we don't count the same event twice if it's in both lists
+    const changedIds = new Set(changes.map(c => c.event_id));
+    
     const eventsOnThisDay = [
-      ...dayLockedEvents,
+      ...dayLockedEvents.filter(e => !changedIds.has(e.event_id)),
       ...changes.filter(c => formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd') === currentDateStr && !c.is_surplus)
     ];
 

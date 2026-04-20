@@ -30,8 +30,16 @@ const VisualSchedule = ({
     return workKeywords.some(kw => title.includes(kw.toLowerCase()));
   };
 
+  // Get a set of IDs that have proposed changes to avoid rendering them twice
+  const changedEventIds = new Set(changes.map(c => c.event_id));
+
   const allVisualEvents = [
-    ...events.filter(e => e && e.is_locked).map(e => ({ ...e, type: 'locked' })),
+    // Only include locked events if they DON'T have a proposed change
+    ...events
+      .filter(e => e && e.is_locked && !changedEventIds.has(e.event_id))
+      .map(e => ({ ...e, type: 'locked' })),
+    
+    // Include all proposed changes
     ...changes.map(c => ({
       ...c,
       start_time: c.new_start,
@@ -45,7 +53,6 @@ const VisualSchedule = ({
   const days = allVisualEvents.reduce((acc: any, event) => {
     if (!event.start_time) return acc;
     try {
-      // CRITICAL: Group by the date in Melbourne, not the browser's local date
       const dayKey = formatInTimeZone(parseISO(event.start_time), timezone, 'yyyy-MM-dd');
       if (!acc[dayKey]) acc[dayKey] = [];
       acc[dayKey].push(event);
@@ -74,7 +81,7 @@ const VisualSchedule = ({
             <div key={`col-${dayKey}`} className="space-y-3">
               {dayEvents.map((event: any, idx: number) => (
                 <VisualEvent 
-                  key={`${dayKey}-${idx}`}
+                  key={`${event.event_id || idx}-${dayKey}`}
                   event={event}
                   isApplied={appliedChanges.includes(event.event_id)}
                   isVetted={isVetted}
