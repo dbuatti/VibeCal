@@ -55,7 +55,10 @@ serve(async (req) => {
     const dayThemes = themesRes.data || [];
     const workKeywords = settings.work_keywords || [];
 
-    console.log(`[${functionName}] Config - TZ: ${userTimezone} | Window: ${settings.day_start_time}-${settings.day_end_time} | Max Tasks: ${maxTasksOverride || settings.max_tasks_per_day}`);
+    const maxTasks = maxTasksOverride || settings.max_tasks_per_day || 5;
+    const maxWorkHours = settings.max_hours_per_day || 24;
+
+    console.log(`[${functionName}] CONFIG - TZ: ${userTimezone} | Window: ${settings.day_start_time}-${settings.day_end_time} | Limits: ${maxTasks} tasks, ${maxWorkHours}h`);
 
     const now = new Date();
     const todayStr = formatInTimeZone(now, userTimezone, 'yyyy-MM-dd');
@@ -72,6 +75,7 @@ serve(async (req) => {
     const movableEvents = uniqueEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
 
     if (movableEvents.length === 0) {
+      console.log(`[${functionName}] No movable events found.`);
       return new Response(JSON.stringify({ message: 'No movable events found.', changes: [] }), { headers: corsHeaders });
     }
 
@@ -111,14 +115,13 @@ serve(async (req) => {
 
     const proposedChanges = [];
     const dailyStats = new Map();
-    const maxTasks = maxTasksOverride || settings.max_tasks_per_day || 5;
-    const maxWorkHours = settings.max_hours_per_day || 24;
 
     const alignTime = (date, alignmentMinutes) => {
       const ms = alignmentMinutes * 60 * 1000;
       return new Date(Math.ceil(date.getTime() / ms) * ms);
     };
 
+    // Pre-calculate fixed load
     fixedEvents.forEach(f => {
       const dayKey = formatInTimeZone(new Date(f.start_time), userTimezone, 'yyyy-MM-dd');
       if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
@@ -137,7 +140,7 @@ serve(async (req) => {
     });
 
     dailyStats.forEach((stats, dayKey) => {
-      console.log(`[${functionName}] Starting Load for ${dayKey}: ${stats.tasks} tasks, ${stats.hours.toFixed(1)}h`);
+      console.log(`[${functionName}] INITIAL LOAD for ${dayKey}: ${stats.tasks} tasks, ${stats.hours.toFixed(1)}h`);
     });
 
     let surplusCount = 0;
@@ -147,6 +150,9 @@ serve(async (req) => {
       const durationMs = effectiveDuration * 60000;
       let foundSlot = false;
 
+      // Pass 0: Try Today only
+      // Pass 1: Try Theme-matched days
+      // Pass 2: Try any allowed day
       for (let pass = 0; pass <= 2; pass++) {
         if (foundSlot) break;
         
@@ -164,10 +170,20 @@ serve(async (req) => {
           if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
           const stats = dailyStats.get(dayKey);
           
-          if (stats.tasks >= maxTasks || stats.hours >= maxWorkHours) {
-            if (dayOffset === 0) console.log(`[${functionName}] Today (${dayKey}) is FULL: ${stats.tasks}/${maxTasks} tasks, ${stats.hours.toFixed(1)}/${maxWorkHours}h`);
-            dayOffset++;
-            continue;
+          // Diagnostic logging for Today
+          if (dayKey === todayStr) {
+            if (stats.tasks >= maxTasks) {
+              console.log(`[${functionName}] SKIPPING TODAY (${dayKey}) for "${event.title}": Hit max tasks (${stats.tasks}/${maxTasks})`);
+              dayOffset++; continue;
+            }
+            if (stats.hours >= maxWorkHours) {
+              console.log(`[${functionName}] SKIPPING TODAY (${dayKey}) for "${event.title}": Hit max hours (${stats.hours.toFixed(1)}/${maxWorkHours})`);
+              dayOffset++; continue;
+            }
+          } else {
+            if (stats.tasks >= maxTasks || stats.hours >= maxWorkHours) {
+              dayOffset++; continue;
+            }
           }
 
           const dayStart = toDate(`${dayKey}T${settings.day_start_time}:00`, { timeZone: userTimezone });
@@ -179,7 +195,7 @@ serve(async (req) => {
               const nowAligned = alignTime(new Date(), slotAlignment);
               if (nowAligned > initialPointer) {
                 initialPointer = nowAligned;
-                console.log(`[${functionName}] Today's search starting at ${formatInTimeZone(initialPointer, userTimezone, 'HH:mm')} (Current Load: ${stats.tasks} tasks)`);
+                console.log(`[${functionName}] TODAY search start: ${formatInTimeZone(initialPointer, userTimezone, 'HH:mm')} (Current Load: ${stats.tasks} tasks)`);
               }
             }
             stats.lastPointer = initialPointer;
@@ -192,11 +208,16 @@ serve(async (req) => {
             const taskWorkHours = event.is_work ? (effectiveDuration / 60) : 0;
             
             if (potentialEnd > dayEnd) {
-              if (dayOffset === 0) console.log(`[${functionName}] Task "${event.title}" (${effectiveDuration}m) too long for today: Ends at ${formatInTimeZone(potentialEnd, userTimezone, 'HH:mm')}, window ends at ${settings.day_end_time}`);
+              if (dayKey === todayStr) {
+                console.log(`[${functionName}] NO ROOM TODAY for "${event.title}" (${effectiveDuration}m): Ends at ${formatInTimeZone(potentialEnd, userTimezone, 'HH:mm')}, window ends at ${settings.day_end_time}`);
+              }
               break;
             }
-            if ((stats.hours + taskWorkHours) > maxWorkHours) break;
-            if (stats.tasks >= maxTasks) break;
+            
+            if ((stats.hours + taskWorkHours) > maxWorkHours) {
+              if (dayKey === todayStr) console.log(`[${functionName}] NO ROOM TODAY for "${event.title}": Would exceed max hours (${(stats.hours + taskWorkHours).toFixed(1)}/${maxWorkHours})`);
+              break;
+            }
 
             const collision = fixedEvents.find(f => {
               const fStart = new Date(f.start_time);
