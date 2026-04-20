@@ -98,51 +98,48 @@ const Plan = () => {
   }, []);
 
   const runAnalysis = async (skipSync = false, forceVetRedirect = false) => {
-    console.log("[Plan] runAnalysis started", { skipSync, forceVetRedirect });
     setIsProcessing(true);
     setTokenMissing(false);
     setProgress(5);
     
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
       if (!skipSync) {
         setStatusText('Authenticating...');
         setProgress(15);
-        const { data: { session } } = await supabase.auth.getSession();
-        const { data: { user } } = await supabase.auth.getUser();
         
-        console.log("[Plan] Session:", !!session, "User:", user?.id);
-
-        let token = session?.provider_token;
-        if (!token && user) {
-          const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
-          token = profile?.google_access_token;
+        // CRITICAL: Persist tokens if they are fresh in the session
+        if (session?.provider_token) {
+          const updates: any = { google_access_token: session.provider_token };
+          if (session.provider_refresh_token) {
+            updates.google_refresh_token = session.provider_refresh_token;
+          }
+          await supabase.from('profiles').update(updates).eq('id', user.id);
         }
-
-        console.log("[Plan] Google token:", !!token);
 
         setStatusText('Syncing calendars...');
         setProgress(30);
         
         const syncPromises = [
-          supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: token } }),
+          supabase.functions.invoke('sync-calendar'),
           supabase.functions.invoke('sync-apple-calendar')
         ];
 
-        console.log("[Plan] Invoking sync functions...");
         const results = await Promise.allSettled(syncPromises);
-        console.log("[Plan] Sync results:", results);
         setProgress(60);
         
         const googleResult = results[0];
         if (googleResult.status === 'fulfilled') {
-          const { data, error } = googleResult.value;
-          if (error || data?.error) {
-            const errorMsg = (error?.message || data?.error || "").toLowerCase();
-            console.error("[Plan] Google Sync Error:", errorMsg);
-            if (errorMsg.includes("401") || errorMsg.includes("unauthorized")) {
+          const { error } = googleResult.value;
+          if (error) {
+            const errorMsg = (error?.message || "").toLowerCase();
+            if (errorMsg.includes("401") || errorMsg.includes("unauthorized") || errorMsg === "auth_expired") {
               setTokenMissing(true);
               setIsProcessing(false);
-              showError("Google session expired.");
+              showError("Google session expired. Please reconnect.");
               return;
             }
           }
@@ -155,26 +152,21 @@ const Plan = () => {
       setStatusText('AI is vetting your schedule...');
       setProgress(75);
       
-      const { data: { user } } = await supabase.auth.getUser();
       const { data: fetchedEvents } = await supabase
         .from('calendar_events_cache')
         .select('*')
-        .eq('user_id', user?.id)
+        .eq('user_id', user.id)
         .order('start_time', { ascending: true });
-
-      console.log("[Plan] Fetched events for classification:", fetchedEvents?.length);
 
       if (fetchedEvents && fetchedEvents.length > 0) {
         const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, work_keywords, natural_language_rules').single();
-        console.log("[Plan] Invoking classify-tasks...");
         
         const batchSize = 10;
         for (let i = 0; i < fetchedEvents.length; i += batchSize) {
           const batch = fetchedEvents.slice(i, i + batchSize);
           const classificationProgress = Math.round(((i + batch.length) / fetchedEvents.length) * 100);
           setStatusText(`AI is vetting tasks (${classificationProgress}%)...`);
-          // Update overall progress bar too
-          setProgress(75 + (classificationProgress * 0.2)); // Map 0-100% of classification to 75-95% of overall progress
+          setProgress(75 + (classificationProgress * 0.2));
 
           await supabase.functions.invoke('classify-tasks', {
             body: {
@@ -203,22 +195,18 @@ const Plan = () => {
       const { data: finalEvents } = await supabase
         .from('calendar_events_cache')
         .select('*')
-        .eq('user_id', user?.id)
+        .eq('user_id', user.id)
         .order('start_time', { ascending: true });
         
       setEvents(finalEvents || []);
       setProgress(100);
       
-      console.log("[Plan] Analysis complete, final events:", finalEvents?.length);
-
       setTimeout(() => {
         if (forceVetRedirect || currentStep !== 'active_plan') {
           if (finalEvents && finalEvents.length > 0) {
-            console.log("[Plan] Navigating to /vet");
             navigate('/vet');
           } else {
-            console.log("[Plan] No events, staying on initial");
-            showError("No calendar events found. Please check your calendar settings.");
+            showError("No calendar events found.");
             setCurrentStep('initial');
           }
         }
@@ -233,7 +221,6 @@ const Plan = () => {
   };
 
   const handleFullSync = async () => {
-    console.log("[Plan] handleFullSync started");
     setIsProcessing(true);
     setProposal(null);
     setAppliedChanges([]);
@@ -241,17 +228,11 @@ const Plan = () => {
     setProgress(0);
     setStatusText('Performing full system sync...');
     try {
-      console.log("[Plan] Calling full_reset_user_data RPC");
       const { error } = await supabase.rpc('full_reset_user_data');
-      if (error) {
-        console.error("[Plan] RPC Error:", error);
-        throw error;
-      }
-      console.log("[Plan] RPC Success, calling runAnalysis");
+      if (error) throw error;
       setProgress(20);
       await runAnalysis(false, true);
     } catch (err: any) {
-      console.error("[Plan] handleFullSync error:", err);
       showError("Sync failed: " + err.message);
       setIsProcessing(false);
     }

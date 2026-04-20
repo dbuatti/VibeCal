@@ -75,21 +75,25 @@ const Settings = () => {
   const checkGoogleConnection = async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (session?.provider_token) {
-        setGoogleStatus('connected');
-        return;
-      }
-
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
+      const { data: profile } = await supabase.from('profiles').select('google_access_token, google_refresh_token').eq('id', user.id).single();
       
       if (profile?.google_access_token) {
         const res = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1', {
           headers: { Authorization: `Bearer ${profile.google_access_token}` }
         });
-        setGoogleStatus(res.ok ? 'connected' : 'expired');
+        
+        if (res.ok) {
+          setGoogleStatus('connected');
+        } else if (res.status === 401 && profile.google_refresh_token) {
+          // Try a background sync to see if refresh works
+          const { error } = await supabase.functions.invoke('sync-calendar', { body: { timeMax: new Date(Date.now() + 60000).toISOString() } });
+          setGoogleStatus(error ? 'expired' : 'connected');
+        } else {
+          setGoogleStatus('expired');
+        }
       } else {
         setGoogleStatus('disconnected');
       }
@@ -296,8 +300,14 @@ const Settings = () => {
       if (!user) throw new Error('Not authenticated');
 
       const { data: { session } } = await supabase.auth.getSession();
+      
+      // CRITICAL: Save both access and refresh tokens if available
       if (session?.provider_token) {
-        await supabase.from('profiles').update({ google_access_token: session.provider_token }).eq('id', user.id);
+        const updates: any = { google_access_token: session.provider_token };
+        if (session.provider_refresh_token) {
+          updates.google_refresh_token = session.provider_refresh_token;
+        }
+        await supabase.from('profiles').update(updates).eq('id', user.id);
         await supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: session.provider_token } });
       } else {
         await supabase.functions.invoke('sync-calendar', { body: {} });
@@ -312,7 +322,7 @@ const Settings = () => {
       await checkGoogleConnection();
     } catch (err: any) {
       showError(`Discovery failed: ${err.message}`);
-      if (err.message.includes('401') || err.message.includes('Unauthorized')) {
+      if (err.message.includes('401') || err.message.includes('Unauthorized') || err.message === 'AUTH_EXPIRED') {
         setGoogleStatus('expired');
       }
     } finally {
