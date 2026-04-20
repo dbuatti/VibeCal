@@ -160,6 +160,13 @@ serve(async (req) => {
           if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
           const stats = dailyStats.get(dayKey);
           
+          // CAPACITY CHECK: If the day is already full, skip it immediately
+          if (stats.tasks >= maxTasks || stats.hours >= maxWorkHours) {
+            console.log(`[${functionName}] Skipping ${dayKey} for "${event.title}" - Capacity reached (${stats.tasks}/${maxTasks} tasks, ${stats.hours.toFixed(1)}/${maxWorkHours}h)`);
+            dayOffset++;
+            continue;
+          }
+
           const dayStart = toDate(`${dayKey}T${settings.day_start_time}:00`, { timeZone: userTimezone });
           const dayEnd = toDate(`${dayKey}T${settings.day_end_time}:00`, { timeZone: userTimezone });
 
@@ -178,18 +185,9 @@ serve(async (req) => {
             const potentialEnd = new Date(searchPointer.getTime() + durationMs);
             const taskWorkHours = event.is_work ? (effectiveDuration / 60) : 0;
             
-            if (potentialEnd > dayEnd) {
-              console.log(`[${functionName}] Task "${event.title}" exceeds day end on ${dayKey}.`);
-              break;
-            }
-            if ((stats.hours + taskWorkHours) > maxWorkHours) {
-              console.log(`[${functionName}] Task "${event.title}" exceeds max hours (${maxWorkHours}) on ${dayKey}. Current: ${stats.hours.toFixed(2)}`);
-              break;
-            }
-            if (stats.tasks >= maxTasks) {
-              console.log(`[${functionName}] Task "${event.title}" exceeds max tasks (${maxTasks}) on ${dayKey}.`);
-              break;
-            }
+            if (potentialEnd > dayEnd) break;
+            if ((stats.hours + taskWorkHours) > maxWorkHours) break;
+            if (stats.tasks >= maxTasks) break;
 
             const collision = fixedEvents.find(f => {
               const fStart = new Date(f.start_time);
@@ -198,7 +196,6 @@ serve(async (req) => {
             });
 
             if (collision) {
-              console.log(`[${functionName}] Collision for "${event.title}" with "${collision.title}" at ${searchPointer.toISOString()}`);
               searchPointer = alignTime(new Date(new Date(collision.end_time).getTime()), slotAlignment);
             } else {
               foundSlot = true;
