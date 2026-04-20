@@ -59,13 +59,16 @@ serve(async (req) => {
       return new Response(JSON.stringify({ error: "No tokens found." }), { status: 401, headers: corsHeaders });
     }
 
-    // 1. PARALLEL CALENDAR DISCOVERY & SYNC
-    const syncStartTime = new Date();
-    syncStartTime.setDate(syncStartTime.getDate() - 1);
-    const syncEndTime = new Date();
-    syncEndTime.setDate(syncEndTime.getDate() + 90); // Scan 3 months ahead
-    const syncTimestamp = new Date().toISOString();
+    // 1. Fetch user's calendar preferences from DB
+    const { data: dbCalendars } = await supabaseAdmin
+      .from('user_calendars')
+      .select('calendar_id, is_enabled')
+      .eq('user_id', user.id)
+      .eq('provider', 'google');
 
+    const enabledIds = new Set((dbCalendars || []).filter(c => c.is_enabled).map(c => c.calendar_id));
+
+    // 2. Fetch current list from Google
     const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { 
       headers: { Authorization: `Bearer ${token}` } 
     });
@@ -76,39 +79,72 @@ serve(async (req) => {
     }
 
     const listData = await listRes.json();
-    const enabledCalendars = (listData.items || []).filter(cal => !cal.id.includes('@import.calendar.google.com'));
+    const googleCalendars = (listData.items || []).filter(cal => !cal.id.includes('@import.calendar.google.com'));
 
-    // Process all calendars in parallel for maximum speed
-    const eventPromises = enabledCalendars.map(async (cal) => {
-      const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.id)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`;
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) return [];
-      const data = await res.json();
-      return (data.items || []).map(event => ({
-        user_id: user.id, 
-        event_id: event.id, 
-        title: event.summary || 'Untitled', 
-        description: event.description || null,
-        location: event.location || null,
-        start_time: event.start.dateTime || toDate(event.start.date, { timeZone: profile?.timezone || 'UTC' }).toISOString(), 
-        end_time: event.end.dateTime || toDate(event.end.date, { timeZone: profile?.timezone || 'UTC' }).toISOString(),
-        duration_minutes: Math.round((new Date(event.end.dateTime || event.end.date).getTime() - new Date(event.start.dateTime || event.start.date).getTime()) / 60000) || 30, 
-        is_locked: true,
-        provider: 'google', 
-        source_calendar: cal.summary, 
-        source_calendar_id: cal.id, 
-        last_synced_at: syncTimestamp, 
-        last_seen_at: syncTimestamp
-      }));
-    });
+    // 3. Discovery: Upsert new calendars to DB (default to enabled if DB was empty)
+    const discoveryPayload = googleCalendars.map(cal => ({
+      user_id: user.id,
+      calendar_id: cal.id,
+      calendar_name: cal.summary,
+      provider: 'google',
+      is_enabled: dbCalendars && dbCalendars.length > 0 
+        ? (dbCalendars.find(db => db.calendar_id === cal.id)?.is_enabled ?? false)
+        : true // Default to true only if this is the first time we see any calendars
+    }));
+
+    if (discoveryPayload.length > 0) {
+      await supabaseAdmin.from('user_calendars').upsert(discoveryPayload, { onConflict: 'user_id, calendar_id' });
+    }
+
+    // Re-calculate enabled IDs after discovery
+    const finalEnabledIds = discoveryPayload.filter(p => p.is_enabled).map(p => p.calendar_id);
+
+    // 4. Sync Events for ENABLED calendars only
+    const syncStartTime = new Date();
+    syncStartTime.setDate(syncStartTime.getDate() - 1);
+    const syncEndTime = new Date();
+    syncEndTime.setDate(syncEndTime.getDate() + 90);
+    const syncTimestamp = new Date().toISOString();
+
+    const eventPromises = googleCalendars
+      .filter(cal => finalEnabledIds.includes(cal.id))
+      .map(async (cal) => {
+        const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.id)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`;
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        if (!res.ok) return [];
+        const data = await res.json();
+        return (data.items || []).map(event => ({
+          user_id: user.id, 
+          event_id: event.id, 
+          title: event.summary || 'Untitled', 
+          description: event.description || null,
+          location: event.location || null,
+          start_time: event.start.dateTime || toDate(event.start.date, { timeZone: profile?.timezone || 'UTC' }).toISOString(), 
+          end_time: event.end.dateTime || toDate(event.end.date, { timeZone: profile?.timezone || 'UTC' }).toISOString(),
+          duration_minutes: Math.round((new Date(event.end.dateTime || event.end.date).getTime() - new Date(event.start.dateTime || event.start.date).getTime()) / 60000) || 30, 
+          is_locked: true,
+          provider: 'google', 
+          source_calendar: cal.summary, 
+          source_calendar_id: cal.id, 
+          last_synced_at: syncTimestamp, 
+          last_seen_at: syncTimestamp
+        }));
+      });
 
     const results = await Promise.all(eventPromises);
     const allEvents = results.flat();
 
     if (allEvents.length > 0) {
-      // Batch upsert for efficiency
       await supabaseAdmin.from('calendar_events_cache').upsert(allEvents, { onConflict: 'user_id, event_id' });
     }
+
+    // 5. PURGE: Remove events from calendars that are now disabled
+    await supabaseAdmin
+      .from('calendar_events_cache')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('provider', 'google')
+      .not('source_calendar_id', 'in', `(${finalEnabledIds.map(id => `"${id}"`).join(',')})`);
 
     return new Response(JSON.stringify({ count: allEvents.length }), { headers: corsHeaders });
   } catch (error) {

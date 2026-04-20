@@ -98,6 +98,7 @@ serve(async (req) => {
 
     const { data: enabledCals } = await supabaseAdmin.from('user_calendars').select('calendar_id, calendar_name, is_enabled').eq('user_id', user.id).eq('provider', 'apple');
     const enabledPaths = (enabledCals || []).filter(c => c.is_enabled);
+    const enabledIds = enabledPaths.map(c => c.calendar_id);
 
     if (enabledPaths.length === 0) {
       await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
@@ -138,7 +139,6 @@ serve(async (req) => {
     const interpretToUtc = (icalTime, timeZone) => {
       const iso = icalTime.toString(); // e.g. "2026-05-19T15:15:00"
       if (icalTime.isUtc) return new Date(iso).toISOString();
-      // Floating time: parse as if it were in the target timezone
       return toDate(iso, { timeZone }).toISOString();
     };
 
@@ -198,8 +198,13 @@ serve(async (req) => {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
     }
 
-    const cleanupThreshold = new Date(new Date(syncTimestamp).getTime() - 60000).toISOString();
-    await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple').gte('start_time', syncStartTime.toISOString()).lt('last_seen_at', cleanupThreshold);
+    // 5. PURGE: Remove events from calendars that are now disabled
+    await supabaseAdmin
+      .from('calendar_events_cache')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('provider', 'apple')
+      .not('source_calendar_id', 'in', `(${enabledIds.map(id => `"${id}"`).join(',')})`);
 
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
