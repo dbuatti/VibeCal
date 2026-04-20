@@ -111,7 +111,6 @@ const Plan = () => {
         setStatusText('Authenticating...');
         setProgress(15);
         
-        // CRITICAL: Persist tokens if they are fresh in the session
         if (session?.provider_token) {
           const updates: any = { google_access_token: session.provider_token };
           if (session.provider_refresh_token) {
@@ -319,6 +318,7 @@ const Plan = () => {
   };
 
   const handleApplyDay = async (dateChanges: any[]) => {
+    console.log("[Plan] handleApplyDay started", { count: dateChanges.length });
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const { data: { user } } = await supabase.auth.getUser();
@@ -333,10 +333,14 @@ const Plan = () => {
 
       for (const change of dateChanges) {
         const eventIdx = updatedEvents.findIndex(e => e.event_id === change.event_id);
-        if (eventIdx === -1) continue;
+        if (eventIdx === -1) {
+          console.warn("[Plan] Event not found in cache", change.event_id);
+          continue;
+        }
         const eventInCache = updatedEvents[eventIdx];
 
-        await supabase.functions.invoke('push-to-provider', {
+        console.log("[Plan] Invoking push-to-provider for", change.title);
+        const { error: pushError } = await supabase.functions.invoke('push-to-provider', {
           body: { 
             eventId: change.event_id, 
             provider: eventInCache.provider, 
@@ -346,6 +350,11 @@ const Plan = () => {
             googleAccessToken: token 
           }
         });
+
+        if (pushError) {
+          console.error("[Plan] push-to-provider failed", pushError);
+          throw pushError;
+        }
 
         await supabase.from('calendar_events_cache')
           .update({ 
@@ -366,7 +375,9 @@ const Plan = () => {
       setEvents(updatedEvents);
       setAppliedChanges(newAppliedIds);
       setProposal({ ...proposal, proposed_changes: updatedProposedChanges });
+      console.log("[Plan] handleApplyDay complete");
     } catch (err: any) { 
+      console.error("[Plan] handleApplyDay error", err);
       showError(err.message); 
       throw err; 
     }
