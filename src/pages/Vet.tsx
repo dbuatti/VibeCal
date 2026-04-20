@@ -77,38 +77,31 @@ const Vet = () => {
     if (events.length === 0) return;
 
     setIsProcessing(true);
-    setStatusText('AI is vetting in the background...');
+    setStatusText('AI is vetting your schedule...');
     
     try {
       const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, natural_language_rules').single();
       
-      // Process in batches of 20 for speed and reliability
-      const BATCH_SIZE = 20;
-      const batches = [];
-      for (let i = 0; i < events.length; i += BATCH_SIZE) {
-        batches.push(events.slice(i, i + BATCH_SIZE));
-      }
+      // Send ALL events in one single request to minimize API calls and respect quotas
+      const { data, error } = await supabase.functions.invoke('classify-tasks', {
+        body: {
+          events: events.map(e => ({ event_id: e.event_id, title: e.title })),
+          movableKeywords: settings?.movable_keywords || [],
+          lockedKeywords: settings?.locked_keywords || [],
+          naturalLanguageRules: settings?.natural_language_rules || '',
+          persist: true
+        }
+      });
 
-      const updatedEvents = [...events];
-      const newMetadata = { ...aiMetadata };
+      if (error) throw error;
 
-      for (let i = 0; i < batches.length; i++) {
-        const batch = batches[i];
-        setStatusText(`AI Vetting: Batch ${i + 1}/${batches.length}...`);
-        
-        const { data, error } = await supabase.functions.invoke('classify-tasks', {
-          body: {
-            events: batch.map(e => ({ event_id: e.event_id, title: e.title })),
-            movableKeywords: settings?.movable_keywords || [],
-            lockedKeywords: settings?.locked_keywords || [],
-            naturalLanguageRules: settings?.natural_language_rules || '',
-            persist: true
-          }
-        });
+      if (data?.classifications) {
+        const updatedEvents = [...events];
+        const newMetadata = { ...aiMetadata };
 
-        if (data?.classifications) {
-          batch.forEach((event, idx) => {
-            const classification = data.classifications[idx];
+        events.forEach((event, idx) => {
+          const classification = data.classifications[idx];
+          if (classification) {
             const eventIdx = updatedEvents.findIndex(e => e.event_id === event.event_id);
             if (eventIdx !== -1) {
               updatedEvents[eventIdx].is_locked = !classification.isMovable;
@@ -117,20 +110,19 @@ const Vet = () => {
                 confidence: classification.confidence || 1.0
               };
             }
-          });
-          // Update UI incrementally
-          setEvents([...updatedEvents]);
-          setAiMetadata({...newMetadata});
-        }
-      }
+          }
+        });
 
-      setIsProcessing(false);
-      setStatusText('');
-      showSuccess("AI vetting complete!");
+        setEvents(updatedEvents);
+        setAiMetadata(newMetadata);
+        showSuccess("AI vetting complete!");
+      }
 
     } catch (err: any) {
       showError("AI Vetting failed: " + err.message);
+    } finally {
       setIsProcessing(false);
+      setStatusText('');
     }
   };
 

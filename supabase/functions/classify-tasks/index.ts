@@ -25,28 +25,7 @@ function isSemanticMatch(title: string, pattern: string) {
   return false;
 }
 
-async function generateWithRetry(model, prompt, functionName, maxRetries = 3) {
-  let lastError;
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      return response;
-    } catch (err) {
-      lastError = err;
-      const errorMsg = err.message?.toLowerCase() || "";
-      const isRetryable = errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('503') || errorMsg.includes('500');
-      
-      if (isRetryable && i < maxRetries - 1) {
-        const delay = 1000 * (i + 1);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        continue;
-      }
-      break;
-    }
-  }
-  throw lastError;
-}
+const HARD_FIXED_PATTERNS = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary|dentist|appointment|appt|interview|vs|meeting with/i;
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
@@ -66,13 +45,14 @@ serve(async (req) => {
     const { data: { user } } = await supabaseUser.auth.getUser();
     if (!user) throw new Error("Unauthorized");
 
-    // 1. STAGE 1: SEMANTIC MEMORY LOOKUP
+    // 1. STAGE 1: SEMANTIC MEMORY & HEURISTIC PRE-FILTER
     const { data: feedback } = await supabaseAdmin
       .from('task_classification_feedback')
       .select('task_name, is_movable')
       .eq('user_id', user.id);
 
     const results = taskList.map(title => {
+      // Check manual feedback first
       const match = feedback?.find(f => isSemanticMatch(title, f.task_name));
       if (match) {
         return { 
@@ -82,12 +62,32 @@ serve(async (req) => {
           isPredefined: true 
         };
       }
+
+      // Check hard-coded fixed patterns
+      if (HARD_FIXED_PATTERNS.test(title)) {
+        return {
+          isMovable: false,
+          explanation: "Heuristic: Detected high-priority event pattern (Travel/Medical/Event).",
+          confidence: 0.9,
+          isPredefined: true
+        };
+      }
+
+      // Check user keywords
+      const t = title.toLowerCase();
+      if (lockedKeywords.some(kw => t.includes(kw.toLowerCase()))) {
+        return { isMovable: false, explanation: "Keyword match: Found in your 'Locked' list.", confidence: 1.0, isPredefined: true };
+      }
+      if (movableKeywords.some(kw => t.includes(kw.toLowerCase()))) {
+        return { isMovable: true, explanation: "Keyword match: Found in your 'Movable' list.", confidence: 1.0, isPredefined: true };
+      }
+
       return null;
     });
 
     const indicesToAI = results.map((r, i) => r === null ? i : null).filter(i => i !== null);
 
-    // 2. STAGE 2: COGNITIVE AI ANALYSIS
+    // 2. STAGE 2: COGNITIVE AI ANALYSIS (Only for unknown tasks)
     if (indicesToAI.length > 0) {
       const tasksForAI = indicesToAI.map(i => taskList[i]);
       
@@ -102,18 +102,8 @@ serve(async (req) => {
           USER PREFERENCES:
           ${naturalLanguageRules || 'No custom rules provided.'}
           
-          KEYWORDS:
-          - FIXED: ${lockedKeywords.join(', ') || 'none'}
-          - MOVABLE: ${movableKeywords.join(', ') || 'none'}
-          
           TASKS TO ANALYZE:
           ${tasksForAI.map((t, idx) => `${idx}: "${t}"`).join('\n')}
-          
-          INSTRUCTIONS:
-          1. Think step-by-step: Is this a solo activity or does it involve others?
-          2. Detect dependencies: If task B mentions task A (e.g., "Part 2", "Follow up on X"), note that B depends on A.
-          3. Provide a concise, logical explanation.
-          4. Assign a confidence score (0.0 to 1.0).
           
           Return ONLY a JSON array of objects: 
           { "isMovable": boolean, "explanation": string, "confidence": number, "dependsOn": string | null }
@@ -123,10 +113,10 @@ serve(async (req) => {
         const genAI = new GoogleGenerativeAI(geminiKey);
         const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         
-        const response = await generateWithRetry(model, prompt, functionName);
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
         const responseText = response.text();
         
-        // Robust JSON extraction
         const jsonMatch = responseText.match(/\[\s*\{.*\}\s*\]/s);
         if (jsonMatch) {
           const aiClassifications = JSON.parse(jsonMatch[0]);
@@ -135,26 +125,17 @@ serve(async (req) => {
           });
         }
       } catch (aiError) {
-        console.error(`[${functionName}] AI Stage Failed, using Heuristic Fallback:`, aiError.message);
+        console.warn(`[${functionName}] AI Quota/Error, using Smart Fallback:`, aiError.message);
         
-        // 3. STAGE 3: HEURISTIC FALLBACK
+        // 3. STAGE 3: SMART HEURISTIC FALLBACK (AI Busy/Quota)
         indicesToAI.forEach(idx => {
           const title = taskList[idx].toLowerCase();
-          const isMovableKeyword = movableKeywords.some(kw => title.includes(kw.toLowerCase()));
-          const isLockedKeyword = lockedKeywords.some(kw => title.includes(kw.toLowerCase()));
+          const likelyFixed = /with|call|meeting|vs|interview|appointment|doctor|dentist|flight|zoom|teams|rehearsal|lesson|performance|gig|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i.test(title);
           
-          const fixedPatterns = /with|call|meeting|vs|interview|appointment|doctor|dentist|flight|zoom|teams|rehearsal|lesson|performance|gig|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
-          const likelyFixed = fixedPatterns.test(title);
-          
-          let isMovable = true;
-          if (isLockedKeyword) isMovable = false;
-          else if (isMovableKeyword) isMovable = true;
-          else if (likelyFixed) isMovable = false;
-
           results[idx] = {
-            isMovable: isMovable,
-            explanation: "Classified via Heuristic Engine (AI busy).",
-            confidence: 0.5,
+            isMovable: !likelyFixed,
+            explanation: "Classified via Smart Heuristic (AI Power Saving Mode).",
+            confidence: 0.6,
             dependsOn: null
           };
         });
