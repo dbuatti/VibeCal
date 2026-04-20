@@ -2,6 +2,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0'
 import ICAL from "https://esm.sh/ical.js@1.5.0"
+import { toDate } from "https://esm.sh/date-fns-tz@3.1.1"
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -27,7 +28,6 @@ serve(async (req) => {
     const { data: profile } = await supabaseAdmin.from('profiles').select('apple_id, apple_app_password, timezone').eq('id', user.id).single();
     
     if (!profile?.apple_id || !profile?.apple_app_password) {
-      console.log(`[${functionName}] No Apple credentials found for user ${user.id}`);
       return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
     }
 
@@ -79,10 +79,7 @@ serve(async (req) => {
         if (!href.endsWith('/')) href += '/';
         
         const name = nameMatch ? nameMatch[1] : 'Untitled';
-        const isEmail = name.includes('@') && name.includes('.');
-        const isSystem = /reminders|tasks|inbox|outbox|notifications|shopping|pomodoro|distraction|spendings|list|checklist/i.test(name);
-        
-        if (!isEmail && !isSystem && !seenNames.has(name)) {
+        if (!name.includes('@') && !/reminders|tasks|inbox|outbox|notifications/i.test(name) && !seenNames.has(name)) {
           seenNames.add(name);
           discoveredCalendarsMap.set(href, { 
             user_id: user.id,
@@ -99,16 +96,10 @@ serve(async (req) => {
       await supabaseAdmin.from('user_calendars').upsert(discoveredCalendars, { onConflict: 'user_id, calendar_id' });
     }
 
-    const { data: enabledCals } = await supabaseAdmin
-      .from('user_calendars')
-      .select('calendar_id, calendar_name, is_enabled')
-      .eq('user_id', user.id)
-      .eq('provider', 'apple');
-    
+    const { data: enabledCals } = await supabaseAdmin.from('user_calendars').select('calendar_id, calendar_name, is_enabled').eq('user_id', user.id).eq('provider', 'apple');
     const enabledPaths = (enabledCals || []).filter(c => c.is_enabled);
 
     if (enabledPaths.length === 0) {
-      console.log(`[${functionName}] No Apple calendars enabled for user ${user.id}`);
       await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
       return new Response(JSON.stringify({ count: 0, message: "No calendars enabled" }), { headers: corsHeaders });
     }
@@ -145,63 +136,15 @@ serve(async (req) => {
     const hardFixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
 
     const interpretToUtc = (icalTime, timeZone) => {
-      const y = icalTime.year;
-      const m = icalTime.month;
-      const d = icalTime.day;
-      const h = icalTime.hour;
-      const min = icalTime.minute;
-      const sec = icalTime.second;
-
-      // If it's already UTC, return it with explicit Z
-      if (icalTime.isUtc) {
-        return new Date(Date.UTC(y, m - 1, d, h, min, sec)).toISOString();
-      }
-
-      // USER OVERRIDE: If user is in Melbourne, force GMT+10 for floating times
-      if (timeZone === 'Australia/Melbourne' || timeZone === 'AEST' || timeZone === 'AEDT') {
-        console.log(`[${functionName}] Forcing GMT+10 for Melbourne floating time: ${y}-${m}-${d} ${h}:${min}`);
-        const date = new Date(Date.UTC(y, m - 1, d, h, min, sec));
-        date.setUTCHours(date.getUTCHours() - 10); // Force GMT+10 offset
-        return date.toISOString();
-      }
-
-      // Fallback for other timezones
-      try {
-        const formatter = new Intl.DateTimeFormat('en-US', {
-          timeZone,
-          year: 'numeric', month: '2-digit', day: '2-digit',
-          hour: '2-digit', minute: '2-digit', second: '2-digit',
-          hour12: false
-        });
-
-        const guessUtc = new Date(Date.UTC(y, m - 1, d, h, min, sec));
-        const parts = formatter.formatToParts(guessUtc);
-        const p = {};
-        parts.forEach(part => p[part.type] = part.value);
-        
-        const formattedInTz = new Date(Date.UTC(
-          parseInt(p.year),
-          parseInt(p.month) - 1,
-          parseInt(p.day),
-          parseInt(p.hour),
-          parseInt(p.minute),
-          parseInt(p.second)
-        ));
-
-        const offsetMs = formattedInTz.getTime() - guessUtc.getTime();
-        return new Date(guessUtc.getTime() - offsetMs).toISOString();
-      } catch (e) {
-        return icalTime.toJSDate().toISOString();
-      }
+      const iso = icalTime.toString(); // e.g. "2026-05-19T15:15:00"
+      if (icalTime.isUtc) return new Date(iso).toISOString();
+      // Floating time: parse as if it were in the target timezone
+      return toDate(iso, { timeZone }).toISOString();
     };
 
     for (const cal of enabledPaths) {
-      console.log(`[${functionName}] Fetching events for calendar: ${cal.calendar_name}`);
       const eventsRes = await fetch(cal.calendar_id, { method: 'REPORT', headers: { ...headers, 'Depth': '1' }, body: reportQuery });
-      if (!eventsRes.ok) {
-        console.error(`[${functionName}] Failed to fetch events for ${cal.calendar_name}: ${eventsRes.status}`);
-        continue;
-      }
+      if (!eventsRes.ok) continue;
       
       const eventsText = await eventsRes.text();
       const icsDatas = eventsText.match(/BEGIN:VCALENDAR.*?END:VCALENDAR/gs) || [];
@@ -222,16 +165,11 @@ serve(async (req) => {
             const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
             
             let isLocked = isExplicitlyLocked;
-            let lockReason = isExplicitlyLocked ? "Explicit Keyword" : "Default Movable";
-
             if (!isExplicitlyMovable && !isLocked && hardFixedKeywords.test(title)) {
               isLocked = true;
-              lockReason = "Hard Fixed Keyword (Flight/Doctor/etc)";
             }
 
             const isWork = workKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
-
-            console.log(`[${functionName}] Event: "${title}" | Start: ${startIso} | Locked: ${isLocked} (${lockReason})`);
 
             eventMap.set(event.uid, {
               user_id: user.id,
@@ -257,14 +195,12 @@ serve(async (req) => {
 
     const uniqueEvents = Array.from(eventMap.values());
     if (uniqueEvents.length > 0) {
-      const { error: upsertError } = await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
-      if (upsertError) console.error(`[${functionName}] Upsert Error:`, upsertError);
+      await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
     }
 
     const cleanupThreshold = new Date(new Date(syncTimestamp).getTime() - 60000).toISOString();
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple').gte('start_time', syncStartTime.toISOString()).lt('last_seen_at', cleanupThreshold);
 
-    console.log(`[${functionName}] SUCCESS - Synced ${uniqueEvents.length} events.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
     console.error(`[${functionName}] FATAL ERROR:`, error.message);

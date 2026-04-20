@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { format, parseISO, isBefore, isAfter } from 'date-fns';
+import { parseISO, isBefore, isAfter } from 'date-fns';
+import { formatInTimeZone } from 'date-fns-tz';
 import { Button } from '@/components/ui/button';
 import { 
   RefreshCw, 
@@ -44,20 +45,22 @@ const DayByDayPlanner = ({
   maxTasks,
   workKeywords = ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt', 'program', 'ceremony']
 }: DayByDayPlannerProps) => {
+  const timezone = 'Australia/Melbourne';
+
   const allDates = useMemo(() => {
     const dates = new Set<string>();
-    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    const todayStr = formatInTimeZone(new Date(), timezone, 'yyyy-MM-dd');
 
     changes.forEach(c => {
-      const newDate = format(parseISO(c.new_start), 'yyyy-MM-dd');
+      const newDate = formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd');
       if (newDate >= todayStr) dates.add(newDate);
       
-      const oldDate = format(parseISO(c.old_start), 'yyyy-MM-dd');
+      const oldDate = formatInTimeZone(parseISO(c.old_start), timezone, 'yyyy-MM-dd');
       if (oldDate >= todayStr) dates.add(oldDate);
     });
 
     events.filter(e => e.is_locked).forEach(e => {
-      const date = format(parseISO(e.start_time), 'yyyy-MM-dd');
+      const date = formatInTimeZone(parseISO(e.start_time), timezone, 'yyyy-MM-dd');
       if (date >= todayStr) dates.add(date);
     });
 
@@ -76,13 +79,13 @@ const DayByDayPlanner = ({
 
   const dayChanges = useMemo(() => {
     return changes.filter(c => 
-      format(parseISO(c.new_start), 'yyyy-MM-dd') === currentDateStr ||
-      format(parseISO(c.old_start), 'yyyy-MM-dd') === currentDateStr
+      formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd') === currentDateStr ||
+      formatInTimeZone(parseISO(c.old_start), timezone, 'yyyy-MM-dd') === currentDateStr
     );
   }, [changes, currentDateStr]);
 
   const dayLockedEvents = useMemo(() => {
-    return events.filter(e => e.is_locked && format(parseISO(e.start_time), 'yyyy-MM-dd') === currentDateStr);
+    return events.filter(e => e.is_locked && formatInTimeZone(parseISO(e.start_time), timezone, 'yyyy-MM-dd') === currentDateStr);
   }, [events, currentDateStr]);
 
   const isDayVetted = useMemo(() => {
@@ -98,12 +101,12 @@ const DayByDayPlanner = ({
 
   useEffect(() => {
     if (!hasAutoDefaulted && allDates.length > 0) {
-      const todayStr = format(new Date(), 'yyyy-MM-dd');
+      const todayStr = formatInTimeZone(new Date(), timezone, 'yyyy-MM-dd');
       const firstUnvettedIndex = allDates.findIndex(dateStr => {
         if (dateStr < todayStr) return false;
         const dayChangesForDate = changes.filter(c => 
-          format(parseISO(c.new_start), 'yyyy-MM-dd') === dateStr ||
-          format(parseISO(c.old_start), 'yyyy-MM-dd') === dateStr
+          formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd') === dateStr ||
+          formatInTimeZone(parseISO(c.old_start), timezone, 'yyyy-MM-dd') === dateStr
         );
         return dayChangesForDate.length > 0 && !dayChangesForDate.every(c => appliedChanges.includes(c.event_id));
       });
@@ -121,7 +124,7 @@ const DayByDayPlanner = ({
   const stats = useMemo(() => {
     const eventsOnThisDay = [
       ...dayLockedEvents,
-      ...changes.filter(c => format(parseISO(c.new_start), 'yyyy-MM-dd') === currentDateStr && !c.is_surplus)
+      ...changes.filter(c => formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd') === currentDateStr && !c.is_surplus)
     ];
 
     const workEvents = eventsOnThisDay
@@ -265,11 +268,12 @@ const DayByDayPlanner = ({
             <h3 className="text-lg font-black text-gray-900 tracking-tight">Visual Map</h3>
           </div>
           <VisualSchedule 
-            events={events.filter(e => format(parseISO(e.start_time), 'yyyy-MM-dd') === currentDateStr)} 
-            changes={dayChanges.filter(c => format(parseISO(c.new_start), 'yyyy-MM-dd') === currentDateStr)} 
+            events={events.filter(e => formatInTimeZone(parseISO(e.start_time), timezone, 'yyyy-MM-dd') === currentDateStr)} 
+            changes={dayChanges.filter(c => formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd') === currentDateStr)} 
             appliedChanges={appliedChanges} 
             isVetted={isDayVetted}
             workKeywords={workKeywords}
+            timezone={timezone}
           />
         </div>
       </div>
