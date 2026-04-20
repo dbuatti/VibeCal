@@ -82,6 +82,34 @@ const Vet = () => {
     fetchEvents();
   }, []);
 
+  const handleSync = async () => {
+    setIsProcessing(true);
+    setStatusText('Syncing calendars...');
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      let token = session?.provider_token;
+      if (!token && user) {
+        const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
+        token = profile?.google_access_token;
+      }
+
+      await Promise.allSettled([
+        supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: token } }),
+        supabase.functions.invoke('sync-apple-calendar')
+      ]);
+
+      await fetchEvents();
+      showSuccess("Calendars synced!");
+    } catch (err: any) {
+      showError(err.message);
+    } finally {
+      setIsProcessing(false);
+      setStatusText('');
+    }
+  };
+
   const runAIClassification = async () => {
     if (events.length === 0) return;
 
@@ -192,14 +220,23 @@ const Vet = () => {
             <p className="text-gray-500 font-medium">Fast-scan and toggle movable tasks.</p>
           </div>
           
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            <Button 
+              variant="outline" 
+              onClick={handleSync} 
+              disabled={isProcessing}
+              className="rounded-2xl h-14 px-6 font-black text-xs uppercase tracking-widest flex gap-3 border-gray-100 text-gray-500 hover:bg-gray-50 shadow-sm"
+            >
+              <RefreshCw className={cn(isProcessing && statusText.includes('Syncing') && "animate-spin")} size={18} />
+              Sync
+            </Button>
             <Button 
               variant="outline" 
               onClick={runAIClassification} 
               disabled={isProcessing} 
               className="rounded-2xl h-14 px-8 font-black text-xs uppercase tracking-widest flex gap-3 border-indigo-100 text-indigo-600 hover:bg-indigo-50 shadow-sm"
             >
-              {isProcessing ? <RefreshCw className="animate-spin" size={20} /> : <Sparkles size={20} />}
+              {isProcessing && statusText.includes('AI') ? <RefreshCw className="animate-spin" size={20} /> : <Sparkles size={20} />}
               AI Auto-Vet
             </Button>
             <Button onClick={() => navigate('/plan')} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl h-14 px-10 font-black text-xs uppercase tracking-widest shadow-xl">
@@ -207,6 +244,13 @@ const Vet = () => {
             </Button>
           </div>
         </div>
+
+        {isProcessing && (
+          <div className="mb-8 p-4 bg-indigo-600 text-white rounded-2xl flex items-center justify-center gap-3 animate-pulse shadow-lg">
+            <RefreshCw className="animate-spin" size={18} />
+            <span className="font-black text-xs uppercase tracking-widest">{statusText}</span>
+          </div>
+        )}
 
         <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm mb-8">
           <div className="flex justify-between items-end mb-4 px-2">
