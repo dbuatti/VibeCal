@@ -136,7 +136,6 @@ serve(async (req) => {
       if (isTask) stats.tasks += 1;
     });
 
-    // Log the starting load for each day
     dailyStats.forEach((stats, dayKey) => {
       console.log(`[${functionName}] Starting Load for ${dayKey}: ${stats.tasks} tasks, ${stats.hours.toFixed(1)}h`);
     });
@@ -177,7 +176,10 @@ serve(async (req) => {
             let initialPointer = alignTime(dayStart, slotAlignment);
             if (dayOffset === 0) {
               const nowAligned = alignTime(new Date(), slotAlignment);
-              if (nowAligned > initialPointer) initialPointer = nowAligned;
+              if (nowAligned > initialPointer) {
+                initialPointer = nowAligned;
+                console.log(`[${functionName}] Today's search starting late at ${formatInTimeZone(initialPointer, userTimezone, 'HH:mm')}`);
+              }
             }
             stats.lastPointer = initialPointer;
           }
@@ -188,7 +190,10 @@ serve(async (req) => {
             const potentialEnd = new Date(searchPointer.getTime() + durationMs);
             const taskWorkHours = event.is_work ? (effectiveDuration / 60) : 0;
             
-            if (potentialEnd > dayEnd) break;
+            if (potentialEnd > dayEnd) {
+              console.log(`[${functionName}] Task "${event.title}" (${effectiveDuration}m) rejected for ${dayKey}: Ends at ${formatInTimeZone(potentialEnd, userTimezone, 'HH:mm')}, which is after window end (${settings.day_end_time})`);
+              break;
+            }
             if ((stats.hours + taskWorkHours) > maxWorkHours) break;
             if (stats.tasks >= maxTasks) break;
 
