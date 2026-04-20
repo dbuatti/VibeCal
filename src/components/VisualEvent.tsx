@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
-import { format, parseISO } from 'date-fns';
+import { format, parseISO, isValid } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
 import { Lock, Sparkles, Clock, Utensils, Music, Laptop, Coffee, Inbox, Briefcase, ChevronRight, MapPin, AlignLeft, ChevronDown, ChevronUp, Link as LinkIcon } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -47,10 +47,19 @@ const VisualEvent = ({ event, isApplied, isVetted, isWork, timezone = 'Australia
 
   // Explicitly format using the target timezone to avoid browser local time confusion
   const formatTime = (isoStr: string) => {
+    if (!isoStr) return '--:--';
     try {
-      return formatInTimeZone(parseISO(isoStr), timezone, 'HH:mm');
+      const date = parseISO(isoStr);
+      if (!isValid(date)) return '--:--';
+      return formatInTimeZone(date, timezone, 'HH:mm');
     } catch (e) {
-      return format(parseISO(isoStr), 'HH:mm');
+      try {
+        const date = parseISO(isoStr);
+        if (!isValid(date)) return '--:--';
+        return format(date, 'HH:mm');
+      } catch (err) {
+        return '--:--';
+      }
     }
   };
 
