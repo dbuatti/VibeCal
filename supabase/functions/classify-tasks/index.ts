@@ -67,7 +67,8 @@ serve(async (req) => {
       const geminiKey = Deno.env.get('GEMINI_API_KEY');
       if (geminiKey) {
         const genAI = new GoogleGenerativeAI(geminiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        // Using the latest stable model from the provided documentation
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
         const prompt = `
           You are a high-precision calendar assistant. Your job is to classify tasks as "movable" or "fixed".
