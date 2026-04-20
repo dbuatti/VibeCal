@@ -40,8 +40,11 @@ Deno.serve(async (req) => {
     }
 
     // 3. Cleanup Step: Delete past Apple events to fix "Ghost" data
-    const todayStr = formatInTimeZone(new Date(), userTimezone, "yyyy-MM-dd'T'00:00:00XXX");
-    await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&provider=eq.apple&start_time=lt.${todayStr}`, {
+    const todayStartISO = formatInTimeZone(new Date(), userTimezone, "yyyy-MM-dd'T'00:00:00XXX");
+    console.log(`[${functionName}] Cleaning up events before ${todayStartISO}`);
+    
+    const cleanupUrl = `${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&provider=eq.apple&start_time=lt.${encodeURIComponent(todayStartISO)}`;
+    await fetch(cleanupUrl, {
       method: 'DELETE',
       headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
     });
@@ -123,7 +126,7 @@ Deno.serve(async (req) => {
     const allEvents = [];
     
     const startRange = customMin ? new Date(customMin).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z' : 
-                      new Date(todayStr).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+                      new Date(todayStartISO).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endRange = customMax ? new Date(customMax).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z' : 
                     new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
@@ -179,7 +182,7 @@ Deno.serve(async (req) => {
             const durationMinutes = Math.round((new Date(endTime).getTime() - new Date(startTime).getTime()) / 60000);
 
             // Only include if it's today or future
-            if (!isBefore(parseISO(startTime), parseISO(todayStr))) {
+            if (!isBefore(parseISO(startTime), parseISO(todayStartISO))) {
               allEvents.push({
                 user_id: user.id,
                 event_id: uidMatch[1].trim(),

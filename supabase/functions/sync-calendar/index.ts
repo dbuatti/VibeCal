@@ -105,8 +105,12 @@ Deno.serve(async (req) => {
     if (!token) throw new Error("AUTH_EXPIRED");
 
     // 4. Cleanup Step: Delete past Google events to fix "Ghost" data
-    const todayStr = formatInTimeZone(new Date(), userTimezone, "yyyy-MM-dd'T'00:00:00XXX");
-    await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&provider=eq.google&start_time=lt.${todayStr}`, {
+    // We use the start of today in the user's timezone as the cutoff
+    const todayStartISO = formatInTimeZone(new Date(), userTimezone, "yyyy-MM-dd'T'00:00:00XXX");
+    console.log(`[${functionName}] Cleaning up events before ${todayStartISO}`);
+    
+    const cleanupUrl = `${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&provider=eq.google&start_time=lt.${encodeURIComponent(todayStartISO)}`;
+    await fetch(cleanupUrl, {
       method: 'DELETE',
       headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
     });
@@ -153,13 +157,13 @@ Deno.serve(async (req) => {
     const enabledCalendarIds = calendarsToUpsert.filter(c => c.is_enabled).map(c => c.calendar_id);
 
     // 7. Sync Events (Today onwards only)
-    const syncStartTime = customMin ? new Date(customMin) : new Date(todayStr);
+    const syncStartTime = customMin ? new Date(customMin) : new Date(todayStartISO);
     const syncEndTime = customMax ? new Date(customMax) : new Date();
     if (!customMax) syncEndTime.setFullYear(syncEndTime.getFullYear() + 1);
 
     const allEvents = [];
     for (const calId of enabledCalendarIds) {
-      const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`;
+      const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?timeMin=${syncStartTime.toISOString()}&singleEvents=true&orderBy=startTime&timeMax=${syncEndTime.toISOString()}`;
       const data = await fetchWithRetry(url);
       
       const events = (data.items || []).map(event => {
