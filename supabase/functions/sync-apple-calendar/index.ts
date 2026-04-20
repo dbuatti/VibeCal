@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
 import { toDate } from 'https://esm.sh/date-fns-tz@3.2.0?deps=date-fns@3.6.0'
+import { differenceInMinutes, parseISO } from 'https://esm.sh/date-fns@3.6.0'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -165,6 +166,8 @@ Deno.serve(async (req) => {
           const unfolded = icsData.replace(/\r\n\s/g, '');
           const summaryMatch = unfolded.match(/SUMMARY:(.*)/i);
           const uidMatch = unfolded.match(/UID:(.*)/i);
+          
+          // Robust Regex for START and END with potential TZIDs
           const startMatch = unfolded.match(/DTSTART(?:;TZID=[^:]+)?[:](\d{8}T\d{6}Z?)/i);
           const endMatch = unfolded.match(/DTEND(?:;TZID=[^:]+)?[:](\d{8}T\d{6}Z?)/i);
 
@@ -176,12 +179,23 @@ Deno.serve(async (req) => {
               return str.endsWith('Z') ? new Date(dateStr + 'Z').toISOString() : toDate(dateStr, { timeZone: tz }).toISOString();
             };
 
+            const startTime = parseIcalDate(startMatch[1].trim(), userTimezone);
+            const endTime = parseIcalDate(endMatch[1].trim(), userTimezone);
+            const title = summaryMatch?.[1]?.trim() || 'Untitled';
+            
+            // Calculate duration in minutes
+            const durationMinutes = Math.round((new Date(endTime).getTime() - new Date(startTime).getTime()) / 60000);
+
+            // Debug Log as requested
+            console.log(`[${functionName}] [Debug] Event: ${title} | Start: ${startTime} | End: ${endTime} | Duration: ${durationMinutes}min`);
+
             allEvents.push({
               user_id: user.id,
               event_id: uidMatch[1].trim(),
-              title: summaryMatch?.[1]?.trim() || 'Untitled',
-              start_time: parseIcalDate(startMatch[1].trim(), userTimezone),
-              end_time: parseIcalDate(endMatch[1].trim(), userTimezone),
+              title: title,
+              start_time: startTime,
+              end_time: endTime,
+              duration_minutes: durationMinutes,
               provider: 'apple',
               source_calendar: cal.calendar_name,
               source_calendar_id: cal.calendar_id,

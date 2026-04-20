@@ -118,17 +118,24 @@ Deno.serve(async (req) => {
       if (!res.ok) continue;
       const data = await res.json();
       
-      const events = (data.items || []).map(event => ({
-        user_id: user.id,
-        event_id: event.id,
-        title: event.summary || 'Untitled',
-        start_time: event.start.dateTime || event.start.date,
-        end_time: event.end.dateTime || event.end.date,
-        provider: 'google',
-        source_calendar: data.summary || 'Unknown',
-        source_calendar_id: calId,
-        last_synced_at: new Date().toISOString()
-      }));
+      const events = (data.items || []).map(event => {
+        const start = event.start.dateTime || event.start.date;
+        const end = event.end.dateTime || event.end.date;
+        const durationMinutes = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000);
+
+        return {
+          user_id: user.id,
+          event_id: event.id,
+          title: event.summary || 'Untitled',
+          start_time: start,
+          end_time: end,
+          duration_minutes: durationMinutes,
+          provider: 'google',
+          source_calendar: data.summary || 'Unknown',
+          source_calendar_id: calId,
+          last_synced_at: new Date().toISOString()
+        };
+      });
       allEvents.push(...events);
     }
 
