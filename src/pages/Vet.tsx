@@ -41,8 +41,7 @@ import {
   DropdownMenuItem, 
   DropdownMenuLabel, 
   DropdownMenuSeparator, 
-  DropdownMenuTrigger,
-  DropdownMenuCheckboxItem
+  DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu';
 import { format, parseISO, isToday, isTomorrow, startOfDay } from 'date-fns';
 import { cn } from '@/lib/utils';
@@ -91,7 +90,6 @@ const Vet = () => {
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
   const [selectedProvider, setSelectedProvider] = useState<string | 'all'>('all');
 
-  // Training Modal State
   const [trainingTask, setTrainingTask] = useState<any>(null);
   const [isTrainingModalOpen, setIsTrainingModalOpen] = useState(false);
 
@@ -100,13 +98,7 @@ const Vet = () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-
-      const { data } = await supabase
-        .from('calendar_events_cache')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('start_time', { ascending: true });
-
+      const { data } = await supabase.from('calendar_events_cache').select('*').eq('user_id', user.id).order('start_time', { ascending: true });
       setEvents(data || []);
       return data || [];
     } catch (err) {
@@ -126,80 +118,59 @@ const Vet = () => {
     if (eventsToClassify.length === 0) return;
 
     setIsProcessing(true);
-    setStatusText('Preparing AI analysis...');
+    setStatusText('AI is vetting in the background...');
     
     try {
       const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, natural_language_rules').single();
       
-      // BATCHING LOGIC: Process in smaller chunks of 20 for speed and reliability
-      const BATCH_SIZE = 20;
-      const totalTasks = eventsToClassify.length;
-      const updatedEvents = [...eventsToClassify];
-      const newExplanations = { ...aiExplanations };
-
-      // Create batches
+      const BATCH_SIZE = 25;
       const batches = [];
-      for (let i = 0; i < totalTasks; i += BATCH_SIZE) {
+      for (let i = 0; i < eventsToClassify.length; i += BATCH_SIZE) {
         batches.push(eventsToClassify.slice(i, i + BATCH_SIZE));
       }
 
-      setStatusText(`Analyzing ${totalTasks} tasks in ${batches.length} parallel streams...`);
+      // Trigger all batches in parallel and don't block navigation
+      // We use 'persist: true' so the Edge Function updates the DB itself
+      const classificationPromises = batches.map(batch => 
+        supabase.functions.invoke('classify-tasks', {
+          body: {
+            events: batch.map(e => ({ event_id: e.event_id, title: e.title })),
+            movableKeywords: settings?.movable_keywords || [],
+            lockedKeywords: settings?.locked_keywords || [],
+            naturalLanguageRules: settings?.natural_language_rules || '',
+            persist: true
+          }
+        })
+      );
 
-      // Process batches with controlled concurrency (3 at a time)
-      const CONCURRENCY = 3;
-      for (let i = 0; i < batches.length; i += CONCURRENCY) {
-        const currentBatchGroup = batches.slice(i, i + CONCURRENCY);
-        
-        const results = await Promise.all(currentBatchGroup.map(async (batch) => {
-          const { data, error } = await supabase.functions.invoke('classify-tasks', {
-            body: {
-              tasks: batch.map(e => e.title),
-              movableKeywords: settings?.movable_keywords || [],
-              lockedKeywords: settings?.locked_keywords || [],
-              naturalLanguageRules: settings?.natural_language_rules || ''
-            }
-          });
-          if (error) throw error;
-          return { batch, classifications: data.classifications };
-        }));
+      // We await them here just to update the local UI if the user stays on the page
+      Promise.all(classificationPromises).then(results => {
+        const updatedEvents = [...events];
+        const newExplanations = { ...aiExplanations };
 
-        // Apply results from this group of parallel batches
-        results.forEach(({ batch, classifications }) => {
-          batch.forEach((event, idx) => {
-            const classification = classifications[idx];
-            const isMovable = typeof classification === 'boolean' ? classification : classification.isMovable;
-            const explanation = typeof classification === 'object' ? classification.explanation : '';
-            
-            const eventIdx = updatedEvents.findIndex(e => e.event_id === event.event_id);
-            if (eventIdx !== -1) {
-              updatedEvents[eventIdx].is_locked = !isMovable;
-              newExplanations[event.event_id] = explanation;
-            }
-          });
+        results.forEach((res, batchIdx) => {
+          if (res.data?.classifications) {
+            batches[batchIdx].forEach((event, idx) => {
+              const classification = res.data.classifications[idx];
+              const eventIdx = updatedEvents.findIndex(e => e.event_id === event.event_id);
+              if (eventIdx !== -1) {
+                updatedEvents[eventIdx].is_locked = !classification.isMovable;
+                newExplanations[event.event_id] = classification.explanation;
+              }
+            });
+          }
         });
 
-        // Update local state incrementally
-        setEvents([...updatedEvents]);
-        setAiExplanations({...newExplanations});
-        setStatusText(`Progress: ${Math.min(i + CONCURRENCY, batches.length)} / ${batches.length} streams complete...`);
-      }
+        setEvents(updatedEvents);
+        setAiExplanations(newExplanations);
+        setIsProcessing(false);
+        setStatusText('');
+        showSuccess("AI vetting is processing in the background!");
+      });
 
-      // Final bulk update to DB for all changes
-      const updates = updatedEvents.map(e => ({
-        event_id: e.event_id,
-        user_id: e.user_id,
-        is_locked: e.is_locked
-      }));
-
-      // Supabase upsert handles the bulk update efficiently
-      await supabase.from('calendar_events_cache').upsert(updates, { onConflict: 'user_id, event_id' });
-      
-      showSuccess("AI has vetted all tasks!");
     } catch (err: any) {
       showError("AI Vetting failed: " + err.message);
-    } finally {
       setIsProcessing(false);
-      setStatusText('');
     }
   };
 
@@ -207,71 +178,44 @@ const Vet = () => {
     setIsProcessing(true);
     setStatusText('Performing full system sync...');
     try {
-      const { error } = await supabase.rpc('full_reset_user_data');
-      if (error) throw error;
-      
+      await supabase.rpc('full_reset_user_data');
       const { data: { session } } = await supabase.auth.getSession();
       const { data: { user } } = await supabase.auth.getUser();
-      
       let token = session?.provider_token;
       if (!token && user) {
         const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
         token = profile?.google_access_token;
       }
-
       await Promise.allSettled([
         supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: token } }),
         supabase.functions.invoke('sync-apple-calendar')
       ]);
-
       const freshEvents = await fetchEvents();
-      if (freshEvents.length > 0) {
-        await runAIClassification(freshEvents);
-      }
-      showSuccess("Full sync and AI vetting complete!");
+      if (freshEvents.length > 0) await runAIClassification(freshEvents);
     } catch (err: any) {
       showError("Sync failed: " + err.message);
-    } finally {
       setIsProcessing(false);
-      setStatusText('');
     }
   };
 
   const toggleLock = async (eventId: string, currentStatus: boolean) => {
     try {
-      await supabase
-        .from('calendar_events_cache')
-        .update({ is_locked: !currentStatus })
-        .eq('event_id', eventId);
-      
+      await supabase.from('calendar_events_cache').update({ is_locked: !currentStatus }).eq('event_id', eventId);
       setEvents(events.map(e => e.event_id === eventId ? { ...e, is_locked: !currentStatus } : e));
-    } catch (err) {
-      showError("Failed to update status");
-    }
+    } catch (err) { showError("Failed to update status"); }
   };
 
   const bulkAction = async (action: 'lock_all' | 'unlock_all') => {
     const isLocked = action === 'lock_all';
     const targetIds = filteredEvents.map(e => e.event_id);
-    
     if (targetIds.length === 0) return;
-
     try {
       setIsProcessing(true);
-      const { error } = await supabase
-        .from('calendar_events_cache')
-        .update({ is_locked: isLocked })
-        .in('event_id', targetIds);
-
-      if (error) throw error;
-
+      await supabase.from('calendar_events_cache').update({ is_locked: isLocked }).in('event_id', targetIds);
       setEvents(events.map(e => targetIds.includes(e.event_id) ? { ...e, is_locked: isLocked } : e));
       showSuccess(`${isLocked ? 'Locked' : 'Unlocked'} ${targetIds.length} tasks`);
-    } catch (err) {
-      showError("Bulk action failed");
-    } finally {
-      setIsProcessing(false);
-    }
+    } catch (err) { showError("Bulk action failed"); }
+    finally { setIsProcessing(false); }
   };
 
   const filteredEvents = useMemo(() => {
@@ -279,22 +223,17 @@ const Vet = () => {
     return events
       .filter(e => {
         const eventDate = parseISO(e.start_time);
-        const isFutureOrToday = eventDate >= today;
-        const matchesSearch = e.title.toLowerCase().includes(searchQuery.toLowerCase());
-        const matchesLocked = e.is_locked ? showLocked : showUnlocked;
-        const matchesProvider = selectedProvider === 'all' || e.provider === selectedProvider;
-        return isFutureOrToday && matchesSearch && matchesLocked && matchesProvider;
+        return eventDate >= today && 
+               e.title.toLowerCase().includes(searchQuery.toLowerCase()) && 
+               (e.is_locked ? showLocked : showUnlocked) && 
+               (selectedProvider === 'all' || e.provider === selectedProvider);
       })
       .sort((a, b) => {
-        let comparison = 0;
-        if (sortBy === 'date') {
-          comparison = new Date(a.start_time).getTime() - new Date(b.start_time).getTime();
-        } else if (sortBy === 'title') {
-          comparison = a.title.localeCompare(b.title);
-        } else if (sortBy === 'status') {
-          comparison = (a.is_locked === b.is_locked) ? 0 : a.is_locked ? 1 : -1;
-        }
-        return sortOrder === 'asc' ? comparison : -comparison;
+        let comp = 0;
+        if (sortBy === 'date') comp = new Date(a.start_time).getTime() - new Date(b.start_time).getTime();
+        else if (sortBy === 'title') comp = a.title.localeCompare(b.title);
+        else if (sortBy === 'status') comp = (a.is_locked === b.is_locked) ? 0 : a.is_locked ? 1 : -1;
+        return sortOrder === 'asc' ? comp : -comp;
       });
   }, [events, searchQuery, showLocked, showUnlocked, sortBy, sortOrder, selectedProvider]);
 
@@ -311,12 +250,9 @@ const Vet = () => {
   const stats = useMemo(() => {
     const total = filteredEvents.length;
     const locked = filteredEvents.filter(e => e.is_locked).length;
-    const movable = total - locked;
-    const progress = total > 0 ? (movable / total) * 100 : 0;
-    return { total, locked, movable, progress };
+    const progress = total > 0 ? ((total - locked) / total) * 100 : 0;
+    return { total, locked, movable: total - locked, progress };
   }, [filteredEvents]);
-
-  const providers = Array.from(new Set(events.map(e => e.provider)));
 
   const getDateLabel = (dateStr: string) => {
     const date = parseISO(dateStr);
@@ -325,23 +261,13 @@ const Vet = () => {
     return format(date, 'EEEE, MMM do');
   };
 
-  const handleOpenTraining = (event: any) => {
-    setTrainingTask(event);
-    setIsTrainingModalOpen(true);
-  };
-
   return (
     <Layout>
       <div className="max-w-5xl mx-auto pb-24">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-6">
           <div className="space-y-1">
-            <button 
-              onClick={() => navigate('/plan')}
-              className="group flex items-center gap-2 text-gray-400 hover:text-indigo-600 font-black text-[10px] uppercase tracking-widest mb-4 transition-all"
-            >
-              <div className="w-6 h-6 rounded-full bg-gray-50 flex items-center justify-center group-hover:bg-indigo-50 transition-colors">
-                <ChevronLeft size={14} />
-              </div>
+            <button onClick={() => navigate('/plan')} className="group flex items-center gap-2 text-gray-400 hover:text-indigo-600 font-black text-[10px] uppercase tracking-widest mb-4 transition-all">
+              <div className="w-6 h-6 rounded-full bg-gray-50 flex items-center justify-center group-hover:bg-indigo-50 transition-colors"><ChevronLeft size={14} /></div>
               Back to Plan
             </button>
             <h1 className="text-4xl font-black text-gray-900 tracking-tight">Vet Your Tasks</h1>
@@ -349,32 +275,15 @@ const Vet = () => {
           </div>
           
           <div className="flex items-center gap-4 w-full md:w-auto">
-            <button
-              onClick={handleFullSync}
-              disabled={isProcessing}
-              title="Full Sync"
-              className={cn(
-                "w-14 h-14 rounded-full flex items-center justify-center transition-all shadow-xl hover:scale-110 active:scale-95 disabled:opacity-50 disabled:grayscale shrink-0",
-                "bg-gradient-to-tr from-red-500 via-yellow-400 via-green-400 via-blue-500 to-purple-600 text-white"
-              )}
-            >
+            <button onClick={handleFullSync} disabled={isProcessing} title="Full Sync" className={cn("w-14 h-14 rounded-full flex items-center justify-center transition-all shadow-xl hover:scale-110 active:scale-95 disabled:opacity-50 disabled:grayscale shrink-0 bg-gradient-to-tr from-red-500 via-yellow-400 via-green-400 via-blue-500 to-purple-600 text-white")}>
               <RefreshCw size={24} className={cn(isProcessing && "animate-spin")} />
             </button>
-
-            <Button 
-              variant="outline" 
-              onClick={() => runAIClassification()} 
-              disabled={isProcessing}
-              className="flex-1 md:flex-none rounded-2xl h-14 px-8 font-black text-xs uppercase tracking-widest border-indigo-100 text-indigo-600 hover:bg-indigo-50 shadow-sm transition-all hover:scale-[1.02] active:scale-[0.98] relative overflow-hidden group"
-            >
+            <Button variant="outline" onClick={() => runAIClassification()} disabled={isProcessing} className="flex-1 md:flex-none rounded-2xl h-14 px-8 font-black text-xs uppercase tracking-widest border-indigo-100 text-indigo-600 hover:bg-indigo-50 shadow-sm transition-all hover:scale-[1.02] active:scale-[0.98] relative overflow-hidden group">
               <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/10 to-purple-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
               {isProcessing ? <RefreshCw className="animate-spin mr-2" size={18} /> : <Sparkles className="mr-2 text-indigo-500 animate-pulse" size={18} />}
               AI Auto-Vet
             </Button>
-            <Button 
-              onClick={() => navigate('/plan')}
-              className="flex-1 md:flex-none bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl h-14 px-10 font-black text-xs uppercase tracking-widest shadow-xl shadow-indigo-100 transition-all hover:scale-[1.02] active:scale-[0.98]"
-            >
+            <Button onClick={() => navigate('/plan')} className="flex-1 md:flex-none bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl h-14 px-10 font-black text-xs uppercase tracking-widest shadow-xl shadow-indigo-100 transition-all hover:scale-[1.02] active:scale-[0.98]">
               <CheckCircle2 className="mr-2" size={18} /> Done
             </Button>
           </div>
@@ -389,96 +298,36 @@ const Vet = () => {
 
         <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm mb-8">
           <div className="flex justify-between items-end mb-3 px-2">
-            <div className="flex items-center gap-2">
-              <Zap size={14} className="text-indigo-600" />
-              <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Movable Ratio</span>
-            </div>
-            <span className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">
-              {Math.round(stats.progress)}% Flexible
-            </span>
+            <div className="flex items-center gap-2"><Zap size={14} className="text-indigo-600" /><span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Movable Ratio</span></div>
+            <span className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">{Math.round(stats.progress)}% Flexible</span>
           </div>
           <Progress value={stats.progress} className="h-2 bg-gray-50" />
-          <div className="flex justify-between mt-3 px-2 text-[9px] font-black uppercase tracking-widest text-gray-400">
-            <span>{stats.locked} Fixed</span>
-            <span>{stats.movable} Movable</span>
-          </div>
         </div>
 
         <div className="sticky top-4 z-50 bg-white/90 backdrop-blur-xl rounded-[2.5rem] border border-gray-100 shadow-xl overflow-hidden mb-10">
           <div className="p-4 flex flex-col lg:flex-row gap-4 justify-between items-center">
             <div className="relative w-full lg:w-96">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-              <Input 
-                placeholder="Search tasks..." 
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-12 h-12 rounded-2xl border-none bg-gray-50/50 font-bold text-sm focus:ring-indigo-500 transition-all"
-              />
+              <Input placeholder="Search tasks..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-12 h-12 rounded-2xl border-none bg-gray-50/50 font-bold text-sm focus:ring-indigo-500 transition-all" />
             </div>
-            
             <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-center lg:justify-end">
               <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-100">
-                <button 
-                  onClick={() => setShowLocked(!showLocked)}
-                  className={cn(
-                    "px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest",
-                    showLocked ? "bg-white text-red-500 shadow-sm" : "text-gray-400 hover:text-gray-600"
-                  )}
-                >
-                  {showLocked ? <Eye size={14} /> : <EyeOff size={14} />} Fixed
-                </button>
-                <button 
-                  onClick={() => setShowUnlocked(!showUnlocked)}
-                  className={cn(
-                    "px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest",
-                    showUnlocked ? "bg-white text-green-500 shadow-sm" : "text-gray-400 hover:text-gray-600"
-                  )}
-                >
-                  {showUnlocked ? <Eye size={14} /> : <EyeOff size={14} />} Movable
-                </button>
+                <button onClick={() => setShowLocked(!showLocked)} className={cn("px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest", showLocked ? "bg-white text-red-500 shadow-sm" : "text-gray-400 hover:text-gray-600")}>{showLocked ? <Eye size={14} /> : <EyeOff size={14} />} Fixed</button>
+                <button onClick={() => setShowUnlocked(!showUnlocked)} className={cn("px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest", showUnlocked ? "bg-white text-green-500 shadow-sm" : "text-gray-400 hover:text-gray-600")}>{showUnlocked ? <Eye size={14} /> : <EyeOff size={14} />} Movable</button>
               </div>
-
               <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="rounded-xl h-10 px-4 font-black text-[10px] uppercase tracking-widest border-gray-100 hover:bg-gray-50">
-                    <Filter size={14} className="mr-2" /> Sort
-                  </Button>
-                </DropdownMenuTrigger>
+                <DropdownMenuTrigger asChild><Button variant="outline" className="rounded-xl h-10 px-4 font-black text-[10px] uppercase tracking-widest border-gray-100 hover:bg-gray-50"><Filter size={14} className="mr-2" /> Sort</Button></DropdownMenuTrigger>
                 <DropdownMenuContent className="w-56 rounded-2xl p-2" align="end">
-                  <DropdownMenuLabel className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-2 py-1.5">Sort By</DropdownMenuLabel>
-                  <DropdownMenuItem onClick={() => setSortBy('date')} className="rounded-lg font-bold text-xs">
-                    <Calendar size={14} className="mr-2" /> Date
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setSortBy('title')} className="rounded-lg font-bold text-xs">
-                    <SortAsc size={14} className="mr-2" /> Title
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setSortBy('status')} className="rounded-lg font-bold text-xs">
-                    <Lock size={14} className="mr-2" /> Status
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuLabel className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-2 py-1.5">Order</DropdownMenuLabel>
-                  <DropdownMenuItem onClick={() => setSortOrder('asc')} className="rounded-lg font-bold text-xs">
-                    <SortAsc size={14} className="mr-2" /> Ascending
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setSortOrder('desc')} className="rounded-lg font-bold text-xs">
-                    <SortDesc size={14} className="mr-2" /> Descending
-                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setSortBy('date')} className="rounded-lg font-bold text-xs"><Calendar size={14} className="mr-2" /> Date</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setSortBy('title')} className="rounded-lg font-bold text-xs"><SortAsc size={14} className="mr-2" /> Title</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setSortBy('status')} className="rounded-lg font-bold text-xs"><Lock size={14} className="mr-2" /> Status</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-
               <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="rounded-xl h-10 px-4 font-black text-[10px] uppercase tracking-widest border-gray-100 hover:bg-gray-50">
-                    <Zap size={14} className="mr-2" /> Bulk
-                  </Button>
-                </DropdownMenuTrigger>
+                <DropdownMenuTrigger asChild><Button variant="outline" className="rounded-xl h-10 px-4 font-black text-[10px] uppercase tracking-widest border-gray-100 hover:bg-gray-50"><Zap size={14} className="mr-2" /> Bulk</Button></DropdownMenuTrigger>
                 <DropdownMenuContent className="w-48 rounded-2xl p-2" align="end">
-                  <DropdownMenuItem onClick={() => bulkAction('lock_all')} className="rounded-lg font-bold text-xs text-red-600">
-                    <Lock size={14} className="mr-2" /> Lock Visible
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => bulkAction('unlock_all')} className="rounded-lg font-bold text-xs text-green-600">
-                    <Unlock size={14} className="mr-2" /> Unlock Visible
-                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => bulkAction('lock_all')} className="rounded-lg font-bold text-xs text-red-600"><Lock size={14} className="mr-2" /> Lock Visible</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => bulkAction('unlock_all')} className="rounded-lg font-bold text-xs text-green-600"><Unlock size={14} className="mr-2" /> Unlock Visible</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
@@ -487,10 +336,7 @@ const Vet = () => {
 
         <div className="space-y-16">
           {loading ? (
-            <div className="p-20 text-center">
-              <RefreshCw className="animate-spin text-indigo-600 mx-auto mb-4" size={32} />
-              <p className="text-gray-400 font-bold">Loading your schedule...</p>
-            </div>
+            <div className="p-20 text-center"><RefreshCw className="animate-spin text-indigo-600 mx-auto mb-4" size={32} /><p className="text-gray-400 font-bold">Loading your schedule...</p></div>
           ) : Object.keys(groupedEvents).length > 0 ? (
             Object.keys(groupedEvents).sort().map(dateKey => (
               <div key={dateKey} className="space-y-6">
@@ -498,106 +344,42 @@ const Vet = () => {
                   <div className="flex items-center gap-4">
                     <div className="bg-white px-6 py-2 rounded-full shadow-sm border border-gray-100 flex items-center gap-3">
                       <Calendar size={14} className="text-indigo-600" />
-                      <h2 className="text-xs font-black text-gray-900 uppercase tracking-widest">
-                        {getDateLabel(dateKey)}
-                      </h2>
-                      <Badge variant="secondary" className="bg-indigo-50 text-indigo-600 border-none text-[9px] font-black px-2 py-0">
-                        {groupedEvents[dateKey].length}
-                      </Badge>
+                      <h2 className="text-xs font-black text-gray-900 uppercase tracking-widest">{getDateLabel(dateKey)}</h2>
+                      <Badge variant="secondary" className="bg-indigo-50 text-indigo-600 border-none text-[9px] font-black px-2 py-0">{groupedEvents[dateKey].length}</Badge>
                     </div>
                     <div className="h-px flex-1 bg-gray-200/50" />
                   </div>
                 </div>
-                
                 <div className="grid grid-cols-1 gap-4">
                   {groupedEvents[dateKey].map((event) => (
-                    <div key={event.event_id} className={cn(
-                      "px-6 py-4 rounded-[2rem] border transition-all duration-300 group flex flex-col gap-4 relative overflow-hidden hover:shadow-md",
-                      event.is_locked 
-                        ? "bg-white border-gray-100" 
-                        : "bg-indigo-50/40 border-indigo-100/50"
-                    )}>
-                      {event.is_work && (
-                        <div className="absolute -right-2 -bottom-2 opacity-[0.04] pointer-events-none rotate-12 group-hover:rotate-0 transition-transform duration-700">
-                          <Briefcase size={80} />
-                        </div>
-                      )}
-
+                    <div key={event.event_id} className={cn("px-6 py-4 rounded-[2rem] border transition-all duration-300 group flex flex-col gap-4 relative overflow-hidden hover:shadow-md", event.is_locked ? "bg-white border-gray-100" : "bg-indigo-50/40 border-indigo-100/50")}>
                       <div className="flex items-center justify-between relative z-10">
                         <div className="flex items-center gap-6 flex-1 min-w-0">
-                          <div className={cn(
-                            "w-14 h-14 rounded-[1.5rem] flex items-center justify-center shrink-0 transition-all duration-500 group-hover:rotate-6 shadow-sm",
-                            event.is_locked ? "bg-gray-50 text-gray-400" : "bg-white text-indigo-600"
-                          )}>
+                          <div className={cn("w-14 h-14 rounded-[1.5rem] flex items-center justify-center shrink-0 transition-all duration-500 group-hover:rotate-6 shadow-sm", event.is_locked ? "bg-gray-50 text-gray-400" : "bg-white text-indigo-600")}>
                             {event.is_locked ? <Lock size={22} /> : <Unlock size={22} />}
                           </div>
-                          
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-3 mb-2">
                               <h3 className="font-black text-lg text-gray-900 tracking-tight truncate">{event.title}</h3>
-                              {event.is_work && (
-                                <Badge variant="secondary" className="bg-slate-200/50 text-slate-600 text-[8px] font-black px-2 py-0.5 h-5 uppercase tracking-tighter border-none">
-                                  Work
-                                </Badge>
-                              )}
-                              <button 
-                                onClick={() => handleOpenTraining(event)}
-                                className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
-                                title="Train AI on this task"
-                              >
-                                <Brain size={14} />
-                              </button>
+                              <button onClick={() => { setTrainingTask(event); setIsTrainingModalOpen(true); }} className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100"><Brain size={14} /></button>
                             </div>
-                            
                             <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-                              <div className="flex items-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                <Clock size={14} className="text-indigo-400" />
-                                {format(parseISO(event.start_time), 'HH:mm')}
-                              </div>
-                              <div className="flex items-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                <Zap size={14} className="text-indigo-400" />
-                                {event.duration_minutes}m
-                              </div>
-                              <div className="flex items-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                <Globe size={14} className="text-indigo-400" />
-                                {event.source_calendar || event.provider}
-                              </div>
+                              <div className="flex items-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest"><Clock size={14} className="text-indigo-400" />{format(parseISO(event.start_time), 'HH:mm')}</div>
+                              <div className="flex items-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest"><Zap size={14} className="text-indigo-400" />{event.duration_minutes}m</div>
                             </div>
                           </div>
                         </div>
-                        
                         <div className="flex items-center gap-8 ml-6">
                           <ProviderLogo provider={event.provider} />
-                          
-                          <div className="hidden sm:flex flex-col items-end">
-                            <span className={cn(
-                              "text-[10px] font-black uppercase tracking-widest mb-1",
-                              event.is_locked ? "text-red-400" : "text-indigo-600"
-                            )}>
-                              {event.is_locked ? 'Fixed' : 'Movable'}
-                            </span>
-                            <div className="flex items-center gap-1 text-[8px] font-bold text-gray-300 uppercase tracking-tighter">
-                              <Info size={10} />
-                              Status
-                            </div>
-                          </div>
-                          <Switch 
-                            checked={!event.is_locked} 
-                            onCheckedChange={() => toggleLock(event.event_id, event.is_locked)} 
-                            className="data-[state=checked]:bg-indigo-600 scale-125 shadow-sm" 
-                          />
+                          <Switch checked={!event.is_locked} onCheckedChange={() => toggleLock(event.event_id, event.is_locked)} className="data-[state=checked]:bg-indigo-600 scale-125 shadow-sm" />
                         </div>
                       </div>
-
-                      {/* AI Reasoning Display */}
                       {aiExplanations[event.event_id] && (
                         <div className="mt-2 p-3 bg-white/50 rounded-xl border border-black/5 flex items-start gap-3 relative z-10 animate-in slide-in-from-top-1 duration-300">
                           <MessageSquare size={14} className="text-indigo-400 mt-0.5 shrink-0" />
                           <div className="space-y-0.5">
                             <p className="text-[8px] font-black uppercase tracking-widest text-gray-400">AI Reasoning</p>
-                            <p className="text-[11px] font-bold text-gray-600 leading-tight">
-                              {aiExplanations[event.event_id]}
-                            </p>
+                            <p className="text-[11px] font-bold text-gray-600 leading-tight">{aiExplanations[event.event_id]}</p>
                           </div>
                         </div>
                       )}
@@ -608,37 +390,13 @@ const Vet = () => {
             ))
           ) : (
             <div className="p-24 text-center bg-white rounded-[4rem] border border-dashed border-gray-200 shadow-inner">
-              <div className="w-24 h-24 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-8">
-                <Search className="text-gray-200" size={40} />
-              </div>
+              <div className="w-24 h-24 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-8"><Search className="text-gray-200" size={40} /></div>
               <h3 className="text-xl font-black text-gray-900 mb-2 tracking-tight">No tasks found</h3>
-              <p className="text-gray-400 font-medium max-w-xs mx-auto">Try adjusting your filters or search query to find what you're looking for.</p>
-              <Button variant="link" onClick={() => {
-                setSearchQuery('');
-                setShowLocked(true);
-                setShowUnlocked(true);
-                setSelectedProvider('all');
-              }} className="text-indigo-600 font-black text-xs uppercase tracking-widest mt-6 hover:no-underline hover:text-indigo-700">
-                Reset all filters
-              </Button>
             </div>
           )}
         </div>
       </div>
-
-      <TrainAIModal 
-        isOpen={isTrainingModalOpen}
-        onClose={() => setIsTrainingModalOpen(false)}
-        task={trainingTask}
-        onSuccess={(isMovable) => {
-          if (trainingTask) {
-            setEvents(prev => prev.map(e => 
-              e.event_id === trainingTask.event_id ? { ...e, is_locked: !isMovable } : e
-            ));
-          }
-          fetchEvents();
-        }}
-      />
+      <TrainAIModal isOpen={isTrainingModalOpen} onClose={() => setIsTrainingModalOpen(false)} task={trainingTask} onSuccess={() => fetchEvents()} />
     </Layout>
   );
 };
