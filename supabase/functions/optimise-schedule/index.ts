@@ -1,8 +1,19 @@
 // @ts-nocheck
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0'
-import { format, parseISO, addMinutes, isBefore, isAfter, startOfDay, endOfDay, differenceInMinutes } from 'https://esm.sh/date-fns@2.30.0'
-import { formatInTimeZone, zonedTimeToUtc } from 'https://esm.sh/date-fns-tz@2.0.0'
+import { 
+  format, 
+  parseISO, 
+  addMinutes, 
+  isBefore, 
+  isAfter, 
+  startOfDay, 
+  differenceInMinutes 
+} from 'https://esm.sh/date-fns@3.6.0'
+import { 
+  formatInTimeZone, 
+  zonedTimeToUtc 
+} from 'https://esm.sh/date-fns-tz@3.0.0?deps=date-fns@3.6.0'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -71,9 +82,13 @@ serve(async (req) => {
 
     // Iterate through each day for the next 14 days
     for (let d = 0; d < 14; d++) {
+      // Calculate the date for this iteration
       const currentDayDate = addMinutes(zonedTimeToUtc(`${todayStr}T00:00:00`, userTimezone), d * 24 * 60);
-      const dayOfWeek = (currentDayDate.getDay() + 6) % 7; // 0 = Monday
       
+      // Get day of week (0 = Sunday, 1 = Monday, etc.)
+      const dayOfWeek = currentDayDate.getDay();
+      
+      // Check if this day is allowed (selectedDays uses 0=Sun, 1=Mon format)
       if (!selectedDays.includes(dayOfWeek)) continue;
 
       const dayStr = formatInTimeZone(currentDayDate, userTimezone, 'yyyy-MM-dd');
