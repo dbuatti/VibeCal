@@ -12,8 +12,8 @@ import {
 } from 'https://esm.sh/date-fns@3.6.0'
 import { 
   formatInTimeZone, 
-  zonedTimeToUtc 
-} from 'https://esm.sh/date-fns-tz@3.0.0?deps=date-fns@3.6.0'
+  toDate 
+} from 'https://esm.sh/date-fns-tz@3.2.0?deps=date-fns@3.6.0'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -83,7 +83,7 @@ serve(async (req) => {
     // Iterate through each day for the next 14 days
     for (let d = 0; d < 14; d++) {
       // Calculate the date for this iteration
-      const currentDayDate = addMinutes(zonedTimeToUtc(`${todayStr}T00:00:00`, userTimezone), d * 24 * 60);
+      const currentDayDate = addMinutes(toDate(`${todayStr}T00:00:00`, { timeZone: userTimezone }), d * 24 * 60);
       
       // Get day of week (0 = Sunday, 1 = Monday, etc.)
       const dayOfWeek = currentDayDate.getDay();
@@ -94,8 +94,8 @@ serve(async (req) => {
       const dayStr = formatInTimeZone(currentDayDate, userTimezone, 'yyyy-MM-dd');
       
       // Create boundaries in UTC but based on user's local time
-      const dayStart = zonedTimeToUtc(`${dayStr}T${settings.day_start_time || '09:00'}:00`, userTimezone);
-      const dayEnd = zonedTimeToUtc(`${dayStr}T${settings.day_end_time || '17:00'}:00`, userTimezone);
+      const dayStart = toDate(`${dayStr}T${settings.day_start_time || '09:00'}:00`, { timeZone: userTimezone });
+      const dayEnd = toDate(`${dayStr}T${settings.day_end_time || '17:00'}:00`, { timeZone: userTimezone });
       
       const dayFixedEvents = fixedEvents.filter(e => {
         const start = parseISO(e.start_time);
@@ -122,7 +122,6 @@ serve(async (req) => {
 
       let currentTime = dayStart;
       
-      // CRITICAL FIX: Ensure maxDailyMinutes is a valid number
       const rawMaxHours = maxHoursOverride !== undefined && maxHoursOverride !== null ? maxHoursOverride : settings.max_hours_per_day;
       const maxDailyMinutes = (Number(rawMaxHours) || 6) * 60;
       
@@ -131,17 +130,14 @@ serve(async (req) => {
 
       // Try to fit movable events into slots
       while (currentTime < dayEnd && currentMovableIdx < movableEvents.length) {
-        // Check if we've hit limits
         if (dailyWorkMinutes >= maxDailyMinutes || dailyTaskCount >= maxDailyTasks) break;
 
         const event = movableEvents[currentMovableIdx];
         const duration = durationOverride === "original" || !durationOverride ? (event.duration_minutes || 30) : parseInt(durationOverride);
 
-        // Find next available slot
         let slotStart = currentTime;
         let slotEnd = addMinutes(slotStart, duration);
 
-        // Check for collisions with fixed events
         const collision = dayFixedEvents.find(f => {
           const fStart = parseISO(f.start_time);
           const fEnd = parseISO(f.end_time);
@@ -150,7 +146,6 @@ serve(async (req) => {
 
         if (collision) {
           currentTime = parseISO(collision.end_time);
-          // Align to slot
           const minutes = currentTime.getMinutes();
           const alignment = parseInt(slotAlignment) || 15;
           const remainder = minutes % alignment;
@@ -160,7 +155,6 @@ serve(async (req) => {
           continue;
         }
 
-        // If slot is within day boundaries
         if (isBefore(slotEnd, dayEnd) || slotEnd.getTime() === dayEnd.getTime()) {
           proposedChanges.push({
             event_id: event.event_id,
@@ -179,13 +173,11 @@ serve(async (req) => {
           currentMovableIdx++;
           currentTime = slotEnd;
         } else {
-          // No more room today
           break;
         }
       }
     }
 
-    // Mark remaining movable events as surplus
     for (let i = currentMovableIdx; i < movableEvents.length; i++) {
       const event = movableEvents[i];
       proposedChanges.push({

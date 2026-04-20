@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
-import { zonedTimeToUtc } from 'https://esm.sh/date-fns-tz@3.0.0'
+import { toDate } from 'https://esm.sh/date-fns-tz@3.2.0?deps=date-fns@3.6.0'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -186,8 +186,8 @@ Deno.serve(async (req) => {
                 return new Date(dateStr + 'Z').toISOString();
               }
               
-              // If no 'Z', it's local time. Convert to UTC using user's timezone.
-              return zonedTimeToUtc(dateStr, tz).toISOString();
+              // Use toDate from date-fns-tz v3.x to correctly anchor naive time to user's timezone
+              return toDate(dateStr, { timeZone: tz }).toISOString();
             };
 
             try {
