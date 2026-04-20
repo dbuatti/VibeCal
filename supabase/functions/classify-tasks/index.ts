@@ -28,7 +28,8 @@ function isSemanticMatch(title: string, pattern: string) {
   return false;
 }
 
-const HARD_FIXED_PATTERNS = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|clinic|surgery|medical|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary|appointment|appt|interview|vs|meeting with|call with|zoom|teams|google meet|skype|facetime|session with|coaching|lesson|rehearsal|audition|workshop|seminar|webinar|conference|travel to|commute|drive to|dentist|physio|therapy|vet|haircut|dinner with|lunch with|brunch with|coffee with/i;
+// Added 'statement' and 'foundations' to fixed patterns based on user feedback
+const HARD_FIXED_PATTERNS = /flight|train|hotel|reservation|doctor|dentist|hospital|clinic|surgery|medical|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary|appointment|appt|interview|vs|meeting with|call with|zoom|teams|google meet|skype|facetime|session with|coaching|lesson|rehearsal|audition|workshop|seminar|webinar|conference|travel to|commute|drive to|dentist|physio|therapy|vet|haircut|dinner with|lunch with|brunch with|coffee with|statement|foundations|q & a/i;
 
 const HARD_MOVABLE_PATTERNS = /solo|draft|research|tidy|clean|practice|read|study|admin|email|gym|workout|run|walk|meditate|yoga|journal|laundry|groceries|shopping|vacuum|mop|dust|organize|filing|backup|update|coding|programming|writing|blog|post|social media/i;
 
@@ -63,7 +64,7 @@ serve(async (req) => {
     const results = taskList.map(title => {
       const t = title.toLowerCase();
 
-      // A. Check manual feedback first
+      // A. Check manual feedback first (This is the "Memory" that ensures it remembers your choices)
       const match = sortedFeedback.find(f => isSemanticMatch(title, f.task_name));
       if (match) {
         return { 
@@ -102,6 +103,9 @@ serve(async (req) => {
       const tasksForAI = indicesToAI.map(i => taskList[i]);
       
       try {
+        const geminiKey = Deno.env.get('GEMINI_API_KEY');
+        if (!geminiKey) throw new Error("Missing Gemini API Key");
+
         const prompt = `
           You are an elite executive assistant. Classify these calendar tasks with high precision.
           
@@ -119,7 +123,6 @@ serve(async (req) => {
           { "isMovable": boolean, "explanation": string, "confidence": number, "dependsOn": string | null }
         `;
 
-        const geminiKey = Deno.env.get('GEMINI_API_KEY');
         const genAI = new GoogleGenerativeAI(geminiKey);
         const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
         
@@ -135,6 +138,7 @@ serve(async (req) => {
           });
         }
       } catch (aiError) {
+        console.warn(`[${functionName}] Quota Exceeded or AI Error. Switching to Local Power-Saving Mode.`, aiError.message);
         isLocalMode = true;
         indicesToAI.forEach(idx => {
           const title = taskList[idx].toLowerCase();

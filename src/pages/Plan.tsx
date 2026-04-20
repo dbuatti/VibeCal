@@ -124,7 +124,7 @@ const Plan = () => {
         ];
 
         const results = await Promise.allSettled(syncPromises);
-        setProgress(70);
+        setProgress(60);
         
         const googleResult = results[0];
         if (googleResult.status === 'fulfilled') {
@@ -144,21 +144,44 @@ const Plan = () => {
         setProgress(50);
       }
       
-      setStatusText('Updating local view...');
-      setProgress(90);
+      setStatusText('AI is vetting your schedule...');
+      setProgress(75);
+      
       const { data: { user } } = await supabase.auth.getUser();
       const { data: fetchedEvents } = await supabase
         .from('calendar_events_cache')
         .select('*')
         .eq('user_id', user?.id)
         .order('start_time', { ascending: true });
+
+      if (fetchedEvents && fetchedEvents.length > 0) {
+        const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, natural_language_rules').single();
+        await supabase.functions.invoke('classify-tasks', {
+          body: {
+            events: fetchedEvents.map(e => ({ event_id: e.event_id, title: e.title })),
+            movableKeywords: settings?.movable_keywords || [],
+            lockedKeywords: settings?.locked_keywords || [],
+            naturalLanguageRules: settings?.natural_language_rules || '',
+            persist: true
+          }
+        });
+      }
         
-      setEvents(fetchedEvents || []);
+      setStatusText('Updating local view...');
+      setProgress(95);
+      
+      const { data: finalEvents } = await supabase
+        .from('calendar_events_cache')
+        .select('*')
+        .eq('user_id', user?.id)
+        .order('start_time', { ascending: true });
+        
+      setEvents(finalEvents || []);
       setProgress(100);
       
       setTimeout(() => {
         if (forceVetRedirect || currentStep !== 'active_plan') {
-          if (fetchedEvents && fetchedEvents.length > 0) navigate('/vet');
+          if (finalEvents && finalEvents.length > 0) navigate('/vet');
           else setCurrentStep('initial');
         }
         setIsProcessing(false);
