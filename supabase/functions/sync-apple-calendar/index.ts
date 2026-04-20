@@ -16,6 +16,9 @@ Deno.serve(async (req) => {
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
+    const body = await req.json().catch(() => ({}));
+    const { timeMin: customMin, timeMax: customMax } = body;
+
     // 1. Get User
     const userRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
       headers: { 'Authorization': authHeader, 'apikey': Deno.env.get('SUPABASE_ANON_KEY') }
@@ -23,7 +26,7 @@ Deno.serve(async (req) => {
     const user = await userRes.json();
     if (!user?.id) throw new Error("Unauthorized");
 
-    // 2. Get Apple Credentials and Timezone
+    // 2. Get Apple Credentials
     const profileRes = await fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${user.id}&select=apple_id,apple_app_password,timezone`, {
       headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
     });
@@ -32,7 +35,6 @@ Deno.serve(async (req) => {
     const userTimezone = profile?.timezone || 'Australia/Melbourne';
     
     if (!profile?.apple_id || !profile?.apple_app_password) {
-      console.log(`[${functionName}] No Apple credentials found for user ${user.id}`);
       return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
     }
 
@@ -51,7 +53,7 @@ Deno.serve(async (req) => {
       return xml.match(regex)?.[1];
     };
 
-    // 3. Discover Principal
+    // 3. Discover Principal & Home Set
     const principalRes = await fetch(`${baseUrl}/`, { 
       method: 'PROPFIND', 
       headers: { ...headers, 'Depth': '0' }, 
@@ -66,7 +68,6 @@ Deno.serve(async (req) => {
     if (!principalPath) throw new Error("Could not find iCloud principal path.");
     const principalUrl = principalPath.startsWith('http') ? principalPath : `${baseUrl}${principalPath}`;
 
-    // 4. Discover Home Set
     const homeRes = await fetch(principalUrl, {
       method: 'PROPFIND',
       headers: { ...headers, 'Depth': '0' },
@@ -81,7 +82,7 @@ Deno.serve(async (req) => {
     }
     const homeUrl = homePath.startsWith('http') ? homePath : `${baseUrl}${homePath}`;
 
-    // 5. Discover Calendars
+    // 4. Discover Calendars
     const calsRes = await fetch(homeUrl, {
       method: 'PROPFIND',
       headers: { ...headers, 'Depth': '1' },
@@ -104,7 +105,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    // 6. Sync Calendar List
+    // 5. Sync Calendar List
     const existingCalsRes = await fetch(`${supabaseUrl}/rest/v1/user_calendars?user_id=eq.${user.id}&provider=eq.apple`, {
       headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
     });
@@ -127,17 +128,16 @@ Deno.serve(async (req) => {
       });
     }
 
-    // 7. Fetch Events
+    // 6. Fetch Events with custom range support
     const enabledCalendars = calendarsToUpsert.filter(c => c.is_enabled);
-    const disabledCalendarIds = calendarsToUpsert.filter(c => !c.is_enabled).map(c => c.calendar_id);
-    
     const allEvents = [];
-    const now = new Date();
-    const startRange = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-    const endRange = new Date(now.getTime() + 180 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    
+    const startRange = customMin ? new Date(customMin).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z' : 
+                      new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    const endRange = customMax ? new Date(customMax).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z' : 
+                    new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
     for (const cal of enabledCalendars) {
-      console.log(`[${functionName}] Fetching: ${cal.calendar_name}`);
       try {
         const reportRes = await fetch(cal.calendar_id, {
           method: 'REPORT',
@@ -159,11 +159,8 @@ Deno.serve(async (req) => {
         const icsBlocks = reportText.match(/<[^>]*calendar-data[^>]*>([\s\S]*?)<\/[^>]*calendar-data>/gi) || [];
         
         for (let i = 0; i < icsBlocks.length; i++) {
-          let icsData = icsBlocks[i];
-          icsData = icsData.replace(/^<[^>]*calendar-data[^>]*>/i, '').replace(/<\/[^>]*calendar-data>$/i, '');
-          if (icsData.includes('<![CDATA[')) {
-            icsData = icsData.match(/<!\[CDATA\[([\s\S]*?)\]\]>/i)?.[1] || icsData;
-          }
+          let icsData = icsBlocks[i].replace(/^<[^>]*calendar-data[^>]*>/i, '').replace(/<\/[^>]*calendar-data>$/i, '');
+          if (icsData.includes('<![CDATA[')) icsData = icsData.match(/<!\[CDATA\[([\s\S]*?)\]\]>/i)?.[1] || icsData;
 
           const unfolded = icsData.replace(/\r\n\s/g, '');
           const summaryMatch = unfolded.match(/SUMMARY:(.*)/i);
@@ -171,66 +168,34 @@ Deno.serve(async (req) => {
           const startMatch = unfolded.match(/DTSTART(?:;TZID=[^:]+)?[:](\d{8}T\d{6}Z?)/i);
           const endMatch = unfolded.match(/DTEND(?:;TZID=[^:]+)?[:](\d{8}T\d{6}Z?)/i);
 
-          const summary = summaryMatch?.[1]?.trim() || 'Untitled';
-          const uid = uidMatch?.[1]?.trim();
-          const dtstart = startMatch?.[1]?.trim();
-          const dtend = endMatch?.[1]?.trim();
-
-          if (uid && dtstart && dtend) {
+          if (uidMatch?.[1] && startMatch?.[1] && endMatch?.[1]) {
             const parseIcalDate = (str, tz) => {
               const y = str.substring(0, 4), m = str.substring(4, 6), d = str.substring(6, 8);
               const h = str.substring(9, 11), min = str.substring(11, 13), s = str.substring(13, 15);
               const dateStr = `${y}-${m}-${d}T${h}:${min}:${s}`;
-              
-              if (str.endsWith('Z')) {
-                return new Date(dateStr + 'Z').toISOString();
-              }
-              
-              // Use toDate from date-fns-tz v3.x to correctly anchor naive time to user's timezone
-              return toDate(dateStr, { timeZone: tz }).toISOString();
+              return str.endsWith('Z') ? new Date(dateStr + 'Z').toISOString() : toDate(dateStr, { timeZone: tz }).toISOString();
             };
 
-            try {
-              allEvents.push({
-                user_id: user.id,
-                event_id: uid,
-                title: summary,
-                start_time: parseIcalDate(dtstart, userTimezone),
-                end_time: parseIcalDate(dtend, userTimezone),
-                provider: 'apple',
-                source_calendar: cal.calendar_name,
-                source_calendar_id: cal.calendar_id,
-                last_synced_at: new Date().toISOString()
-              });
-            } catch (e) {
-              console.error(`[${functionName}] Parsing Error for ${summary}: ${e.message}`);
-            }
+            allEvents.push({
+              user_id: user.id,
+              event_id: uidMatch[1].trim(),
+              title: summaryMatch?.[1]?.trim() || 'Untitled',
+              start_time: parseIcalDate(startMatch[1].trim(), userTimezone),
+              end_time: parseIcalDate(endMatch[1].trim(), userTimezone),
+              provider: 'apple',
+              source_calendar: cal.calendar_name,
+              source_calendar_id: cal.calendar_id,
+              last_synced_at: new Date().toISOString()
+            });
           }
         }
-      } catch (err) {
-        console.error(`[${functionName}] Error in ${cal.calendar_name}:`, err.message);
-      }
-    }
-
-    // 8. Cleanup and Upsert
-    if (disabledCalendarIds.length > 0) {
-      for (const calId of disabledCalendarIds) {
-        await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&source_calendar_id=eq.${encodeURIComponent(calId)}`, {
-          method: 'DELETE',
-          headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
-        });
-      }
+      } catch (err) { console.error(`[${functionName}] Error in ${cal.calendar_name}:`, err.message); }
     }
 
     if (allEvents.length > 0) {
-      const upsertRes = await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
+      await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
         method: 'POST',
-        headers: { 
-          'apikey': supabaseKey, 
-          'Authorization': `Bearer ${supabaseKey}`, 
-          'Content-Type': 'application/json', 
-          'Prefer': 'resolution=merge-duplicates' 
-        },
+        headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}`, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' },
         body: JSON.stringify(allEvents)
       });
     }
@@ -239,7 +204,6 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
   } catch (error) {
-    console.error(`[${functionName}] Fatal Error:`, error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })

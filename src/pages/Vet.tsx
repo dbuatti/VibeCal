@@ -19,15 +19,17 @@ import {
   MessageSquare,
   Clock,
   Globe,
-  ShieldAlert
+  ShieldAlert,
+  Send,
+  Wand2
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { format, parseISO, startOfDay, isAfter } from 'date-fns';
-import { formatInTimeZone } from 'date-fns-tz';
+import { format, parseISO, startOfDay, endOfDay } from 'date-fns';
+import { formatInTimeZone, toDate } from 'date-fns-tz';
 import { cn } from '@/lib/utils';
 import TrainAIModal from '@/components/TrainAIModal';
 
@@ -148,6 +150,97 @@ const Vet = () => {
     } finally {
       setIsProcessing(false);
       setStatusText('');
+    }
+  };
+
+  const handlePushSyncDay = async (dateKey: string, dayEvents: any[]) => {
+    setIsProcessing(true);
+    setStatusText(`Pushing ${dayEvents.length} events to providers...`);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { user } } = await supabase.auth.getUser();
+      let token = session?.provider_token;
+      if (!token && user) {
+        const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
+        token = profile?.google_access_token;
+      }
+
+      for (const event of dayEvents) {
+        await supabase.functions.invoke('push-to-provider', {
+          body: { 
+            eventId: event.event_id, 
+            provider: event.provider, 
+            calendarId: event.source_calendar_id, 
+            startTime: event.start_time, 
+            endTime: event.end_time, 
+            googleAccessToken: token 
+          }
+        });
+      }
+      showSuccess(`Day synced to external calendars!`);
+    } catch (err: any) {
+      showError("Push sync failed: " + err.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleRefreshDay = async (dateKey: string) => {
+    setIsProcessing(true);
+    setStatusText(`Refreshing ${dateKey}...`);
+    try {
+      const start = toDate(`${dateKey}T00:00:00`, { timeZone: timezone }).toISOString();
+      const end = toDate(`${dateKey}T23:59:59`, { timeZone: timezone }).toISOString();
+      
+      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { user } } = await supabase.auth.getUser();
+      let token = session?.provider_token;
+      if (!token && user) {
+        const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
+        token = profile?.google_access_token;
+      }
+
+      await Promise.allSettled([
+        supabase.functions.invoke('sync-calendar', { body: { timeMin: start, timeMax: end, googleAccessToken: token } }),
+        supabase.functions.invoke('sync-apple-calendar', { body: { timeMin: start, timeMax: end } })
+      ]);
+
+      await fetchEvents();
+      showSuccess(`Refreshed events for ${dateKey}`);
+    } catch (err: any) {
+      showError("Refresh failed: " + err.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleRePlanDay = async (dateKey: string) => {
+    setIsProcessing(true);
+    setStatusText(`Re-planning ${dateKey}...`);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data, error } = await supabase.functions.invoke('optimise-schedule', {
+        body: { targetDate: dateKey }
+      });
+
+      if (error) throw error;
+
+      // Save to history
+      await supabase.from('optimisation_history').insert({
+        user_id: user.id,
+        proposed_changes: data.changes,
+        status: 'proposed',
+        metadata: { targetDate: dateKey, isSingleDay: true }
+      });
+
+      showSuccess(`New plan generated for ${dateKey}!`);
+      navigate('/plan');
+    } catch (err: any) {
+      showError("Re-plan failed: " + err.message);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -346,7 +439,6 @@ const Vet = () => {
             </div>
             
             <div className="flex flex-wrap items-center justify-center gap-3">
-              {/* Status Filter */}
               <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-100">
                 <button onClick={() => setShowLocked(!showLocked)} className={cn("px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-[9px] font-black uppercase tracking-widest", showLocked ? "bg-white text-red-500 shadow-sm" : "text-gray-400")}>
                   <Lock size={12} /> Fixed
@@ -356,7 +448,6 @@ const Vet = () => {
                 </button>
               </div>
 
-              {/* Provider Filter */}
               <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-100">
                 <button onClick={() => setShowGoogle(!showGoogle)} className={cn("px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-[9px] font-black uppercase tracking-widest", showGoogle ? "bg-white text-indigo-600 shadow-sm" : "text-gray-400")}>
                   <ProviderIcon provider="google" /> Google
@@ -381,9 +472,40 @@ const Vet = () => {
             </div>
           ) : Object.keys(groupedEvents).sort().map(dateKey => (
             <div key={dateKey} className="space-y-6">
-              <h2 className="text-xs font-black text-gray-400 uppercase tracking-widest px-4">
-                {formatInTimeZone(parseISO(dateKey), timezone, 'EEEE, MMM do')}
-              </h2>
+              <div className="flex items-center justify-between px-4">
+                <h2 className="text-xs font-black text-gray-400 uppercase tracking-widest">
+                  {formatInTimeZone(parseISO(dateKey), timezone, 'EEEE, MMM do')}
+                </h2>
+                
+                {/* Per-Day Action Group */}
+                <div className="flex items-center gap-2 bg-gray-50/50 p-1 rounded-xl border border-gray-100">
+                  <button 
+                    onClick={() => handlePushSyncDay(dateKey, groupedEvents[dateKey])}
+                    disabled={isProcessing}
+                    className="p-2 rounded-lg hover:bg-white hover:text-indigo-600 text-gray-400 transition-all hover:shadow-sm"
+                    title="Push Sync: Update external calendars"
+                  >
+                    <Send size={14} />
+                  </button>
+                  <button 
+                    onClick={() => handleRefreshDay(dateKey)}
+                    disabled={isProcessing}
+                    className="p-2 rounded-lg hover:bg-white hover:text-indigo-600 text-gray-400 transition-all hover:shadow-sm"
+                    title="Refresh Day: Re-fetch from providers"
+                  >
+                    <RefreshCw size={14} className={cn(isProcessing && statusText.includes(dateKey) && "animate-spin")} />
+                  </button>
+                  <button 
+                    onClick={() => handleRePlanDay(dateKey)}
+                    disabled={isProcessing}
+                    className="p-2 rounded-lg hover:bg-white hover:text-indigo-600 text-gray-400 transition-all hover:shadow-sm"
+                    title="Re-Plan Day: Generate new slots"
+                  >
+                    <Wand2 size={14} />
+                  </button>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 gap-3">
                 {groupedEvents[dateKey].map((event) => {
                   const metadata = aiMetadata[event.event_id];
@@ -397,12 +519,15 @@ const Vet = () => {
                     )}>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-5 flex-1 min-w-0">
-                          <div className={cn(
-                            "w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-all", 
-                            event.is_locked ? "bg-gray-50 text-gray-400" : "bg-white text-indigo-600 shadow-md"
-                          )}>
+                          <button 
+                            onClick={() => toggleLock(event)}
+                            className={cn(
+                              "w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-all", 
+                              event.is_locked ? "bg-gray-50 text-gray-400" : "bg-white text-indigo-600 shadow-md"
+                            )}
+                          >
                             {event.is_locked ? <Lock size={20} /> : <Unlock size={20} />}
-                          </div>
+                          </button>
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2 mb-1">
                               <h3 className={cn("font-black text-lg tracking-tight truncate", event.is_locked ? "text-gray-500" : "text-gray-900")}>
