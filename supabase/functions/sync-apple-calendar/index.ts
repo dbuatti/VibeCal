@@ -142,7 +142,6 @@ serve(async (req) => {
     const lockedKeywords = settings?.locked_keywords || [];
     const workKeywords = settings?.work_keywords || ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session', 'work session'];
     
-    // Hard-coded "Hard" events that should always be locked
     const hardFixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
 
     const interpretToUtc = (icalTime, timeZone) => {
@@ -158,7 +157,15 @@ serve(async (req) => {
         return new Date(Date.UTC(y, m - 1, d, h, min, sec)).toISOString();
       }
 
-      // Floating time: Treat as local in the user's timezone
+      // USER OVERRIDE: If user is in Melbourne, force GMT+10 for floating times
+      if (timeZone === 'Australia/Melbourne' || timeZone === 'AEST' || timeZone === 'AEDT') {
+        console.log(`[${functionName}] Forcing GMT+10 for Melbourne floating time: ${y}-${m}-${d} ${h}:${min}`);
+        const date = new Date(Date.UTC(y, m - 1, d, h, min, sec));
+        date.setUTCHours(date.getUTCHours() - 10); // Force GMT+10 offset
+        return date.toISOString();
+      }
+
+      // Fallback for other timezones
       try {
         const formatter = new Intl.DateTimeFormat('en-US', {
           timeZone,
@@ -214,8 +221,6 @@ serve(async (req) => {
             const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
             const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
             
-            // Logic: Lock if explicitly locked OR (not explicitly movable AND matches hard fixed keywords)
-            // We removed the generic "appointment" check to avoid locking everything
             let isLocked = isExplicitlyLocked;
             let lockReason = isExplicitlyLocked ? "Explicit Keyword" : "Default Movable";
 
