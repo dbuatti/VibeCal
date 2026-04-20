@@ -165,6 +165,7 @@ serve(async (req) => {
           const stats = dailyStats.get(dayKey);
           
           if (stats.tasks >= maxTasks || stats.hours >= maxWorkHours) {
+            if (dayOffset === 0) console.log(`[${functionName}] Today (${dayKey}) is FULL: ${stats.tasks}/${maxTasks} tasks, ${stats.hours.toFixed(1)}/${maxWorkHours}h`);
             dayOffset++;
             continue;
           }
@@ -178,7 +179,7 @@ serve(async (req) => {
               const nowAligned = alignTime(new Date(), slotAlignment);
               if (nowAligned > initialPointer) {
                 initialPointer = nowAligned;
-                console.log(`[${functionName}] Today's search starting late at ${formatInTimeZone(initialPointer, userTimezone, 'HH:mm')}`);
+                console.log(`[${functionName}] Today's search starting at ${formatInTimeZone(initialPointer, userTimezone, 'HH:mm')} (Current Load: ${stats.tasks} tasks)`);
               }
             }
             stats.lastPointer = initialPointer;
@@ -191,7 +192,7 @@ serve(async (req) => {
             const taskWorkHours = event.is_work ? (effectiveDuration / 60) : 0;
             
             if (potentialEnd > dayEnd) {
-              console.log(`[${functionName}] Task "${event.title}" (${effectiveDuration}m) rejected for ${dayKey}: Ends at ${formatInTimeZone(potentialEnd, userTimezone, 'HH:mm')}, which is after window end (${settings.day_end_time})`);
+              if (dayOffset === 0) console.log(`[${functionName}] Task "${event.title}" (${effectiveDuration}m) too long for today: Ends at ${formatInTimeZone(potentialEnd, userTimezone, 'HH:mm')}, window ends at ${settings.day_end_time}`);
               break;
             }
             if ((stats.hours + taskWorkHours) > maxWorkHours) break;
