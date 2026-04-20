@@ -54,7 +54,7 @@ serve(async (req) => {
     const dayThemes = themesRes.data || [];
     const workKeywords = settings.work_keywords || [];
 
-    // Calculate local midnight in user's timezone
+    // Calculate local midnight in user's timezone (Melbourne)
     const now = new Date();
     const formatter = new Intl.DateTimeFormat('en-US', { 
       timeZone: userTimezone, 
@@ -62,14 +62,17 @@ serve(async (req) => {
       hour: '2-digit', minute: '2-digit', second: '2-digit', 
       hour12: false 
     });
-    const parts = formatter.formatToParts(now);
-    const p = {};
-    parts.forEach(part => p[part.type] = part.value);
     
+    const getLocalParts = (date) => {
+      const parts = formatter.formatToParts(date);
+      const p = {};
+      parts.forEach(part => p[part.type] = part.value);
+      return p;
+    };
+
+    const p = getLocalParts(now);
     const localMidnight = new Date(Date.UTC(parseInt(p.year), parseInt(p.month) - 1, parseInt(p.day), 0, 0, 0));
-    const midnightParts = formatter.formatToParts(localMidnight);
-    const mp = {};
-    midnightParts.forEach(part => mp[part.type] = part.value);
+    const mp = getLocalParts(localMidnight);
     
     const formattedMidnight = new Date(Date.UTC(
       parseInt(mp.year), parseInt(mp.month) - 1, parseInt(mp.day), 
@@ -77,6 +80,8 @@ serve(async (req) => {
     ));
     const offsetMs = formattedMidnight.getTime() - localMidnight.getTime();
     const utcTodayStart = new Date(localMidnight.getTime() - offsetMs);
+
+    console.log(`[${functionName}] Timezone: ${userTimezone} | UTC Today Start: ${utcTodayStart.toISOString()}`);
 
     const currentEvents = allEvents.filter(e => new Date(e.start_time) >= utcTodayStart);
     const fixedEvents = currentEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
@@ -132,7 +137,7 @@ serve(async (req) => {
     };
 
     fixedEvents.forEach(f => {
-      const dayKey = new Date(f.start_time).toISOString().split('T')[0];
+      const dayKey = new Intl.DateTimeFormat('en-CA', { timeZone: userTimezone }).format(new Date(f.start_time));
       const isWork = workKeywords.some(kw => f.title.toLowerCase().includes(kw.toLowerCase()));
       if (isWork) {
         if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
@@ -153,11 +158,11 @@ serve(async (req) => {
         
         let dayOffset = 0;
         while (!foundSlot && dayOffset <= 14) {
-          let currentDay = new Date(utcTodayStart);
-          currentDay.setUTCDate(currentDay.getUTCDate() + dayOffset);
+          let currentDayStart = new Date(utcTodayStart);
+          currentDayStart.setUTCDate(currentDayStart.getUTCDate() + dayOffset);
           
-          const dayKey = currentDay.toISOString().split('T')[0];
-          const dayOfWeek = (currentDay.getUTCDay());
+          const dayKey = new Intl.DateTimeFormat('en-CA', { timeZone: userTimezone }).format(currentDayStart);
+          const dayOfWeek = (new Date(currentDayStart.getTime() + offsetMs).getUTCDay());
           const dayTheme = dayThemes.find(t => t.day_of_week === dayOfWeek)?.theme || "General";
           
           if (!selectedDays.includes(dayOfWeek)) { dayOffset++; continue; }
@@ -170,13 +175,13 @@ serve(async (req) => {
           const stats = dailyStats.get(dayKey);
           
           if (!stats.lastPointer) {
-            const dayStart = new Date(currentDay);
+            const dayStart = new Date(currentDayStart);
             dayStart.setUTCHours(startH, startM, 0, 0);
             stats.lastPointer = alignTime(dayStart, slotAlignment);
           }
 
           let searchPointer = new Date(stats.lastPointer);
-          const dayEnd = new Date(currentDay);
+          const dayEnd = new Date(currentDayStart);
           dayEnd.setUTCHours(endH, endM, 0, 0);
 
           while (searchPointer < dayEnd && !foundSlot) {

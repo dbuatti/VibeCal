@@ -1,7 +1,8 @@
 "use client";
 
 import React from 'react';
-import { format, parseISO } from 'date-fns';
+import { parseISO } from 'date-fns';
+import { formatInTimeZone } from 'date-fns-tz';
 import { cn } from '@/lib/utils';
 import VisualEvent from './VisualEvent';
 
@@ -11,6 +12,7 @@ interface VisualScheduleProps {
   appliedChanges: string[];
   isVetted?: boolean;
   workKeywords?: string[];
+  timezone?: string;
 }
 
 const VisualSchedule = ({ 
@@ -18,7 +20,8 @@ const VisualSchedule = ({
   changes = [], 
   appliedChanges = [], 
   isVetted = false,
-  workKeywords = ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt']
+  workKeywords = ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt'],
+  timezone = 'Australia/Melbourne'
 }: VisualScheduleProps) => {
   
   const isWorkEvent = (event: any) => {
@@ -42,7 +45,8 @@ const VisualSchedule = ({
   const days = allVisualEvents.reduce((acc: any, event) => {
     if (!event.start_time) return acc;
     try {
-      const dayKey = format(parseISO(event.start_time), 'yyyy-MM-dd');
+      // CRITICAL: Group by the date in Melbourne, not the browser's local date
+      const dayKey = formatInTimeZone(parseISO(event.start_time), timezone, 'yyyy-MM-dd');
       if (!acc[dayKey]) acc[dayKey] = [];
       acc[dayKey].push(event);
     } catch (e) {
@@ -75,6 +79,7 @@ const VisualSchedule = ({
                   isApplied={appliedChanges.includes(event.event_id)}
                   isVetted={isVetted}
                   isWork={isWorkEvent(event)}
+                  timezone={timezone}
                 />
               ))}
             </div>
