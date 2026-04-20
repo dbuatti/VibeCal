@@ -57,17 +57,17 @@ serve(async (req) => {
 
     console.log(`[${functionName}] Config - TZ: ${userTimezone} | Window: ${settings.day_start_time}-${settings.day_end_time} | Max Tasks: ${maxTasksOverride || settings.max_tasks_per_day}`);
 
-    // Get "Today" in user's timezone
+    // Get "Today" at midnight in user's timezone
     const now = new Date();
     const todayStr = formatInTimeZone(now, userTimezone, 'yyyy-MM-dd');
-    const utcTodayStart = toDate(`${todayStr}T00:00:00`, { timeZone: userTimezone });
+    const localTodayStart = toDate(`${todayStr}T00:00:00`, { timeZone: userTimezone });
 
     // Deduplicate and filter future events
     const seenIds = new Set();
     const uniqueEvents = allEvents.filter(e => {
       if (seenIds.has(e.event_id)) return false;
       seenIds.add(e.event_id);
-      return new Date(e.start_time) >= utcTodayStart;
+      return new Date(e.start_time) >= localTodayStart;
     });
 
     const fixedEvents = uniqueEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
@@ -152,7 +152,7 @@ serve(async (req) => {
         
         let dayOffset = 0;
         while (!foundSlot && dayOffset <= 14) {
-          const currentDay = new Date(utcTodayStart.getTime() + (dayOffset * 86400000));
+          const currentDay = new Date(localTodayStart.getTime() + (dayOffset * 86400000));
           const dayKey = formatInTimeZone(currentDay, userTimezone, 'yyyy-MM-dd');
           const dayOfWeek = toDate(currentDay, { timeZone: userTimezone }).getDay();
           const dayTheme = dayThemes.find(t => t.day_of_week === dayOfWeek)?.theme || "General";
@@ -160,16 +160,14 @@ serve(async (req) => {
           if (!selectedDays.includes(dayOfWeek)) { dayOffset++; continue; }
           if (pass === 1 && event.temp_category !== "General" && dayTheme !== event.temp_category) { dayOffset++; continue; }
 
-          const [startH, startM] = settings.day_start_time.split(':').map(Number);
-          const [endH, endM] = settings.day_end_time.split(':').map(Number);
-
           if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
           const stats = dailyStats.get(dayKey);
           
+          const dayStart = toDate(`${dayKey}T${settings.day_start_time}:00`, { timeZone: userTimezone });
+          const dayEnd = toDate(`${dayKey}T${settings.day_end_time}:00`, { timeZone: userTimezone });
+
           if (!stats.lastPointer) {
-            let initialPointer = toDate(`${dayKey}T${settings.day_start_time}:00`, { timeZone: userTimezone });
-            initialPointer = alignTime(initialPointer, slotAlignment);
-            
+            let initialPointer = alignTime(dayStart, slotAlignment);
             if (dayOffset === 0) {
               const nowAligned = alignTime(new Date(), slotAlignment);
               if (nowAligned > initialPointer) initialPointer = nowAligned;
@@ -178,7 +176,6 @@ serve(async (req) => {
           }
 
           let searchPointer = new Date(stats.lastPointer);
-          const dayEnd = toDate(`${dayKey}T${settings.day_end_time}:00`, { timeZone: userTimezone });
 
           while (searchPointer < dayEnd && !foundSlot) {
             const potentialEnd = new Date(searchPointer.getTime() + durationMs);
