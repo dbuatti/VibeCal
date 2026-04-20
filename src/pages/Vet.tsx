@@ -26,7 +26,8 @@ import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { format, parseISO, startOfDay } from 'date-fns';
+import { format, parseISO, startOfDay, isAfter } from 'date-fns';
+import { formatInTimeZone } from 'date-fns-tz';
 import { cn } from '@/lib/utils';
 import TrainAIModal from '@/components/TrainAIModal';
 
@@ -67,6 +68,8 @@ const Vet = () => {
   const [trainingTask, setTrainingTask] = useState<any>(null);
   const [isTrainingModalOpen, setIsTrainingModalOpen] = useState(false);
 
+  const timezone = 'Australia/Melbourne';
+
   const fetchEvents = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -88,9 +91,6 @@ const Vet = () => {
     setIsProcessing(true);
     setStatusText('Performing full system sync...');
     try {
-      const { error: resetError } = await supabase.rpc('full_reset_user_data');
-      if (resetError) throw resetError;
-
       const { data: { session } } = await supabase.auth.getSession();
       const { data: { user } } = await supabase.auth.getUser();
       
@@ -107,7 +107,7 @@ const Vet = () => {
       ]);
 
       await fetchEvents();
-      showSuccess("Full system sync complete!");
+      showSuccess("Sync complete!");
     } catch (err: any) {
       showError("Sync failed: " + err.message);
     } finally {
@@ -138,9 +138,7 @@ const Vet = () => {
 
       if (error) throw error;
 
-      if (data?.isLocalMode) {
-        setIsLocalMode(true);
-      }
+      if (data?.isLocalMode) setIsLocalMode(true);
 
       if (data?.classifications) {
         const updatedEvents = [...events];
@@ -162,7 +160,7 @@ const Vet = () => {
 
         setEvents(updatedEvents);
         setAiMetadata(newMetadata);
-        showSuccess(data?.isLocalMode ? "Local vetting complete (AI Quota reached)" : "AI vetting complete!");
+        showSuccess("AI vetting complete!");
       }
 
     } catch (err: any) {
@@ -180,13 +178,18 @@ const Vet = () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-      await supabase.from('calendar_events_cache').update({ is_locked: newLockedStatus }).eq('event_id', event.event_id);
       
-      supabase.from('task_classification_feedback').upsert({
-        user_id: user.id,
-        task_name: event.title,
-        is_movable: !newLockedStatus
-      }, { onConflict: 'user_id, task_name' });
+      // Await both updates to ensure they are saved
+      await Promise.all([
+        supabase.from('calendar_events_cache').update({ is_locked: newLockedStatus }).eq('event_id', event.event_id),
+        supabase.from('task_classification_feedback').upsert({
+          user_id: user.id,
+          task_name: event.title,
+          is_movable: !newLockedStatus
+        }, { onConflict: 'user_id, task_name' })
+      ]);
+      
+      showSuccess(`"${event.title}" is now ${newLockedStatus ? 'Fixed' : 'Movable'}`);
     } catch (err) { 
       setEvents(prev => prev.map(e => e.event_id === event.event_id ? { ...e, is_locked: !newLockedStatus } : e));
       showError("Failed to update status"); 
@@ -197,16 +200,19 @@ const Vet = () => {
     const today = startOfDay(new Date());
     return events.filter(e => {
       const eventDate = parseISO(e.start_time);
-      return eventDate >= today && 
-             e.title.toLowerCase().includes(searchQuery.toLowerCase()) && 
-             (e.is_locked ? showLocked : showUnlocked);
+      // Show everything from today onwards
+      const isFutureOrToday = eventDate >= today;
+      const matchesSearch = e.title.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesFilter = e.is_locked ? showLocked : showUnlocked;
+      
+      return isFutureOrToday && matchesSearch && matchesFilter;
     });
   }, [events, searchQuery, showLocked, showUnlocked]);
 
   const groupedEvents = useMemo(() => {
     const groups: { [key: string]: any[] } = {};
     filteredEvents.forEach(event => {
-      const dateKey = format(parseISO(event.start_time), 'yyyy-MM-dd');
+      const dateKey = formatInTimeZone(parseISO(event.start_time), timezone, 'yyyy-MM-dd');
       if (!groups[dateKey]) groups[dateKey] = [];
       groups[dateKey].push(event);
     });
@@ -303,9 +309,18 @@ const Vet = () => {
         <div className="space-y-12">
           {loading ? (
             <div className="p-20 text-center"><RefreshCw className="animate-spin text-indigo-600 mx-auto mb-4" size={32} /></div>
+          ) : Object.keys(groupedEvents).length === 0 ? (
+            <div className="p-20 text-center bg-gray-50 rounded-[3rem] border border-dashed border-gray-200">
+              <p className="text-gray-400 font-black uppercase tracking-widest text-xs">No tasks found in this view</p>
+              <Button variant="link" onClick={handleFullSync} className="text-indigo-600 font-black text-xs uppercase tracking-widest mt-4">
+                Try Full Sync
+              </Button>
+            </div>
           ) : Object.keys(groupedEvents).sort().map(dateKey => (
             <div key={dateKey} className="space-y-6">
-              <h2 className="text-xs font-black text-gray-400 uppercase tracking-widest px-4">{format(parseISO(dateKey), 'EEEE, MMM do')}</h2>
+              <h2 className="text-xs font-black text-gray-400 uppercase tracking-widest px-4">
+                {formatInTimeZone(parseISO(dateKey), timezone, 'EEEE, MMM do')}
+              </h2>
               <div className="grid grid-cols-1 gap-3">
                 {groupedEvents[dateKey].map((event) => {
                   const metadata = aiMetadata[event.event_id];
@@ -344,7 +359,7 @@ const Vet = () => {
                             </div>
                             <div className="flex items-center gap-3 text-[10px] font-black text-gray-400 uppercase tracking-widest">
                               <Clock size={12} className="text-indigo-300" /> 
-                              {format(parseISO(event.start_time), 'HH:mm')} • {event.duration_minutes}m
+                              {formatInTimeZone(parseISO(event.start_time), timezone, 'HH:mm')} • {event.duration_minutes}m
                             </div>
                           </div>
                         </div>

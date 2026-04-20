@@ -59,14 +59,12 @@ serve(async (req) => {
       return new Response(JSON.stringify({ error: "No tokens found." }), { status: 401, headers: corsHeaders });
     }
 
-    // 1. Fetch user's calendar preferences from DB
+    // 1. Fetch user's calendar preferences
     const { data: dbCalendars } = await supabaseAdmin
       .from('user_calendars')
       .select('calendar_id, is_enabled, calendar_name')
       .eq('user_id', user.id)
       .eq('provider', 'google');
-
-    console.log(`[${functionName}] DB State: Found ${dbCalendars?.length || 0} Google calendars in preferences.`);
 
     // 2. Fetch current list from Google
     let listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { 
@@ -74,7 +72,6 @@ serve(async (req) => {
     });
     
     if (listRes.status === 401 && refreshToken) {
-      console.log(`[${functionName}] Token expired, refreshing...`);
       token = await refreshGoogleToken(refreshToken, functionName);
       await supabaseAdmin.from('profiles').update({ google_access_token: token }).eq('id', user.id);
       listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { 
@@ -86,25 +83,15 @@ serve(async (req) => {
     if (!listRes.ok) throw new Error(`Google API Error: ${listData.error?.message || 'Unknown'}`);
 
     const googleCalendars = (listData.items || []).filter(cal => !cal.id.includes('@import.calendar.google.com'));
-    console.log(`[${functionName}] Google API: Found ${googleCalendars.length} calendars.`);
 
-    // 3. Discovery & Smart Matching
+    // 3. Discovery
     const discoveryPayload = googleCalendars.map(cal => {
-      // SMART MATCH: Check for exact ID match OR if this is the primary calendar, check for 'primary' in DB
-      const existing = dbCalendars?.find(db => 
-        db.calendar_id === cal.id || (cal.primary && db.calendar_id === 'primary')
-      );
-
-      if (cal.primary) {
-        console.log(`[${functionName}] Detected Primary Calendar: ${cal.summary} (${cal.id}). Match found in DB: ${!!existing}`);
-      }
-
+      const existing = dbCalendars?.find(db => db.calendar_id === cal.id || (cal.primary && db.calendar_id === 'primary'));
       return {
         user_id: user.id,
         calendar_id: cal.id,
         calendar_name: cal.summary,
         provider: 'google',
-        // If it exists in DB, keep that status. If it's brand new, default to TRUE.
         is_enabled: existing ? existing.is_enabled : true 
       };
     });
@@ -114,14 +101,22 @@ serve(async (req) => {
     }
 
     const finalEnabledIds = discoveryPayload.filter(p => p.is_enabled).map(p => p.calendar_id);
-    console.log(`[${functionName}] Final Decision: Syncing events for ${finalEnabledIds.length} enabled calendars.`);
 
-    // 4. Sync Events
+    // 4. Sync Events - INCREASED WINDOW TO 2 YEARS
     const syncStartTime = new Date();
-    syncStartTime.setDate(syncStartTime.getDate() - 1);
+    syncStartTime.setDate(syncStartTime.getDate() - 7); // 1 week back
     const syncEndTime = new Date();
-    syncEndTime.setDate(syncEndTime.getDate() + 90);
+    syncEndTime.setFullYear(syncEndTime.getFullYear() + 2); // 2 years forward
     const syncTimestamp = new Date().toISOString();
+
+    // Fetch existing cache to preserve manual lock statuses
+    const { data: existingCache } = await supabaseAdmin
+      .from('calendar_events_cache')
+      .select('event_id, is_locked')
+      .eq('user_id', user.id)
+      .eq('provider', 'google');
+    
+    const lockMap = new Map(existingCache?.map(e => [e.event_id, e.is_locked]) || []);
 
     const eventPromises = googleCalendars
       .filter(cal => finalEnabledIds.includes(cal.id))
@@ -130,22 +125,27 @@ serve(async (req) => {
         const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
         if (!res.ok) return [];
         const data = await res.json();
-        return (data.items || []).map(event => ({
-          user_id: user.id, 
-          event_id: event.id, 
-          title: event.summary || 'Untitled', 
-          description: event.description || null,
-          location: event.location || null,
-          start_time: event.start.dateTime || toDate(event.start.date, { timeZone: profile?.timezone || 'UTC' }).toISOString(), 
-          end_time: event.end.dateTime || toDate(event.end.date, { timeZone: profile?.timezone || 'UTC' }).toISOString(),
-          duration_minutes: Math.round((new Date(event.end.dateTime || event.end.date).getTime() - new Date(event.start.dateTime || event.start.date).getTime()) / 60000) || 30, 
-          is_locked: true,
-          provider: 'google', 
-          source_calendar: cal.summary, 
-          source_calendar_id: cal.id, 
-          last_synced_at: syncTimestamp, 
-          last_seen_at: syncTimestamp
-        }));
+        return (data.items || []).map(event => {
+          // PRESERVE LOCK STATUS: If we already have this event, keep its lock status
+          const existingLock = lockMap.get(event.id);
+          
+          return {
+            user_id: user.id, 
+            event_id: event.id, 
+            title: event.summary || 'Untitled', 
+            description: event.description || null,
+            location: event.location || null,
+            start_time: event.start.dateTime || toDate(event.start.date, { timeZone: profile?.timezone || 'UTC' }).toISOString(), 
+            end_time: event.end.dateTime || toDate(event.end.date, { timeZone: profile?.timezone || 'UTC' }).toISOString(),
+            duration_minutes: Math.round((new Date(event.end.dateTime || event.end.date).getTime() - new Date(event.start.dateTime || event.start.date).getTime()) / 60000) || 30, 
+            is_locked: existingLock !== undefined ? existingLock : true, // Default to locked for new events
+            provider: 'google', 
+            source_calendar: cal.summary, 
+            source_calendar_id: cal.id, 
+            last_synced_at: syncTimestamp, 
+            last_seen_at: syncTimestamp
+          };
+        });
       });
 
     const results = await Promise.all(eventPromises);
@@ -163,8 +163,6 @@ serve(async (req) => {
         .eq('user_id', user.id)
         .eq('provider', 'google')
         .not('source_calendar_id', 'in', `(${finalEnabledIds.map(id => `"${id}"`).join(',')})`);
-    } else {
-      await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google');
     }
 
     console.log(`[${functionName}] SUCCESS - Synced ${allEvents.length} events.`);

@@ -17,7 +17,6 @@ serve(async (req) => {
   const functionName = "sync-apple-calendar";
 
   try {
-    console.log(`[${functionName}] START - Apple Sync Process`);
     const authHeader = req.headers.get('Authorization')
     const supabaseAdmin = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '')
     const supabaseUser = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_ANON_KEY') ?? '', { global: { headers: { Authorization: authHeader } } })
@@ -28,7 +27,6 @@ serve(async (req) => {
     const { data: profile } = await supabaseAdmin.from('profiles').select('apple_id, apple_app_password, timezone').eq('id', user.id).single();
     
     if (!profile?.apple_id || !profile?.apple_app_password) {
-      console.log(`[${functionName}] No Apple credentials found for user.`);
       return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
     }
 
@@ -78,16 +76,10 @@ serve(async (req) => {
         let href = hrefMatch[1];
         if (href.startsWith('/')) href = `${baseUrl}${href}`;
         if (!href.endsWith('/')) href += '/';
-        
         const name = nameMatch ? nameMatch[1] : 'Untitled';
         if (!name.includes('@') && !/reminders|tasks|inbox|outbox|notifications/i.test(name) && !seenNames.has(name)) {
           seenNames.add(name);
-          discoveredCalendarsMap.set(href, { 
-            user_id: user.id,
-            calendar_id: href, 
-            calendar_name: name,
-            provider: 'apple'
-          });
+          discoveredCalendarsMap.set(href, { user_id: user.id, calendar_id: href, calendar_name: name, provider: 'apple' });
         }
       }
     }
@@ -101,18 +93,16 @@ serve(async (req) => {
     const enabledPaths = (enabledCals || []).filter(c => c.is_enabled);
     const enabledIds = enabledPaths.map(c => c.calendar_id);
 
-    console.log(`[${functionName}] Syncing events for ${enabledIds.length} enabled Apple calendars.`);
-
     if (enabledPaths.length === 0) {
       await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
       return new Response(JSON.stringify({ count: 0, message: "No calendars enabled" }), { headers: corsHeaders });
     }
 
-    // 4. Fetch Events
+    // 4. Fetch Events - INCREASED WINDOW TO 2 YEARS
     const syncStartTime = new Date();
-    syncStartTime.setDate(syncStartTime.getDate() - 1);
+    syncStartTime.setDate(syncStartTime.getDate() - 7);
     const syncEndTime = new Date();
-    syncEndTime.setDate(syncEndTime.getDate() + 30);
+    syncEndTime.setFullYear(syncEndTime.getFullYear() + 2);
 
     const startStr = syncStartTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endStr = syncEndTime.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
@@ -128,6 +118,15 @@ serve(async (req) => {
           </C:comp-filter>
         </C:filter>
       </C:calendar-query>`;
+
+    // Fetch existing cache to preserve manual lock statuses
+    const { data: existingCache } = await supabaseAdmin
+      .from('calendar_events_cache')
+      .select('event_id, is_locked')
+      .eq('user_id', user.id)
+      .eq('provider', 'apple');
+    
+    const lockMap = new Map(existingCache?.map(e => [e.event_id, e.is_locked]) || []);
 
     const eventMap = new Map();
     const syncTimestamp = new Date().toISOString();
@@ -151,6 +150,8 @@ serve(async (req) => {
             const startIso = event.startDate.isUtc ? new Date(event.startDate.toString()).toISOString() : toDate(event.startDate.toString(), { timeZone: userTimezone }).toISOString();
             const endIso = event.endDate.isUtc ? new Date(event.endDate.toString()).toISOString() : toDate(event.endDate.toString(), { timeZone: userTimezone }).toISOString();
 
+            const existingLock = lockMap.get(event.uid);
+
             eventMap.set(event.uid, {
               user_id: user.id,
               event_id: event.uid,
@@ -160,7 +161,7 @@ serve(async (req) => {
               start_time: startIso,
               end_time: endIso,
               duration_minutes: Math.round((new Date(endIso).getTime() - new Date(startIso).getTime()) / 60000) || 30,
-              is_locked: true,
+              is_locked: existingLock !== undefined ? existingLock : true,
               provider: 'apple',
               source_calendar: cal.calendar_name,
               source_calendar_id: cal.calendar_id,
@@ -176,16 +177,6 @@ serve(async (req) => {
     if (uniqueEvents.length > 0) {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
     }
-
-    // 5. PURGE: Remove events from calendars that are now disabled
-    const { error: purgeError } = await supabaseAdmin
-      .from('calendar_events_cache')
-      .delete()
-      .eq('user_id', user.id)
-      .eq('provider', 'apple')
-      .not('source_calendar_id', 'in', `(${enabledIds.map(id => `"${id}"`).join(',')})`);
-
-    if (purgeError) console.error(`[${functionName}] Purge Error:`, purgeError);
 
     console.log(`[${functionName}] SUCCESS - Synced ${uniqueEvents.length} Apple events.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });

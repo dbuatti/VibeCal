@@ -8,7 +8,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// Advanced fuzzy matching: strips noise and checks for core similarity
+// Improved semantic matching: more precise and handles noise better
 function isSemanticMatch(title: string, pattern: string) {
   const clean = (s: string) => s.toLowerCase()
     .replace(/part\s*\d+|v\d+|copy|draft|final|[\(\)\[\]]/gi, '')
@@ -19,13 +19,15 @@ function isSemanticMatch(title: string, pattern: string) {
   const p = clean(pattern);
   
   if (t === p) return true;
-  if (t.length > 5 && p.length > 5) {
+  
+  // Only allow partial matches if the pattern is significant enough
+  if (p.length > 8) {
     return t.includes(p) || p.includes(t);
   }
+  
   return false;
 }
 
-// Expanded local patterns to minimize AI usage
 const HARD_FIXED_PATTERNS = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|clinic|surgery|medical|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary|appointment|appt|interview|vs|meeting with|call with|zoom|teams|google meet|skype|facetime|session with|coaching|lesson|rehearsal|audition|workshop|seminar|webinar|conference|travel to|commute|drive to|dentist|physio|therapy|vet|haircut|dinner with|lunch with|brunch with|coffee with/i;
 
 const HARD_MOVABLE_PATTERNS = /solo|draft|research|tidy|clean|practice|read|study|admin|email|gym|workout|run|walk|meditate|yoga|journal|laundry|groceries|shopping|vacuum|mop|dust|organize|filing|backup|update|coding|programming|writing|blog|post|social media/i;
@@ -49,17 +51,20 @@ serve(async (req) => {
     const { data: { user } } = await supabaseUser.auth.getUser();
     if (!user) throw new Error("Unauthorized");
 
-    // 1. STAGE 1: SEMANTIC MEMORY & USER RULES (Highest Priority)
+    // 1. STAGE 1: SEMANTIC MEMORY & USER RULES
     const { data: feedback } = await supabaseAdmin
       .from('task_classification_feedback')
       .select('task_name, is_movable')
       .eq('user_id', user.id);
 
+    // Sort feedback by length descending so more specific matches take priority
+    const sortedFeedback = (feedback || []).sort((a, b) => b.task_name.length - a.task_name.length);
+
     const results = taskList.map(title => {
       const t = title.toLowerCase();
 
-      // A. Check manual feedback first (User explicitly vetted this exact task before)
-      const match = feedback?.find(f => isSemanticMatch(title, f.task_name));
+      // A. Check manual feedback first
+      const match = sortedFeedback.find(f => isSemanticMatch(title, f.task_name));
       if (match) {
         return { 
           isMovable: match.is_movable, 
@@ -69,32 +74,22 @@ serve(async (req) => {
         };
       }
 
-      // B. Check User Keywords (User intent overrides heuristics)
-      if (lockedKeywords.some(kw => t.includes(kw.toLowerCase()) || kw.toLowerCase().includes(t))) {
+      // B. Check User Keywords
+      if (lockedKeywords.some(kw => t.includes(kw.toLowerCase()))) {
         return { isMovable: false, explanation: "User Rule: Found in your 'Locked' list.", confidence: 1.0, isPredefined: true };
       }
-      if (movableKeywords.some(kw => t.includes(kw.toLowerCase()) || kw.toLowerCase().includes(t))) {
+      if (movableKeywords.some(kw => t.includes(kw.toLowerCase()))) {
         return { isMovable: true, explanation: "User Rule: Found in your 'Movable' list.", confidence: 1.0, isPredefined: true };
       }
 
       // C. Check hard-coded fixed patterns
       if (HARD_FIXED_PATTERNS.test(title)) {
-        return {
-          isMovable: false,
-          explanation: "Local Heuristic: Detected high-priority event pattern (Travel/Medical/Meeting).",
-          confidence: 0.9,
-          isPredefined: true
-        };
+        return { isMovable: false, explanation: "Local Heuristic: Detected high-priority event pattern.", confidence: 0.9, isPredefined: true };
       }
 
       // D. Check hard-coded movable patterns
       if (HARD_MOVABLE_PATTERNS.test(title)) {
-        return {
-          isMovable: true,
-          explanation: "Local Heuristic: Detected flexible solo task pattern.",
-          confidence: 0.8,
-          isPredefined: true
-        };
+        return { isMovable: true, explanation: "Local Heuristic: Detected flexible solo task pattern.", confidence: 0.8, isPredefined: true };
       }
 
       return null;
@@ -102,7 +97,7 @@ serve(async (req) => {
 
     const indicesToAI = results.map((r, i) => r === null ? i : null).filter(i => i !== null);
 
-    // 2. STAGE 2: COGNITIVE AI ANALYSIS (Only for unknown tasks)
+    // 2. STAGE 2: COGNITIVE AI ANALYSIS
     if (indicesToAI.length > 0) {
       const tasksForAI = indicesToAI.map(i => taskList[i]);
       
@@ -141,17 +136,12 @@ serve(async (req) => {
         }
       } catch (aiError) {
         isLocalMode = true;
-        const isQuotaError = aiError.message?.includes('429') || aiError.message?.includes('quota');
-        
-        // 3. STAGE 3: SMART HEURISTIC FALLBACK (AI Busy/Quota)
         indicesToAI.forEach(idx => {
           const title = taskList[idx].toLowerCase();
           const likelyFixed = HARD_FIXED_PATTERNS.test(title);
-          const likelyMovable = HARD_MOVABLE_PATTERNS.test(title);
-          
           results[idx] = {
-            isMovable: likelyMovable || !likelyFixed,
-            explanation: isQuotaError ? "Local Mode: Classified via heuristic (AI Quota Exceeded)." : "Local Mode: Classified via heuristic (AI Unavailable).",
+            isMovable: !likelyFixed,
+            explanation: "Local Mode: Classified via heuristic (AI Unavailable).",
             confidence: 0.6,
             dependsOn: null
           };
