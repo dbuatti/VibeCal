@@ -25,7 +25,8 @@ import {
   Briefcase,
   Globe,
   Sparkles,
-  Info
+  Info,
+  AlertTriangle
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -41,6 +42,17 @@ import {
   DropdownMenuTrigger,
   DropdownMenuCheckboxItem
 } from '@/components/ui/dropdown-menu';
+import { 
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { format, parseISO, isToday, isTomorrow, startOfDay } from 'date-fns';
 import { cn } from '@/lib/utils';
 
@@ -51,6 +63,7 @@ const Vet = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [statusText, setStatusText] = useState('');
   const [events, setEvents] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   
@@ -83,6 +96,51 @@ const Vet = () => {
   useEffect(() => {
     fetchEvents();
   }, []);
+
+  const runSync = async () => {
+    setIsProcessing(true);
+    setStatusText('Syncing calendars...');
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      let token = session?.provider_token;
+      if (!token && user) {
+        const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
+        token = profile?.google_access_token;
+      }
+
+      await Promise.allSettled([
+        supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: token } }),
+        supabase.functions.invoke('sync-apple-calendar')
+      ]);
+
+      await fetchEvents();
+      showSuccess("Calendars synced!");
+    } catch (err: any) {
+      showError(err.message);
+    } finally {
+      setIsProcessing(false);
+      setStatusText('');
+    }
+  };
+
+  const handleFullReset = async () => {
+    setIsProcessing(true);
+    setStatusText('Resetting system...');
+    try {
+      const { error } = await supabase.rpc('full_reset_user_data');
+      if (error) throw error;
+      
+      showSuccess("System reset. Starting fresh sync...");
+      await runSync();
+    } catch (err: any) {
+      showError("Reset failed: " + err.message);
+    } finally {
+      setIsProcessing(false);
+      setStatusText('');
+    }
+  };
 
   const toggleLock = async (eventId: string, currentStatus: boolean) => {
     try {
@@ -220,6 +278,41 @@ const Vet = () => {
           </div>
           
           <div className="flex gap-3 w-full md:w-auto">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="bg-white border-gray-100 text-gray-500 rounded-2xl font-black text-xs uppercase tracking-widest h-14 px-6 shadow-sm">
+                  <RefreshCw size={18} className={cn("mr-2", isProcessing && "animate-spin")} /> Sync
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-56 rounded-2xl p-2" align="end">
+                <DropdownMenuItem onClick={runSync} disabled={isProcessing} className="rounded-lg font-bold text-xs">
+                  <RefreshCw size={14} className="mr-2" /> Standard Resync
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <DropdownMenuItem onSelect={(e) => e.preventDefault()} className="rounded-lg font-bold text-xs text-red-600">
+                      <AlertTriangle size={14} className="mr-2" /> Full System Reset
+                    </DropdownMenuItem>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent className="rounded-[2rem]">
+                    <AlertDialogHeader>
+                      <AlertDialogTitle className="text-2xl font-black tracking-tight">Are you absolutely sure?</AlertDialogTitle>
+                      <AlertDialogDescription className="text-gray-500 font-medium">
+                        This will clear your entire calendar cache and all proposed plans. You will need to resync from scratch. This cannot be undone.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel className="rounded-xl font-bold">Cancel</AlertDialogCancel>
+                      <AlertDialogAction onClick={handleFullReset} className="bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold">
+                        Yes, Reset Everything
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
             <Button 
               variant="outline" 
               onClick={runAIClassification} 
@@ -238,6 +331,13 @@ const Vet = () => {
             </Button>
           </div>
         </div>
+
+        {statusText && (
+          <div className="mb-8 p-4 bg-indigo-50 rounded-2xl border border-indigo-100 flex items-center gap-3 animate-pulse">
+            <RefreshCw className="animate-spin text-indigo-600" size={16} />
+            <span className="text-xs font-black text-indigo-600 uppercase tracking-widest">{statusText}</span>
+          </div>
+        )}
 
         {/* Vetting Progress Bar */}
         <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm mb-8">
