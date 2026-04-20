@@ -214,6 +214,29 @@ const Settings = () => {
     }
   };
 
+  const handleBulkToggleCalendars = async (provider: string, enabled: boolean) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { error } = await supabase
+        .from('user_calendars')
+        .update({ is_enabled: enabled })
+        .eq('user_id', user.id)
+        .eq('provider', provider);
+
+      if (error) throw error;
+
+      setCalendars(prev => prev.map(c => 
+        c.provider === provider ? { ...c, is_enabled: enabled } : c
+      ));
+      
+      showSuccess(`${provider === 'google' ? 'Google' : 'iCloud'} calendars ${enabled ? 'enabled' : 'disabled'}`);
+    } catch (err: any) {
+      showError(err.message);
+    }
+  };
+
   const discoverCalendars = async () => {
     setIsTesting(true);
     try {
@@ -362,6 +385,7 @@ const Settings = () => {
             isTesting={isTesting} 
             onDiscover={discoverCalendars} 
             onToggle={toggleCalendar} 
+            onBulkToggle={handleBulkToggleCalendars}
           />
         </div>
       </div>

@@ -38,7 +38,7 @@ const ProviderIcon = ({ provider }: { provider: string }) => {
   return <Globe size={16} className="shrink-0" />;
 };
 
-const CalendarSettings = ({ calendars, isTesting, onDiscover, onToggle }: CalendarSettingsProps) => {
+const CalendarSettings = ({ calendars, isTesting, onDiscover, onToggle, onBulkToggle }: CalendarSettingsProps) => {
   const grouped = calendars.reduce((acc: any, cal) => {
     const provider = cal.provider || 'other';
     if (!acc[provider]) acc[provider] = [];
@@ -49,12 +49,16 @@ const CalendarSettings = ({ calendars, isTesting, onDiscover, onToggle }: Calend
   const providers = Object.keys(grouped).sort();
 
   const handleBulkToggle = (provider: string, enabled: boolean) => {
-    const providerCals = grouped[provider];
-    providerCals.forEach((cal: any) => {
-      if (cal.is_enabled !== enabled) {
-        onToggle(cal.id, enabled);
-      }
-    });
+    if (onBulkToggle) {
+      onBulkToggle(provider, enabled);
+    } else {
+      const providerCals = grouped[provider];
+      providerCals.forEach((cal: any) => {
+        if (cal.is_enabled !== enabled) {
+          onToggle(cal.id, enabled);
+        }
+      });
+    }
   };
 
   return (
