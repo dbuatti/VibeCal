@@ -64,6 +64,7 @@ serve(async (req) => {
     const calsText = await calsRes.text();
     
     const discoveredCalendarsMap = new Map();
+    const seenNames = new Set();
     const responses = calsText.split(/<[^:]*:?response/i);
     
     for (const resp of responses) {
@@ -78,11 +79,13 @@ serve(async (req) => {
         
         const name = nameMatch ? nameMatch[1] : 'Untitled';
         
-        // FILTER: Skip delegated accounts (email addresses) and system lists
+        // AGGRESSIVE FILTER: Skip delegated accounts (email addresses) and system lists
         const isEmail = name.includes('@') && name.includes('.');
-        const isSystem = /reminders|tasks|inbox|outbox/i.test(name);
+        const isSystem = /reminders|tasks|inbox|outbox|notifications/i.test(name);
         
-        if (!isEmail && !isSystem) {
+        // DE-DUPLICATION: Only keep the first instance of a calendar name
+        if (!isEmail && !isSystem && !seenNames.has(name)) {
+          seenNames.add(name);
           discoveredCalendarsMap.set(href, { 
             user_id: user.id,
             calendar_id: href, 
@@ -98,6 +101,16 @@ serve(async (req) => {
     // Upsert discovered calendars
     if (discoveredCalendars.length > 0) {
       await supabaseAdmin.from('user_calendars').upsert(discoveredCalendars, { onConflict: 'user_id, calendar_id' });
+    }
+
+    // CLEANUP: Remove Apple calendars that were NOT discovered in this run
+    const discoveredIds = discoveredCalendars.map(c => c.calendar_id);
+    if (discoveredIds.length > 0) {
+      await supabaseAdmin.from('user_calendars')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('provider', 'apple')
+        .not('calendar_id', 'in', `(${discoveredIds.map(id => `"${id}"`).join(',')})`);
     }
 
     // Get enabled calendars
@@ -214,11 +227,6 @@ serve(async (req) => {
     }
 
     const cleanupThreshold = new Date(new Date(syncTimestamp).getTime() - 60000).toISOString();
-    const disabledIds = (enabledCals || []).filter(c => !c.is_enabled).map(c => c.calendar_id);
-    if (disabledIds.length > 0) {
-      await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple').in('source_calendar_id', disabledIds);
-    }
-
     await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple').gte('start_time', syncStartTime.toISOString()).lt('last_seen_at', cleanupThreshold);
 
     console.log(`[${functionName}] SUCCESS - Synced ${uniqueEvents.length} events.`);
