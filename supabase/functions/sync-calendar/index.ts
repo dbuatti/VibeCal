@@ -66,10 +66,13 @@ serve(async (req) => {
       .eq('user_id', user.id)
       .eq('provider', 'google');
 
-    console.log(`[${functionName}] Found ${dbCalendars?.length || 0} Google calendars in DB preferences.`);
+    console.log(`[${functionName}] DB State: Found ${dbCalendars?.length || 0} Google calendars in preferences.`);
+    if (dbCalendars) {
+      dbCalendars.forEach(c => console.log(`[${functionName}] DB Entry: ${c.calendar_name} (${c.calendar_id}) - Enabled: ${c.is_enabled}`));
+    }
 
     // 2. Fetch current list from Google
-    const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { 
+    let listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { 
       headers: { Authorization: `Bearer ${token}` } 
     });
     
@@ -77,10 +80,16 @@ serve(async (req) => {
       console.log(`[${functionName}] Token expired, refreshing...`);
       token = await refreshGoogleToken(refreshToken, functionName);
       await supabaseAdmin.from('profiles').update({ google_access_token: token }).eq('id', user.id);
+      listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { 
+        headers: { Authorization: `Bearer ${token}` } 
+      });
     }
 
     const listData = await listRes.json();
+    if (!listRes.ok) throw new Error(`Google API Error: ${listData.error?.message || 'Unknown'}`);
+
     const googleCalendars = (listData.items || []).filter(cal => !cal.id.includes('@import.calendar.google.com'));
+    console.log(`[${functionName}] Google API: Found ${googleCalendars.length} calendars.`);
 
     // 3. Discovery: Upsert new calendars to DB
     const discoveryPayload = googleCalendars.map(cal => {
@@ -90,16 +99,18 @@ serve(async (req) => {
         calendar_id: cal.id,
         calendar_name: cal.summary,
         provider: 'google',
-        is_enabled: existing ? existing.is_enabled : true // Default to true for new discoveries
+        // If it exists in DB, keep that status. If it's brand new, default to TRUE.
+        is_enabled: existing ? existing.is_enabled : true 
       };
     });
 
     if (discoveryPayload.length > 0) {
-      await supabaseAdmin.from('user_calendars').upsert(discoveryPayload, { onConflict: 'user_id, calendar_id' });
+      const { error: upsertError } = await supabaseAdmin.from('user_calendars').upsert(discoveryPayload, { onConflict: 'user_id, calendar_id' });
+      if (upsertError) console.error(`[${functionName}] Upsert Error:`, upsertError);
     }
 
     const finalEnabledIds = discoveryPayload.filter(p => p.is_enabled).map(p => p.calendar_id);
-    console.log(`[${functionName}] Syncing events for ${finalEnabledIds.length} enabled calendars:`, finalEnabledIds);
+    console.log(`[${functionName}] Final Decision: Syncing events for ${finalEnabledIds.length} enabled calendars:`, finalEnabledIds);
 
     // 4. Sync Events for ENABLED calendars only
     const syncStartTime = new Date();
@@ -113,7 +124,10 @@ serve(async (req) => {
       .map(async (cal) => {
         const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.id)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`;
         const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-        if (!res.ok) return [];
+        if (!res.ok) {
+          console.error(`[${functionName}] Failed to fetch events for ${cal.summary}:`, await res.text());
+          return [];
+        }
         const data = await res.json();
         return (data.items || []).map(event => ({
           user_id: user.id, 
@@ -137,7 +151,8 @@ serve(async (req) => {
     const allEvents = results.flat();
 
     if (allEvents.length > 0) {
-      await supabaseAdmin.from('calendar_events_cache').upsert(allEvents, { onConflict: 'user_id, event_id' });
+      const { error: eventUpsertError } = await supabaseAdmin.from('calendar_events_cache').upsert(allEvents, { onConflict: 'user_id, event_id' });
+      if (eventUpsertError) console.error(`[${functionName}] Event Upsert Error:`, eventUpsertError);
     }
 
     // 5. PURGE: Remove events from calendars that are now disabled
