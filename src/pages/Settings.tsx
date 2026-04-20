@@ -78,16 +78,22 @@ const Settings = () => {
     }
   };
 
+  const fetchCalendars = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { data } = await supabase.from('user_calendars').select('*').eq('user_id', user.id).order('provider', { ascending: true });
+    if (data) setCalendars(data);
+  };
+
   useEffect(() => {
     const fetchData = async () => {
       try {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
 
-        const [settingsRes, profileRes, calendarsRes, themesRes] = await Promise.all([
+        const [settingsRes, profileRes, themesRes] = await Promise.all([
           supabase.from('user_settings').select('*').eq('user_id', user.id).maybeSingle(),
           supabase.from('profiles').select('apple_id, apple_app_password').eq('id', user.id).maybeSingle(),
-          supabase.from('user_calendars').select('*').eq('user_id', user.id).order('provider', { ascending: true }),
           supabase.from('day_themes').select('*').eq('user_id', user.id)
         ]);
 
@@ -101,7 +107,6 @@ const Settings = () => {
           });
         }
         if (profileRes.data) setProfile(profileRes.data);
-        if (calendarsRes.data) setCalendars(calendarsRes.data);
         
         if (themesRes.data && themesRes.data.length > 0) {
           const updatedThemes = themes.map(t => {
@@ -111,6 +116,7 @@ const Settings = () => {
           setThemes(updatedThemes);
         }
 
+        await fetchCalendars();
         await checkGoogleConnection();
       } catch (err) {
         console.error("Error fetching settings:", err);
@@ -258,8 +264,7 @@ const Settings = () => {
         await supabase.functions.invoke('sync-apple-calendar');
       }
       
-      const { data: newCals } = await supabase.from('user_calendars').select('*').eq('user_id', user.id).order('provider', { ascending: true });
-      if (newCals) setCalendars(newCals);
+      await fetchCalendars();
       showSuccess('Calendar list refreshed!');
       await checkGoogleConnection();
     } catch (err: any) {
