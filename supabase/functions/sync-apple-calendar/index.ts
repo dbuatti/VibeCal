@@ -31,8 +31,11 @@ Deno.serve(async (req) => {
     const profile = profiles[0];
     
     if (!profile?.apple_id || !profile?.apple_app_password) {
+      console.log(`[${functionName}] No Apple credentials found for user ${user.id}`);
       return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
     }
+
+    console.log(`[${functionName}] Starting sync for user: ${profile.apple_id}`);
 
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
     const headers = {
@@ -50,6 +53,7 @@ Deno.serve(async (req) => {
     };
 
     // 3. Discover Principal
+    console.log(`[${functionName}] Step 1: Discovering principal...`);
     const principalRes = await fetch(`${baseUrl}/`, { 
       method: 'PROPFIND', 
       headers, 
@@ -65,6 +69,7 @@ Deno.serve(async (req) => {
     const principalUrl = principalPath.startsWith('http') ? principalPath : `${baseUrl}${principalPath}`;
 
     // 4. Discover Home Set
+    console.log(`[${functionName}] Step 2: Discovering home set...`);
     const homeRes = await fetch(principalUrl, {
       method: 'PROPFIND',
       headers,
@@ -80,6 +85,7 @@ Deno.serve(async (req) => {
     const homeUrl = homePath.startsWith('http') ? homePath : `${baseUrl}${homePath}`;
 
     // 5. Discover Calendars
+    console.log(`[${functionName}] Step 3: Discovering calendars...`);
     const calsRes = await fetch(homeUrl, {
       method: 'PROPFIND',
       headers: { ...headers, 'Depth': '1' },
@@ -101,6 +107,7 @@ Deno.serve(async (req) => {
         });
       }
     }
+    console.log(`[${functionName}] Discovered ${discoveredCalendars.length} Apple calendars`);
 
     // 6. Sync Calendar List and Respect Settings
     const existingCalsRes = await fetch(`${supabaseUrl}/rest/v1/user_calendars?user_id=eq.${user.id}&provider=eq.apple`, {
@@ -130,14 +137,16 @@ Deno.serve(async (req) => {
     const enabledCalendars = calendarsToUpsert.filter(c => c.is_enabled);
     const disabledCalendarIds = calendarsToUpsert.filter(c => !c.is_enabled).map(c => c.calendar_id);
     
-    console.log(`[${functionName}] Syncing ${enabledCalendars.length} enabled calendars.`);
+    console.log(`[${functionName}] Fetching events for ${enabledCalendars.length} enabled calendars`);
     
     const allEvents = [];
     const now = new Date();
+    // Wider range for debugging: -30 days to +120 days
     const startRange = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-    const endRange = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    const endRange = new Date(now.getTime() + 120 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
     for (const cal of enabledCalendars) {
+      console.log(`[${functionName}] Fetching: ${cal.calendar_name}`);
       try {
         const reportRes = await fetch(cal.calendar_id, {
           method: 'REPORT',
@@ -155,10 +164,16 @@ Deno.serve(async (req) => {
             </C:calendar-query>`
         });
 
-        if (!reportRes.ok) continue;
+        if (!reportRes.ok) {
+          console.error(`[${functionName}] REPORT failed for ${cal.calendar_name}: ${reportRes.status}`);
+          continue;
+        }
+
         const reportText = await reportRes.text();
         const eventResponses = reportText.split(/<[^:]*:?response/i).slice(1);
+        console.log(`[${functionName}] Found ${eventResponses.length} raw responses in ${cal.calendar_name}`);
         
+        let calEventCount = 0;
         for (const resp of eventResponses) {
           const icsData = resp.match(/<[^:]*:?calendar-data[^>]*>([\s\S]*?)<\/[^:]*:?calendar-data>/i)?.[1];
           if (!icsData) continue;
@@ -169,6 +184,7 @@ Deno.serve(async (req) => {
             for (const vevent of vevents) {
               const event = new ICAL.Event(vevent);
               if (!event.uid || !event.startDate) continue;
+              
               allEvents.push({
                 user_id: user.id,
                 event_id: event.uid,
@@ -180,9 +196,13 @@ Deno.serve(async (req) => {
                 source_calendar_id: cal.calendar_id,
                 last_synced_at: new Date().toISOString()
               });
+              calEventCount++;
             }
-          } catch (e) {}
+          } catch (e) {
+            console.error(`[${functionName}] ICAL Parse Error:`, e.message);
+          }
         }
+        console.log(`[${functionName}] Found ${calEventCount} events in ${cal.calendar_name}`);
       } catch (err) {
         console.error(`[${functionName}] Error in ${cal.calendar_name}:`, err.message);
       }
@@ -190,6 +210,7 @@ Deno.serve(async (req) => {
 
     // 8. Cleanup and Upsert
     if (disabledCalendarIds.length > 0) {
+      console.log(`[${functionName}] Cleaning up cache for ${disabledCalendarIds.length} disabled calendars`);
       for (const calId of disabledCalendarIds) {
         await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&source_calendar_id=eq.${encodeURIComponent(calId)}`, {
           method: 'DELETE',
@@ -199,11 +220,15 @@ Deno.serve(async (req) => {
     }
 
     if (allEvents.length > 0) {
-      await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
+      console.log(`[${functionName}] Upserting ${allEvents.length} total Apple events to cache`);
+      const upsertRes = await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
         method: 'POST',
         headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}`, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' },
         body: JSON.stringify(allEvents)
       });
+      if (!upsertRes.ok) console.error(`[${functionName}] Upsert Error:`, await upsertRes.text());
+    } else {
+      console.log(`[${functionName}] No events found in any enabled calendars.`);
     }
 
     return new Response(JSON.stringify({ count: allEvents.length }), { 
