@@ -1,0 +1,1 @@
+SELECT * FROM user_calendars WHERE user_id = '8c9e0f6c-e5e0-4dbc-aa70-d43403847f7d';

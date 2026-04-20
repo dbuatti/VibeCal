@@ -66,32 +66,47 @@ Deno.serve(async (req) => {
     const googleCalendars = (listData.items || []).filter(cal => !cal.id.includes('@import.calendar.google.com'));
 
     // 4. Sync Calendar List to user_calendars table
-    // We want to keep track of which calendars are enabled/disabled
     const existingCalsRes = await fetch(`${supabaseUrl}/rest/v1/user_calendars?user_id=eq.${user.id}&provider=eq.google`, {
       headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
     });
     const existingCals = await existingCalsRes.json();
     console.log(`[${functionName}] Found ${existingCals.length} existing calendars in DB`);
     
-    const calendarsToUpsert = googleCalendars.map(cal => {
-      const existing = existingCals.find(e => e.calendar_id === cal.id);
+    let calendarsToUpsert = googleCalendars.map(cal => {
+      // Try to find existing by ID, or if this is primary, try to find by 'primary' ID
+      let existing = existingCals.find(e => e.calendar_id === cal.id);
+      if (!existing && cal.primary) {
+        existing = existingCals.find(e => e.calendar_id === 'primary');
+      }
+
       return {
         user_id: user.id,
-        calendar_id: cal.id,
+        calendar_id: cal.primary ? 'primary' : cal.id, // Normalize primary ID
         calendar_name: cal.summaryOverride || cal.summary,
         provider: 'google',
         color: cal.backgroundColor,
-        // If it's new, default to true if it's the primary one, false otherwise to avoid cluttering
         is_enabled: existing ? existing.is_enabled : (cal.primary || false)
       };
     });
+
+    // Safety check: If no calendars are enabled, enable the primary one
+    if (!calendarsToUpsert.some(c => c.is_enabled)) {
+      const primaryIdx = calendarsToUpsert.findIndex(c => c.calendar_id === 'primary');
+      if (primaryIdx !== -1) {
+        calendarsToUpsert[primaryIdx].is_enabled = true;
+        console.log(`[${functionName}] No calendars enabled, force-enabling primary`);
+      } else if (calendarsToUpsert.length > 0) {
+        calendarsToUpsert[0].is_enabled = true;
+        console.log(`[${functionName}] No primary found, force-enabling first calendar`);
+      }
+    }
 
     if (calendarsToUpsert.length > 0) {
       console.log(`[${functionName}] Upserting ${calendarsToUpsert.length} calendars to DB`);
       const calUpsertRes = await fetch(`${supabaseUrl}/rest/v1/user_calendars?on_conflict=user_id,calendar_id`, {
         method: 'POST',
-        headers: {
-          'apikey': supabaseKey,
+        headers: { 
+          'apikey': supabaseKey, 
           'Authorization': `Bearer ${supabaseKey}`,
           'Content-Type': 'application/json',
           'Prefer': 'resolution=merge-duplicates'
@@ -104,7 +119,6 @@ Deno.serve(async (req) => {
     }
 
     // 5. Filter to only ENABLED calendars for event sync
-    // Re-fetch or use the merged list
     const enabledCalendarIds = calendarsToUpsert
       .filter(c => c.is_enabled)
       .map(c => c.calendar_id);
@@ -119,8 +133,8 @@ Deno.serve(async (req) => {
 
     const allEvents = [];
     for (const calId of enabledCalendarIds) {
-      const cal = googleCalendars.find(c => c.id === calId);
-      console.log(`[${functionName}] Fetching events for calendar: ${cal?.summary || calId}`);
+      // If we normalized to 'primary', we can use 'primary' in the URL too
+      console.log(`[${functionName}] Fetching events for calendar: ${calId}`);
       const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) {
@@ -137,7 +151,7 @@ Deno.serve(async (req) => {
         start_time: event.start.dateTime || event.start.date,
         end_time: event.end.dateTime || event.end.date,
         provider: 'google',
-        source_calendar: cal?.summary || 'Unknown',
+        source_calendar: data.summary || 'Unknown',
         source_calendar_id: calId,
         last_synced_at: new Date().toISOString()
       }));
@@ -149,8 +163,8 @@ Deno.serve(async (req) => {
       console.log(`[${functionName}] Upserting ${allEvents.length} total events to cache`);
       const upsertRes = await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
         method: 'POST',
-        headers: {
-          'apikey': supabaseKey,
+        headers: { 
+          'apikey': supabaseKey, 
           'Authorization': `Bearer ${supabaseKey}`,
           'Content-Type': 'application/json',
           'Prefer': 'resolution=merge-duplicates'
@@ -171,16 +185,14 @@ Deno.serve(async (req) => {
     
     if (disabledCalendarIds.length > 0) {
       console.log(`[${functionName}] Cleaning up ${disabledCalendarIds.length} disabled calendars from cache`);
-      const idList = disabledCalendarIds.map(id => `"${id}"`).join(',');
-      const deleteRes = await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&source_calendar_id=in.(${idList})`, {
-        method: 'DELETE',
-        headers: {
-          'apikey': supabaseKey,
-          'Authorization': `Bearer ${supabaseKey}`
-        }
-      });
-      if (!deleteRes.ok) {
-        console.error(`[${functionName}] Cleanup Error:`, await deleteRes.text());
+      for (const calId of disabledCalendarIds) {
+        await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&source_calendar_id=eq.${encodeURIComponent(calId)}`, {
+          method: 'DELETE',
+          headers: { 
+            'apikey': supabaseKey, 
+            'Authorization': `Bearer ${supabaseKey}`
+          }
+        });
       }
     }
 
