@@ -8,7 +8,8 @@ import {
   isBefore, 
   isAfter, 
   startOfDay, 
-  differenceInMinutes 
+  differenceInMinutes,
+  isValid
 } from 'https://esm.sh/date-fns@3.6.0'
 import { 
   formatInTimeZone, 
@@ -21,6 +22,7 @@ const corsHeaders = {
 }
 
 serve(async (req) => {
+  const functionName = "optimise-schedule";
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   try {
@@ -69,9 +71,12 @@ serve(async (req) => {
     };
 
     const proposedChanges = [];
-    // CRITICAL: Treat is_locked as fixed anchors
+    // Fixed events are anchors that cannot be moved
     const fixedEvents = allEvents.filter(e => e.is_locked === true || vettedEventIds.includes(e.event_id));
+    // Movable events are the ones we are trying to fit into slots
     const movableEvents = allEvents.filter(e => e.is_locked !== true && !vettedEventIds.includes(e.event_id));
+
+    console.log(`[${functionName}] Starting optimisation for user ${user.id}. Movable tasks: ${movableEvents.length}`);
 
     const now = new Date();
     const todayStr = formatInTimeZone(now, userTimezone, 'yyyy-MM-dd');
@@ -84,16 +89,25 @@ serve(async (req) => {
       const currentDayDate = addMinutes(toDate(`${startDayStr}T00:00:00`, { timeZone: userTimezone }), d * 24 * 60);
       const dayOfWeek = currentDayDate.getDay();
       
+      // Skip days not in the allowed list unless it's a specific target date request
       if (!targetDate && !selectedDays.includes(dayOfWeek)) continue;
 
       const dayStr = formatInTimeZone(currentDayDate, userTimezone, 'yyyy-MM-dd');
       const dayStart = toDate(`${dayStr}T${settings.day_start_time || '09:00'}:00`, { timeZone: userTimezone });
       const dayEnd = toDate(`${dayStr}T${settings.day_end_time || '17:00'}:00`, { timeZone: userTimezone });
       
-      const dayFixedEvents = fixedEvents.filter(e => formatInTimeZone(parseISO(e.start_time), userTimezone, 'yyyy-MM-dd') === dayStr);
+      console.log(`[${functionName}] Processing ${dayStr}. Window: ${format(dayStart, 'HH:mm')} - ${format(dayEnd, 'HH:mm')}`);
+
+      // Get fixed events for this specific day
+      const dayFixedEvents = fixedEvents.filter(e => {
+        const start = parseISO(e.start_time);
+        return isValid(start) && formatInTimeZone(start, userTimezone, 'yyyy-MM-dd') === dayStr;
+      });
 
       let dailyWorkMinutes = 0;
       let lastWorkEnd = new Date(0);
+      
+      // Calculate existing work load from fixed events
       dayFixedEvents.filter(isWorkEvent).forEach(e => {
         const start = parseISO(e.start_time), end = parseISO(e.end_time);
         if (isAfter(end, lastWorkEnd)) {
@@ -112,8 +126,16 @@ serve(async (req) => {
       const maxDailyMinutes = (Number(maxHoursOverride || settings.max_hours_per_day) || 6) * 60;
       const maxDailyTasks = Number(maxTasksOverride || settings.max_tasks_per_day) || 5;
 
+      // Try to fit movable tasks into the remaining slots
       while (currentTime < dayEnd && currentMovableIdx < movableEvents.length) {
-        if (dailyWorkMinutes >= maxDailyMinutes || dailyTaskCount >= maxDailyTasks) break;
+        if (dailyWorkMinutes >= maxDailyMinutes) {
+          console.log(`[${functionName}] ${dayStr}: Max work hours reached (${dailyWorkMinutes}m)`);
+          break;
+        }
+        if (dailyTaskCount >= maxDailyTasks) {
+          console.log(`[${functionName}] ${dayStr}: Max task count reached (${dailyTaskCount})`);
+          break;
+        }
 
         const event = movableEvents[currentMovableIdx];
         const duration = durationOverride === "original" || !durationOverride ? (event.duration_minutes || 30) : parseInt(durationOverride);
@@ -121,19 +143,24 @@ serve(async (req) => {
         let slotStart = currentTime;
         let slotEnd = addMinutes(slotStart, duration);
 
+        // Check for collisions with fixed events
         const collision = dayFixedEvents.find(f => {
           const fStart = parseISO(f.start_time), fEnd = parseISO(f.end_time);
           return (isBefore(slotStart, fEnd) && isAfter(slotEnd, fStart));
         });
 
         if (collision) {
+          // If there's a collision, move currentTime to the end of the fixed event and align it
           currentTime = parseISO(collision.end_time);
           const alignment = parseInt(slotAlignment) || 15;
           const remainder = currentTime.getMinutes() % alignment;
           if (remainder !== 0) currentTime = addMinutes(currentTime, alignment - remainder);
+          
+          console.log(`[${functionName}] Collision with "${collision.title}". Moving cursor to ${format(currentTime, 'HH:mm')}`);
           continue;
         }
 
+        // STRICT CHECK: Does the task fit entirely within the work window?
         if (isBefore(slotEnd, dayEnd) || slotEnd.getTime() === dayEnd.getTime()) {
           proposedChanges.push({
             event_id: event.event_id,
@@ -144,15 +171,21 @@ serve(async (req) => {
             duration: duration,
             is_surplus: false
           });
+          
           if (isWorkEvent(event)) dailyWorkMinutes += duration;
           dailyTaskCount++;
           currentMovableIdx++;
           currentTime = slotEnd;
-        } else { break; }
+          
+          console.log(`[${functionName}] Scheduled "${event.title}" at ${format(slotStart, 'HH:mm')}`);
+        } else { 
+          console.log(`[${functionName}] Task "${event.title}" would end at ${format(slotEnd, 'HH:mm')}, which is past dayEnd ${format(dayEnd, 'HH:mm')}. Stopping day.`);
+          break; 
+        }
       }
     }
 
-    // Handle surplus
+    // Any tasks that couldn't be scheduled are marked as surplus
     for (let i = currentMovableIdx; i < movableEvents.length; i++) {
       const event = movableEvents[i];
       proposedChanges.push({
@@ -166,10 +199,13 @@ serve(async (req) => {
       });
     }
 
+    console.log(`[${functionName}] Optimisation complete. Changes: ${proposedChanges.length}`);
+
     return new Response(JSON.stringify({ changes: proposedChanges }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
   } catch (error) {
+    console.error(`[${functionName}] Fatal Error:`, error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })
