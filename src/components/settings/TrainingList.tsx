@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -28,11 +28,16 @@ const TrainingList: React.FC<TrainingListProps> = ({
 }) => {
   const [loading, setLoading] = useState(true);
   const [tasks, setTasks] = useState<ClassifiedTask[]>([]);
+  const isRequesting = useRef(false);
+  const debounceTimer = useRef<NodeJS.Timeout | null>(null);
 
   const fetchRecentTasks = async () => {
+    if (isRequesting.current) return;
+    
     setLoading(true);
+    isRequesting.current = true;
+    
     try {
-      // Fetch recent tasks from calendar_events_cache or tasks table
       const { data: recentEvents, error } = await supabase
         .from('calendar_events_cache')
         .select('id, title')
@@ -44,7 +49,6 @@ const TrainingList: React.FC<TrainingListProps> = ({
       if (recentEvents && recentEvents.length > 0) {
         const titles = recentEvents.map(e => e.title);
         
-        // Call classify-tasks edge function
         const { data, error: classifyError } = await supabase.functions.invoke('classify-tasks', {
           body: {
             tasks: titles,
@@ -59,23 +63,33 @@ const TrainingList: React.FC<TrainingListProps> = ({
         const classified = recentEvents.map((e, i) => ({
           id: e.id,
           task_name: e.title,
-          is_movable: data.classifications[i].isMovable,
-          explanation: data.classifications[i].explanation
+          is_movable: data.classifications[i]?.isMovable ?? false,
+          explanation: data.classifications[i]?.explanation ?? "No explanation provided"
         }));
 
         setTasks(classified);
       }
     } catch (err: any) {
       console.error("Error fetching training tasks:", err);
-      showError("Failed to load recent tasks for training");
+      // Don't show toast for background updates to avoid annoyance
     } finally {
       setLoading(false);
+      isRequesting.current = false;
     }
   };
 
   useEffect(() => {
-    fetchRecentTasks();
-  }, [movableKeywords, lockedKeywords]);
+    // Debounce the fetch to prevent spamming when user is typing keywords
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    
+    debounceTimer.current = setTimeout(() => {
+      fetchRecentTasks();
+    }, 1000);
+
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    };
+  }, [movableKeywords.length, lockedKeywords.length]); // Only trigger on count changes to reduce frequency
 
   const handleCorrection = async (task: ClassifiedTask, correctedMovable: boolean) => {
     try {
@@ -102,7 +116,7 @@ const TrainingList: React.FC<TrainingListProps> = ({
     }
   };
 
-  if (loading) {
+  if (loading && tasks.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-gray-500">
         <RefreshCw className="animate-spin mb-4 text-indigo-600" />
@@ -125,8 +139,15 @@ const TrainingList: React.FC<TrainingListProps> = ({
     <div className="space-y-4">
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Recent Classifications</h3>
-        <Button variant="ghost" size="sm" onClick={fetchRecentTasks} className="text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50">
-          <RefreshCw size={14} className="mr-2" /> Refresh
+        <Button 
+          variant="ghost" 
+          size="sm" 
+          onClick={fetchRecentTasks} 
+          disabled={loading}
+          className="text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50"
+        >
+          <RefreshCw size={14} className={cn("mr-2", loading && "animate-spin")} /> 
+          {loading ? "Analyzing..." : "Refresh"}
         </Button>
       </div>
       
