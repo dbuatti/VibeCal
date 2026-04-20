@@ -88,31 +88,42 @@ const Vet = () => {
   }, []);
 
   const handleFullSync = async () => {
+    console.log("[Vet] Starting full sync...");
     setIsProcessing(true);
     setStatusText('Performing full system sync...');
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const { data: { user } } = await supabase.auth.getUser();
       
+      console.log("[Vet] User session:", !!session, "User ID:", user?.id);
+
       let token = session?.provider_token;
       if (!token && user) {
         const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
         token = profile?.google_access_token;
       }
 
+      console.log("[Vet] Google token available:", !!token);
+
       setStatusText('Syncing calendars...');
-      await Promise.allSettled([
+      console.log("[Vet] Invoking sync-calendar and sync-apple-calendar...");
+      const syncResults = await Promise.allSettled([
         supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: token } }),
         supabase.functions.invoke('sync-apple-calendar')
       ]);
+      
+      console.log("[Vet] Sync results:", syncResults);
 
       setStatusText('AI is vetting your schedule...');
       const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, work_keywords, natural_language_rules').single();
       
       const { data: fetchedEvents } = await supabase.from('calendar_events_cache').select('*').eq('user_id', user.id).order('start_time', { ascending: true });
       
+      console.log("[Vet] Fetched events for classification:", fetchedEvents?.length);
+
       if (fetchedEvents && fetchedEvents.length > 0) {
-        await supabase.functions.invoke('classify-tasks', {
+        console.log("[Vet] Invoking classify-tasks...");
+        const classifyRes = await supabase.functions.invoke('classify-tasks', {
           body: {
             events: fetchedEvents.map(e => ({
               event_id: e.event_id,
@@ -130,11 +141,13 @@ const Vet = () => {
             persist: true
           }
         });
+        console.log("[Vet] Classification result:", classifyRes);
       }
 
       await fetchEvents();
       showSuccess("Sync and AI vetting complete!");
     } catch (err: any) {
+      console.error("[Vet] Sync error:", err);
       showError("Sync failed: " + err.message);
     } finally {
       setIsProcessing(false);

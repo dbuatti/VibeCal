@@ -65,11 +65,12 @@ Deno.serve(async (req) => {
     }
 
     const principalUrl = principalHref.startsWith('/') ? `${baseUrl}${principalHref}` : principalHref;
+    console.log(`[${functionName}] Principal URL: ${principalUrl}`);
 
-    const homeRes = await fetch(principalUrl, { 
-      method: 'PROPFIND', 
-      headers: { ...headers, 'Depth': '0' }, 
-      body: `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><C:calendar-home-set/></D:prop></D:propfind>` 
+    const homeRes = await fetch(principalUrl, {
+      method: 'PROPFIND',
+      headers: { ...headers, 'Depth': '0' },
+      body: `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><C:calendar-home-set/></D:prop></D:propfind>`
     });
     const homeText = await homeRes.text();
     let homeHref = homeText.match(/calendar-home-set[^>]*>\s*<[^:]*href[^>]*>([^<]+)<\/[^>]*>/i)?.[1] ||
@@ -78,16 +79,17 @@ Deno.serve(async (req) => {
     // Fallback: if home set not found, sometimes the principal URL IS the home set or close to it
     if (!homeHref) {
       console.warn(`[${functionName}] Home set not found in principal, trying fallback`);
-      homeHref = principalHref; 
+      homeHref = principalHref;
     }
 
     const homeUrl = homeHref.startsWith('/') ? `${baseUrl}${homeHref}` : homeHref;
+    console.log(`[${functionName}] Home URL: ${homeUrl}`);
 
     // 4. Discover Calendars
-    const calsRes = await fetch(homeUrl, { 
-      method: 'PROPFIND', 
-      headers, 
-      body: `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><D:displayname/><D:resourcetype/></D:prop></D:propfind>` 
+    const calsRes = await fetch(homeUrl, {
+      method: 'PROPFIND',
+      headers,
+      body: `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><D:displayname/><D:resourcetype/></D:prop></D:propfind>`
     });
     const calsText = await calsRes.text();
     
@@ -98,14 +100,15 @@ Deno.serve(async (req) => {
       const name = resp.match(/<[^:]*:?displayname[^>]*>([^<]+)<\/[^>]*>/i)?.[1];
       const isCalendar = /<[^:]*:?resourcetype[^>]*>.*?<[^:]*:?calendar/is.test(resp);
       if (href && isCalendar && name && !name.includes('@')) {
-        discoveredCalendars.push({ 
-          user_id: user.id, 
-          calendar_id: href.startsWith('/') ? `${baseUrl}${href}` : href, 
-          calendar_name: name, 
+        discoveredCalendars.push({
+          user_id: user.id,
+          calendar_id: href.startsWith('/') ? `${baseUrl}${href}` : href,
+          calendar_name: name,
           provider: 'apple'
         });
       }
     }
+    console.log(`[${functionName}] Discovered ${discoveredCalendars.length} Apple calendars`);
 
     // 5. Sync Calendar List to user_calendars table
     const existingCalsRes = await fetch(`${supabaseUrl}/rest/v1/user_calendars?user_id=eq.${user.id}&provider=eq.apple`, {

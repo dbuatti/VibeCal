@@ -62,6 +62,7 @@ Deno.serve(async (req) => {
     }
 
     const listData = await listRes.json();
+    console.log(`[${functionName}] Found ${listData.items?.length} calendars in Google`);
     const googleCalendars = (listData.items || []).filter(cal => !cal.id.includes('@import.calendar.google.com'));
 
     // 4. Sync Calendar List to user_calendars table
@@ -70,6 +71,7 @@ Deno.serve(async (req) => {
       headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
     });
     const existingCals = await existingCalsRes.json();
+    console.log(`[${functionName}] Found ${existingCals.length} existing calendars in DB`);
     
     const calendarsToUpsert = googleCalendars.map(cal => {
       const existing = existingCals.find(e => e.calendar_id === cal.id);
@@ -85,16 +87,20 @@ Deno.serve(async (req) => {
     });
 
     if (calendarsToUpsert.length > 0) {
-      await fetch(`${supabaseUrl}/rest/v1/user_calendars?on_conflict=user_id,calendar_id`, {
+      console.log(`[${functionName}] Upserting ${calendarsToUpsert.length} calendars to DB`);
+      const calUpsertRes = await fetch(`${supabaseUrl}/rest/v1/user_calendars?on_conflict=user_id,calendar_id`, {
         method: 'POST',
-        headers: { 
-          'apikey': supabaseKey, 
+        headers: {
+          'apikey': supabaseKey,
           'Authorization': `Bearer ${supabaseKey}`,
           'Content-Type': 'application/json',
           'Prefer': 'resolution=merge-duplicates'
         },
         body: JSON.stringify(calendarsToUpsert)
       });
+      if (!calUpsertRes.ok) {
+        console.error(`[${functionName}] Calendar Upsert Error:`, await calUpsertRes.text());
+      }
     }
 
     // 5. Filter to only ENABLED calendars for event sync
@@ -114,10 +120,15 @@ Deno.serve(async (req) => {
     const allEvents = [];
     for (const calId of enabledCalendarIds) {
       const cal = googleCalendars.find(c => c.id === calId);
+      console.log(`[${functionName}] Fetching events for calendar: ${cal?.summary || calId}`);
       const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) continue;
+      if (!res.ok) {
+        console.error(`[${functionName}] Error fetching events for ${calId}:`, await res.text());
+        continue;
+      }
       const data = await res.json();
+      console.log(`[${functionName}] Found ${data.items?.length || 0} events in ${calId}`);
       
       const events = (data.items || []).map(event => ({
         user_id: user.id,
@@ -126,8 +137,8 @@ Deno.serve(async (req) => {
         start_time: event.start.dateTime || event.start.date,
         end_time: event.end.dateTime || event.end.date,
         provider: 'google',
-        source_calendar: cal.summary,
-        source_calendar_id: cal.id,
+        source_calendar: cal?.summary || 'Unknown',
+        source_calendar_id: calId,
         last_synced_at: new Date().toISOString()
       }));
       allEvents.push(...events);
@@ -135,10 +146,11 @@ Deno.serve(async (req) => {
 
     // 7. Upsert to Supabase (Direct REST)
     if (allEvents.length > 0) {
+      console.log(`[${functionName}] Upserting ${allEvents.length} total events to cache`);
       const upsertRes = await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
         method: 'POST',
-        headers: { 
-          'apikey': supabaseKey, 
+        headers: {
+          'apikey': supabaseKey,
           'Authorization': `Bearer ${supabaseKey}`,
           'Content-Type': 'application/json',
           'Prefer': 'resolution=merge-duplicates'
@@ -158,17 +170,18 @@ Deno.serve(async (req) => {
       .map(c => c.calendar_id);
     
     if (disabledCalendarIds.length > 0) {
-      // We can't easily do "IN" with REST API in a single call for multiple IDs without complex syntax
-      // but we can loop or use a single delete with multiple filters if supported.
-      // Actually, Supabase REST supports `id=in.(1,2,3)`
+      console.log(`[${functionName}] Cleaning up ${disabledCalendarIds.length} disabled calendars from cache`);
       const idList = disabledCalendarIds.map(id => `"${id}"`).join(',');
-      await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&source_calendar_id=in.(${idList})`, {
+      const deleteRes = await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&source_calendar_id=in.(${idList})`, {
         method: 'DELETE',
-        headers: { 
-          'apikey': supabaseKey, 
+        headers: {
+          'apikey': supabaseKey,
           'Authorization': `Bearer ${supabaseKey}`
         }
       });
+      if (!deleteRes.ok) {
+        console.error(`[${functionName}] Cleanup Error:`, await deleteRes.text());
+      }
     }
 
     return new Response(JSON.stringify({ count: allEvents.length }), { 
