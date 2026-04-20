@@ -2,6 +2,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0'
 import { GoogleGenerativeAI } from "https://esm.sh/@google/generative-ai@0.1.0"
+import { toDate, formatInTimeZone } from "https://esm.sh/date-fns-tz@3.1.1"
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -49,41 +50,19 @@ serve(async (req) => {
       group_similar_tasks: true,
       work_keywords: ['meeting', 'call', 'lesson', 'audition', 'rehearsal']
     };
-    const userTimezone = profileRes.data?.timezone || 'Australia/Sydney';
+    const userTimezone = profileRes.data?.timezone || 'Australia/Melbourne';
     const allEvents = eventsRes.data || [];
     const dayThemes = themesRes.data || [];
     const workKeywords = settings.work_keywords || [];
 
-    console.log(`[${functionName}] Timezone: ${userTimezone} | Max Tasks: ${maxTasksOverride || settings.max_tasks_per_day} | Max Hours: ${settings.max_hours_per_day}`);
+    console.log(`[${functionName}] Config - TZ: ${userTimezone} | Window: ${settings.day_start_time}-${settings.day_end_time} | Max Tasks: ${maxTasksOverride || settings.max_tasks_per_day}`);
 
-    // Calculate local midnight in user's timezone
+    // Get "Today" in user's timezone
     const now = new Date();
-    const formatter = new Intl.DateTimeFormat('en-US', { 
-      timeZone: userTimezone, 
-      year: 'numeric', month: '2-digit', day: '2-digit', 
-      hour: '2-digit', minute: '2-digit', second: '2-digit', 
-      hour12: false 
-    });
-    
-    const getLocalParts = (date) => {
-      const parts = formatter.formatToParts(date);
-      const p = {};
-      parts.forEach(part => p[part.type] = part.value);
-      return p;
-    };
+    const todayStr = formatInTimeZone(now, userTimezone, 'yyyy-MM-dd');
+    const utcTodayStart = toDate(`${todayStr}T00:00:00`, { timeZone: userTimezone });
 
-    const p = getLocalParts(now);
-    const localMidnight = new Date(Date.UTC(parseInt(p.year), parseInt(p.month) - 1, parseInt(p.day), 0, 0, 0));
-    const mp = getLocalParts(localMidnight);
-    
-    const formattedMidnight = new Date(Date.UTC(
-      parseInt(mp.year), parseInt(mp.month) - 1, parseInt(mp.day), 
-      parseInt(mp.hour), parseInt(mp.minute), parseInt(mp.second)
-    ));
-    const offsetMs = formattedMidnight.getTime() - localMidnight.getTime();
-    const utcTodayStart = new Date(localMidnight.getTime() - offsetMs);
-
-    // Deduplicate events by event_id
+    // Deduplicate and filter future events
     const seenIds = new Set();
     const uniqueEvents = allEvents.filter(e => {
       if (seenIds.has(e.event_id)) return false;
@@ -145,7 +124,7 @@ serve(async (req) => {
 
     // Pre-calculate stats for fixed events
     fixedEvents.forEach(f => {
-      const dayKey = new Intl.DateTimeFormat('en-CA', { timeZone: userTimezone }).format(new Date(f.start_time));
+      const dayKey = formatInTimeZone(new Date(f.start_time), userTimezone, 'yyyy-MM-dd');
       if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
       const stats = dailyStats.get(dayKey);
       
@@ -155,13 +134,10 @@ serve(async (req) => {
         stats.hours += duration;
       }
       
-      // Count as a task if it's not a break or meal
       const isTask = !f.title?.toLowerCase().includes('lunch') && 
                      !f.title?.toLowerCase().includes('break') && 
                      !f.title?.toLowerCase().includes('dinner');
-      if (isTask) {
-        stats.tasks += 1;
-      }
+      if (isTask) stats.tasks += 1;
     });
 
     let surplusCount = 0;
@@ -171,18 +147,14 @@ serve(async (req) => {
       const durationMs = effectiveDuration * 60000;
       let foundSlot = false;
 
-      console.log(`[${functionName}] Processing task: "${event.title}" (${effectiveDuration}m)`);
-
       for (let pass = 1; pass <= 2; pass++) {
         if (foundSlot) break;
         
         let dayOffset = 0;
         while (!foundSlot && dayOffset <= 14) {
-          let currentDayStart = new Date(utcTodayStart);
-          currentDayStart.setUTCDate(currentDayStart.getUTCDate() + dayOffset);
-          
-          const dayKey = new Intl.DateTimeFormat('en-CA', { timeZone: userTimezone }).format(currentDayStart);
-          const dayOfWeek = (new Date(currentDayStart.getTime() + offsetMs).getUTCDay());
+          const currentDay = new Date(utcTodayStart.getTime() + (dayOffset * 86400000));
+          const dayKey = formatInTimeZone(currentDay, userTimezone, 'yyyy-MM-dd');
+          const dayOfWeek = toDate(currentDay, { timeZone: userTimezone }).getDay();
           const dayTheme = dayThemes.find(t => t.day_of_week === dayOfWeek)?.theme || "General";
           
           if (!selectedDays.includes(dayOfWeek)) { dayOffset++; continue; }
@@ -195,8 +167,8 @@ serve(async (req) => {
           const stats = dailyStats.get(dayKey);
           
           if (!stats.lastPointer) {
-            const dayStart = new Date(currentDayStart.getTime() + (startH * 3600000) + (startM * 60000));
-            let initialPointer = alignTime(dayStart, slotAlignment);
+            let initialPointer = toDate(`${dayKey}T${settings.day_start_time}:00`, { timeZone: userTimezone });
+            initialPointer = alignTime(initialPointer, slotAlignment);
             
             if (dayOffset === 0) {
               const nowAligned = alignTime(new Date(), slotAlignment);
@@ -206,25 +178,18 @@ serve(async (req) => {
           }
 
           let searchPointer = new Date(stats.lastPointer);
-          const dayEnd = new Date(currentDayStart.getTime() + (endH * 3600000) + (endM * 60000));
+          const dayEnd = toDate(`${dayKey}T${settings.day_end_time}:00`, { timeZone: userTimezone });
 
           while (searchPointer < dayEnd && !foundSlot) {
             const potentialEnd = new Date(searchPointer.getTime() + durationMs);
             const taskWorkHours = event.is_work ? (effectiveDuration / 60) : 0;
             
-            // Check if adding this task exceeds limits
             if (potentialEnd > dayEnd) {
-              console.log(`[${functionName}]   - Day ${dayKey}: Task ends at ${potentialEnd.toISOString()} which is past Day End (${dayEnd.toISOString()})`);
+              console.log(`[${functionName}]   - Day ${dayKey}: "${event.title}" hits Day End wall (${formatInTimeZone(dayEnd, userTimezone, 'HH:mm')})`);
               break;
             }
-            if ((stats.hours + taskWorkHours) > maxWorkHours) {
-              console.log(`[${functionName}]   - Day ${dayKey}: Adding task would exceed Max Hours (${stats.hours.toFixed(1)} + ${taskWorkHours.toFixed(1)} > ${maxWorkHours})`);
-              break;
-            }
-            if (stats.tasks >= maxTasks) {
-              console.log(`[${functionName}]   - Day ${dayKey}: Already at Max Tasks (${stats.tasks}/${maxTasks})`);
-              break;
-            }
+            if ((stats.hours + taskWorkHours) > maxWorkHours) break;
+            if (stats.tasks >= maxTasks) break;
 
             const collision = fixedEvents.find(f => {
               const fStart = new Date(f.start_time);
@@ -233,15 +198,12 @@ serve(async (req) => {
             });
 
             if (collision) {
-              console.log(`[${functionName}]   - Day ${dayKey}: Collision at ${searchPointer.toISOString()} with "${collision.title}"`);
               searchPointer = alignTime(new Date(new Date(collision.end_time).getTime() + 1 * 60000), slotAlignment);
             } else {
               foundSlot = true;
               stats.tasks += 1;
               stats.hours += taskWorkHours;
               stats.lastPointer = alignTime(new Date(potentialEnd.getTime() + 5 * 60000), slotAlignment);
-
-              console.log(`[${functionName}]   - Day ${dayKey}: SUCCESS! Scheduled at ${searchPointer.toISOString()}`);
 
               proposedChanges.push({
                 event_id: event.event_id,
@@ -262,11 +224,8 @@ serve(async (req) => {
       }
 
       if (!foundSlot && placeholderDate) {
-        console.log(`[${functionName}]   - NO SLOT FOUND. Moving to surplus on ${placeholderDate}`);
-        const pDate = new Date(placeholderDate);
-        const [startH, startM] = settings.day_start_time.split(':').map(Number);
-        const pStart = new Date(pDate);
-        pStart.setUTCHours(startH, startM + surplusCount, 0, 0);
+        const pDate = toDate(`${placeholderDate}T${settings.day_start_time}:00`, { timeZone: userTimezone });
+        const pStart = new Date(pDate.getTime() + (surplusCount * 60000));
         const pEnd = new Date(pStart.getTime() + durationMs);
 
         proposedChanges.push({
