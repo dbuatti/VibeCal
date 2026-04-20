@@ -47,7 +47,6 @@ serve(async (req) => {
     if (!principalRes.ok) throw new Error(`Principal discovery failed: ${principalRes.status}`);
     
     const principalText = await principalRes.text();
-    // More robust regex to handle namespaces and attributes
     const principalMatch = principalText.match(/<[^:]*:?current-user-principal[^>]*>\s*<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i);
     if (!principalMatch) {
       console.error(`[${functionName}] XML Response:`, principalText);
@@ -73,21 +72,35 @@ serve(async (req) => {
     const calsText = await calsRes.text();
     
     const calendarPaths = [];
-    const responses = calsText.split('</D:response>');
+    const responses = calsText.split(/<[^:]*:?response/i);
+    
     for (const resp of responses) {
-      if (resp.includes('<C:calendar/>') || resp.includes(':calendar')) {
+      // Look for calendar resource type more flexibly
+      if (/<[^:]*:?resourcetype[^>]*>.*?<[^:]*:?calendar/is.test(resp)) {
         const hrefMatch = resp.match(/<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i);
         const nameMatch = resp.match(/<[^:]*:?displayname[^>]*>([^<]+)<\/[^>]*>/i);
+        
         if (hrefMatch) {
+          let href = hrefMatch[1];
+          // Ensure href is a full URL if it's relative
+          if (href.startsWith('/')) {
+            const urlObj = new URL(homeHref);
+            href = `${urlObj.protocol}//${urlObj.host}${href}`;
+          }
+          
           calendarPaths.push({
-            href: hrefMatch[1],
+            href: href,
             name: nameMatch ? nameMatch[1] : 'Untitled'
           });
         }
       }
     }
 
-    console.log(`[${functionName}] Found ${calendarPaths.length} calendars.`);
+    if (calendarPaths.length === 0) {
+      console.warn(`[${functionName}] No calendars found in response. Raw XML:`, calsText);
+    } else {
+      console.log(`[${functionName}] Found ${calendarPaths.length} calendars.`);
+    }
 
     // 4. Fetch Events
     const syncStartTime = new Date();
@@ -120,9 +133,12 @@ serve(async (req) => {
     const fixedKeywords = /choir|appointment|appt|lesson|session|meeting|call|rehearsal|ceremony|lecture|christening|baptism|assessment|audition|coaching|program|work session|q & a|weekly|yoga|show|tech|dress|night|opening|closing|birthday|party|gala|buffer|probe|experiment|quinceanera|🎭|✨|lunch|dinner|breakfast|brunch|bump in|performance|gig|concert|wedding|funeral|doctor|dentist|flight|train|hotel|check-in|check-out|reservation|40th|50th|60th|anniversary/i;
 
     for (const cal of calendarPaths) {
-      console.log(`[${functionName}] Fetching events for: ${cal.name}`);
+      console.log(`[${functionName}] Fetching events for: ${cal.name} (${cal.href})`);
       const eventsRes = await fetch(cal.href, { method: 'REPORT', headers: { ...headers, 'Depth': '1' }, body: reportQuery });
-      if (!eventsRes.ok) continue;
+      if (!eventsRes.ok) {
+        console.warn(`[${functionName}] Failed to fetch events for ${cal.name}: ${eventsRes.status}`);
+        continue;
+      }
       
       const eventsText = await eventsRes.text();
       const icsDatas = eventsText.match(/BEGIN:VCALENDAR.*?END:VCALENDAR/gs) || [];
