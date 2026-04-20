@@ -64,6 +64,8 @@ const Vet = () => {
   
   const [showLocked, setShowLocked] = useState(true);
   const [showUnlocked, setShowUnlocked] = useState(true);
+  const [showGoogle, setShowGoogle] = useState(true);
+  const [showApple, setShowApple] = useState(true);
 
   const [trainingTask, setTrainingTask] = useState<any>(null);
   const [isTrainingModalOpen, setIsTrainingModalOpen] = useState(false);
@@ -88,41 +90,30 @@ const Vet = () => {
   }, []);
 
   const handleFullSync = async () => {
-    console.log("[Vet] Starting full sync...");
     setIsProcessing(true);
     setStatusText('Performing full system sync...');
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const { data: { user } } = await supabase.auth.getUser();
       
-      console.log("[Vet] User session:", !!session, "User ID:", user?.id);
-
       let token = session?.provider_token;
       if (!token && user) {
         const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
         token = profile?.google_access_token;
       }
 
-      console.log("[Vet] Google token available:", !!token);
-
       setStatusText('Syncing calendars...');
-      console.log("[Vet] Invoking sync-calendar and sync-apple-calendar...");
-      const syncResults = await Promise.allSettled([
+      await Promise.allSettled([
         supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: token } }),
         supabase.functions.invoke('sync-apple-calendar')
       ]);
       
-      console.log("[Vet] Sync results:", syncResults);
-
       setStatusText('AI is vetting your schedule...');
       const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, work_keywords, natural_language_rules').single();
       
       const { data: fetchedEvents } = await supabase.from('calendar_events_cache').select('*').eq('user_id', user.id).order('start_time', { ascending: true });
       
-      console.log("[Vet] Fetched events for classification:", fetchedEvents?.length);
-
       if (fetchedEvents && fetchedEvents.length > 0) {
-        console.log("[Vet] Invoking classify-tasks...");
         const batchSize = 10;
         for (let i = 0; i < fetchedEvents.length; i += batchSize) {
           const batch = fetchedEvents.slice(i, i + batchSize);
@@ -153,7 +144,6 @@ const Vet = () => {
       await fetchEvents();
       showSuccess("Sync and AI vetting complete!");
     } catch (err: any) {
-      console.error("[Vet] Sync error:", err);
       showError("Sync failed: " + err.message);
     } finally {
       setIsProcessing(false);
@@ -239,7 +229,6 @@ const Vet = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
       
-      // Await both updates to ensure they are saved
       await Promise.all([
         supabase.from('calendar_events_cache').update({ is_locked: newLockedStatus }).eq('event_id', event.event_id),
         supabase.from('task_classification_feedback').upsert({
@@ -260,14 +249,14 @@ const Vet = () => {
     const today = startOfDay(new Date());
     return events.filter(e => {
       const eventDate = parseISO(e.start_time);
-      // Show everything from today onwards
       const isFutureOrToday = eventDate >= today;
       const matchesSearch = e.title.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesFilter = e.is_locked ? showLocked : showUnlocked;
+      const matchesStatus = e.is_locked ? showLocked : showUnlocked;
+      const matchesProvider = (e.provider === 'google' && showGoogle) || (e.provider === 'apple' && showApple);
       
-      return isFutureOrToday && matchesSearch && matchesFilter;
+      return isFutureOrToday && matchesSearch && matchesStatus && matchesProvider;
     });
-  }, [events, searchQuery, showLocked, showUnlocked]);
+  }, [events, searchQuery, showLocked, showUnlocked, showGoogle, showApple]);
 
   const groupedEvents = useMemo(() => {
     const groups: { [key: string]: any[] } = {};
@@ -349,19 +338,33 @@ const Vet = () => {
           <Progress value={stats.progress} className="h-3 bg-gray-50" />
         </div>
 
-        <div className="sticky top-4 z-50 bg-white/90 backdrop-blur-xl rounded-[2.5rem] border border-gray-100 shadow-xl mb-10 p-4 flex flex-col lg:flex-row gap-4 justify-between items-center">
-          <div className="relative w-full lg:w-96">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-            <Input placeholder="Search tasks..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-12 h-12 rounded-2xl border-none bg-gray-50/50 font-bold text-sm" />
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-100">
-              <button onClick={() => setShowLocked(!showLocked)} className={cn("px-6 py-2 rounded-lg transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest", showLocked ? "bg-white text-red-500 shadow-sm" : "text-gray-400")}>
-                <Lock size={12} /> Fixed
-              </button>
-              <button onClick={() => setShowUnlocked(!showUnlocked)} className={cn("px-6 py-2 rounded-lg transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest", showUnlocked ? "bg-white text-green-500 shadow-sm" : "text-gray-400")}>
-                <Unlock size={12} /> Movable
-              </button>
+        <div className="sticky top-4 z-50 bg-white/90 backdrop-blur-xl rounded-[2.5rem] border border-gray-100 shadow-xl mb-10 p-4 flex flex-col gap-4">
+          <div className="flex flex-col lg:flex-row gap-4 justify-between items-center w-full">
+            <div className="relative w-full lg:w-96">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+              <Input placeholder="Search tasks..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-12 h-12 rounded-2xl border-none bg-gray-50/50 font-bold text-sm" />
+            </div>
+            
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              {/* Status Filter */}
+              <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-100">
+                <button onClick={() => setShowLocked(!showLocked)} className={cn("px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-[9px] font-black uppercase tracking-widest", showLocked ? "bg-white text-red-500 shadow-sm" : "text-gray-400")}>
+                  <Lock size={12} /> Fixed
+                </button>
+                <button onClick={() => setShowUnlocked(!showUnlocked)} className={cn("px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-[9px] font-black uppercase tracking-widest", showUnlocked ? "bg-white text-green-500 shadow-sm" : "text-gray-400")}>
+                  <Unlock size={12} /> Movable
+                </button>
+              </div>
+
+              {/* Provider Filter */}
+              <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-100">
+                <button onClick={() => setShowGoogle(!showGoogle)} className={cn("px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-[9px] font-black uppercase tracking-widest", showGoogle ? "bg-white text-indigo-600 shadow-sm" : "text-gray-400")}>
+                  <ProviderIcon provider="google" /> Google
+                </button>
+                <button onClick={() => setShowApple(!showApple)} className={cn("px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-[9px] font-black uppercase tracking-widest", showApple ? "bg-white text-indigo-600 shadow-sm" : "text-gray-400")}>
+                  <ProviderIcon provider="apple" /> Apple
+                </button>
+              </div>
             </div>
           </div>
         </div>
