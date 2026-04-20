@@ -91,17 +91,14 @@ const DayByDayPlanner = ({
   }, [events, currentDateStr]);
 
   const isDayVetted = useMemo(() => {
-    // If there are changes, they must all be applied
     if (dayChanges.length > 0) {
       return dayChanges.every(c => appliedChanges.includes(c.event_id));
     }
     
-    // If there are NO changes, but it's a work day, it's only "vetted" if it's not empty due to a bug
-    // We'll assume it's vetted if it's a weekend or if the user has explicitly accepted the empty state
-    const dayOfWeek = currentDate.getDay();
+    // Timezone-aware day of week check (0=Sun, 1=Mon, etc)
+    const dayOfWeek = parseInt(formatInTimeZone(currentDate, timezone, 'e')) - 1;
     if (!selectedDays.includes(dayOfWeek)) return true;
     
-    // If it's a work day and empty, we'll show it as "Vetting" to encourage a resuggest
     return false;
   }, [dayChanges, appliedChanges, currentDate, selectedDays]);
 
@@ -259,7 +256,7 @@ const DayByDayPlanner = ({
                 <Button disabled className="w-full bg-gray-100 text-gray-400 rounded-2xl py-8 text-lg font-black cursor-not-allowed">
                   No Sync Required
                 </Button>
-                {onResuggestDay && selectedDays.includes(currentDate.getDay()) && (
+                {onResuggestDay && selectedDays.includes(parseInt(formatInTimeZone(currentDate, timezone, 'e')) - 1) && (
                   <Button onClick={handleResuggest} disabled={isResuggesting} variant="ghost" className="w-full rounded-2xl py-4 text-xs font-black uppercase tracking-widest text-indigo-600 hover:bg-indigo-50">
                     {isResuggesting ? <RefreshCw className="animate-spin mr-2" size={14} /> : <><Wand2 className="mr-2" size={14} /> Resuggest Tasks</>}
                   </Button>
