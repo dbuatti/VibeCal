@@ -31,40 +31,70 @@ serve(async (req) => {
       return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
     }
 
+    // Use standard Basic Auth encoding
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
     const headers = {
       'Authorization': `Basic ${auth}`,
       'Content-Type': 'text/xml; charset=utf-8',
-      'Depth': '1'
+      'User-Agent': 'VibeCal/1.0 (iCloud Sync)',
+      'Accept': '*/*',
+      'Depth': '0'
     };
 
     // 1. Discover Principal
-    console.log(`[${functionName}] Discovering iCloud Principal...`);
+    console.log(`[${functionName}] Discovering iCloud Principal for ${profile.apple_id}...`);
     const propfindPrincipal = `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:"><D:prop><D:current-user-principal/></D:prop></D:propfind>`;
-    const principalRes = await fetch('https://caldav.icloud.com/', { method: 'PROPFIND', headers, body: propfindPrincipal });
-    if (!principalRes.ok) throw new Error(`Principal discovery failed: ${principalRes.status}`);
+    
+    const principalRes = await fetch('https://caldav.icloud.com/', { 
+      method: 'PROPFIND', 
+      headers: { ...headers, 'Depth': '0' }, 
+      body: propfindPrincipal 
+    });
+
+    if (!principalRes.ok) {
+      const errText = await principalRes.text();
+      console.error(`[${functionName}] Principal discovery failed (${principalRes.status}):`, errText);
+      throw new Error(`Principal discovery failed: ${principalRes.status}`);
+    }
     
     const principalText = await principalRes.text();
     const principalMatch = principalText.match(/<current-user-principal>.*?<href>(.*?)<\/href>.*?<\/current-user-principal>/s);
-    if (!principalMatch) throw new Error("Could not find principal href");
+    if (!principalMatch) {
+      console.error(`[${functionName}] Could not find principal href in response:`, principalText);
+      throw new Error("Could not find principal href");
+    }
     const principalHref = principalMatch[1];
+    console.log(`[${functionName}] Found Principal Href: ${principalHref}`);
 
     // 2. Discover Calendar Home Set
     console.log(`[${functionName}] Discovering Calendar Home Set...`);
     const propfindHome = `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><C:calendar-home-set/></D:prop></D:propfind>`;
-    const homeRes = await fetch(`https://caldav.icloud.com${principalHref}`, { method: 'PROPFIND', headers, body: propfindHome });
+    const homeRes = await fetch(`https://caldav.icloud.com${principalHref}`, { 
+      method: 'PROPFIND', 
+      headers: { ...headers, 'Depth': '0' }, 
+      body: propfindHome 
+    });
+    
+    if (!homeRes.ok) throw new Error(`Home set discovery failed: ${homeRes.status}`);
+    
     const homeText = await homeRes.text();
     const homeMatch = homeText.match(/<calendar-home-set>.*?<href>(.*?)<\/href>.*?<\/calendar-home-set>/s);
     if (!homeMatch) throw new Error("Could not find calendar home set");
     const homeHref = homeMatch[1];
+    console.log(`[${functionName}] Found Home Href: ${homeHref}`);
 
     // 3. Discover Calendars
     console.log(`[${functionName}] Discovering Calendars...`);
     const propfindCals = `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><D:displayname/><D:resourcetype/></D:prop></D:propfind>`;
-    const calsRes = await fetch(homeHref, { method: 'PROPFIND', headers, body: propfindCals });
-    const calsText = await calsRes.text();
+    const calsRes = await fetch(homeHref, { 
+      method: 'PROPFIND', 
+      headers: { ...headers, 'Depth': '1' }, 
+      body: propfindCals 
+    });
     
-    // Simple regex parsing for calendars (Deno doesn't have a built-in XML parser)
+    if (!calsRes.ok) throw new Error(`Calendar discovery failed: ${calsRes.status}`);
+    
+    const calsText = await calsRes.text();
     const calendarPaths = [];
     const responses = calsText.split('</D:response>');
     for (const resp of responses) {
@@ -114,8 +144,16 @@ serve(async (req) => {
 
     for (const cal of calendarPaths) {
       console.log(`[${functionName}] Fetching events for: ${cal.name}`);
-      const eventsRes = await fetch(cal.href, { method: 'REPORT', headers, body: reportQuery });
-      if (!eventsRes.ok) continue;
+      const eventsRes = await fetch(cal.href, { 
+        method: 'REPORT', 
+        headers: { ...headers, 'Depth': '1' }, 
+        body: reportQuery 
+      });
+      
+      if (!eventsRes.ok) {
+        console.warn(`[${functionName}] Failed to fetch events for ${cal.name}: ${eventsRes.status}`);
+        continue;
+      }
       
       const eventsText = await eventsRes.text();
       const icsDatas = eventsText.match(/BEGIN:VCALENDAR.*?END:VCALENDAR/gs) || [];
@@ -164,19 +202,20 @@ serve(async (req) => {
     console.log(`[${functionName}] Upserting ${uniqueEvents.length} Apple events...`);
 
     if (uniqueEvents.length > 0) {
-      await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
+      const { error: upsertError } = await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
+      if (upsertError) throw upsertError;
     }
 
     // Cleanup stale Apple events
     const cleanupThreshold = new Date(new Date(syncTimestamp).getTime() - 60000).toISOString();
-    await supabaseAdmin.from('calendar_events_cache')
-      .delete()
+    const { count: deletedCount } = await supabaseAdmin.from('calendar_events_cache')
+      .delete({ count: 'exact' })
       .eq('user_id', user.id)
       .eq('provider', 'apple')
       .gte('start_time', syncStartTime.toISOString())
       .lt('last_seen_at', cleanupThreshold);
 
-    console.log(`[${functionName}] SUCCESS - Synced ${uniqueEvents.length} events.`);
+    console.log(`[${functionName}] SUCCESS - Synced ${uniqueEvents.length} events, cleaned up ${deletedCount || 0}.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
     console.error(`[${functionName}] FATAL ERROR:`, error.message);
