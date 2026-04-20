@@ -92,7 +92,6 @@ const Vet = () => {
   }, []);
 
   const handleFullSync = async () => {
-    if (isProcessing) return;
     setIsProcessing(true);
     setStatusText('Performing full system sync...');
     try {
@@ -222,22 +221,46 @@ const Vet = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
+      // Fetch latest settings to ensure we respect current limits
+      const { data: settings } = await supabase.from('user_settings').select('*').eq('user_id', user.id).single();
+
       const { data, error } = await supabase.functions.invoke('optimise-schedule', {
-        body: { targetDate: dateKey }
+        body: { 
+          targetDate: dateKey,
+          maxHoursOverride: settings?.max_hours_per_day,
+          maxTasksOverride: settings?.max_tasks_per_day,
+          durationOverride: settings?.duration_override,
+          slotAlignment: settings?.slot_alignment
+        }
       });
 
       if (error) throw error;
 
-      // Save to history
-      await supabase.from('optimisation_history').insert({
-        user_id: user.id,
-        proposed_changes: data.changes,
-        status: 'proposed',
-        metadata: { targetDate: dateKey, isSingleDay: true }
-      });
+      // Update local state immediately for the "Command Centre" feel
+      const updatedEvents = [...events];
+      for (const change of data.changes) {
+        const idx = updatedEvents.findIndex(e => e.event_id === change.event_id);
+        if (idx !== -1) {
+          updatedEvents[idx] = {
+            ...updatedEvents[idx],
+            start_time: change.new_start || updatedEvents[idx].start_time,
+            end_time: change.new_end || updatedEvents[idx].end_time,
+            duration_minutes: change.duration || updatedEvents[idx].duration_minutes
+          };
+          
+          // Also update DB cache so it persists
+          await supabase.from('calendar_events_cache')
+            .update({ 
+              start_time: change.new_start, 
+              end_time: change.new_end, 
+              duration_minutes: change.duration 
+            })
+            .eq('event_id', change.event_id);
+        }
+      }
 
-      showSuccess(`New plan generated for ${dateKey}!`);
-      navigate('/plan');
+      setEvents(updatedEvents);
+      showSuccess(`Day re-planned! Slots updated.`);
     } catch (err: any) {
       showError("Re-plan failed: " + err.message);
     } finally {

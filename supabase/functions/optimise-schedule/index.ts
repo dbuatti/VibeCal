@@ -41,7 +41,7 @@ serve(async (req) => {
       selectedDays = [1, 2, 3, 4, 5],
       placeholderDate,
       vettedEventIds = [],
-      targetDate // NEW: Support for single-day re-planning
+      targetDate 
     } = body;
 
     const [settingsRes, eventsRes] = await Promise.all([
@@ -69,8 +69,9 @@ serve(async (req) => {
     };
 
     const proposedChanges = [];
-    const fixedEvents = allEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
-    const movableEvents = allEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
+    // CRITICAL: Treat is_locked as fixed anchors
+    const fixedEvents = allEvents.filter(e => e.is_locked === true || vettedEventIds.includes(e.event_id));
+    const movableEvents = allEvents.filter(e => e.is_locked !== true && !vettedEventIds.includes(e.event_id));
 
     const now = new Date();
     const todayStr = formatInTimeZone(now, userTimezone, 'yyyy-MM-dd');

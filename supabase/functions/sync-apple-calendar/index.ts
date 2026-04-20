@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
-import { toDate } from 'https://esm.sh/date-fns-tz@3.2.0?deps=date-fns@3.6.0'
+import { toDate, formatInTimeZone } from 'https://esm.sh/date-fns-tz@3.2.0?deps=date-fns@3.6.0'
+import { addMinutes, parseISO, isBefore, startOfDay } from 'https://esm.sh/date-fns@3.6.0'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -38,6 +39,13 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
     }
 
+    // 3. Cleanup Step: Delete past Apple events to fix "Ghost" data
+    const todayStr = formatInTimeZone(new Date(), userTimezone, "yyyy-MM-dd'T'00:00:00XXX");
+    await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&provider=eq.apple&start_time=lt.${todayStr}`, {
+      method: 'DELETE',
+      headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
+    });
+
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
     const headers = {
       'Authorization': `Basic ${auth}`,
@@ -47,13 +55,12 @@ Deno.serve(async (req) => {
     };
 
     const baseUrl = 'https://caldav.icloud.com';
-    
     const extractHref = (xml, tag) => {
       const regex = new RegExp(`<[^>]*${tag}[^>]*>\\s*<[^>]*href[^>]*>([^<]+)<\\/[^>]*href>\\s*<\\/[^>]*${tag}>`, 'i');
       return xml.match(regex)?.[1];
     };
 
-    // 3. Discover Principal & Home Set
+    // 4. Discover Principal & Home Set
     const principalRes = await fetch(`${baseUrl}/`, { 
       method: 'PROPFIND', 
       headers: { ...headers, 'Depth': '0' }, 
@@ -61,11 +68,9 @@ Deno.serve(async (req) => {
     });
     const principalText = await principalRes.text();
     let principalPath = extractHref(principalText, 'current-user-principal');
-    if (!principalPath || principalPath === '/') {
-      principalPath = principalText.match(/href="([^"]*\/\d+\/principal\/)"/i)?.[1] || 
-                      principalText.match(/>(\/\d+\/principal\/)</i)?.[1];
+    if (!principalPath) {
+      principalPath = principalText.match(/href="([^"]*\/\d+\/principal\/)"/i)?.[1] || principalText.match(/>(\/\d+\/principal\/)</i)?.[1];
     }
-    if (!principalPath) throw new Error("Could not find iCloud principal path.");
     const principalUrl = principalPath.startsWith('http') ? principalPath : `${baseUrl}${principalPath}`;
 
     const homeRes = await fetch(principalUrl, {
@@ -75,14 +80,9 @@ Deno.serve(async (req) => {
     });
     const homeText = await homeRes.text();
     let homePath = extractHref(homeText, 'calendar-home-set');
-    if (!homePath) {
-      const dsidMatch = principalPath.match(/\/(\d+)\//);
-      if (dsidMatch) homePath = `/${dsidMatch[1]}/calendars/`;
-      else homePath = principalPath;
-    }
     const homeUrl = homePath.startsWith('http') ? homePath : `${baseUrl}${homePath}`;
 
-    // 4. Discover Calendars
+    // 5. Discover Calendars
     const calsRes = await fetch(homeUrl, {
       method: 'PROPFIND',
       headers: { ...headers, 'Depth': '1' },
@@ -96,28 +96,18 @@ Deno.serve(async (req) => {
       const name = resp.match(/<[^:]*:?displayname[^>]*>([^<]+)<\/[^:]*:?displayname>/i)?.[1];
       const isCalendar = /resourcetype[^>]*>.*?calendar/is.test(resp);
       if (href && isCalendar && name && !name.includes('@')) {
-        discoveredCalendars.push({
-          user_id: user.id,
-          calendar_id: href.startsWith('http') ? href : `${baseUrl}${href}`,
-          calendar_name: name,
-          provider: 'apple'
-        });
+        discoveredCalendars.push({ user_id: user.id, calendar_id: href.startsWith('http') ? href : `${baseUrl}${href}`, calendar_name: name, provider: 'apple' });
       }
     }
 
-    // 5. Sync Calendar List
+    // 6. Sync Calendar List
     const existingCalsRes = await fetch(`${supabaseUrl}/rest/v1/user_calendars?user_id=eq.${user.id}&provider=eq.apple`, {
       headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
     });
     const existingCals = await existingCalsRes.json();
-
     const calendarsToUpsert = discoveredCalendars.map(cal => {
       const existing = existingCals.find(e => e.calendar_id === cal.calendar_id);
-      let isEnabled = existing ? existing.is_enabled : false;
-      if (!isEnabled && !existing && !existingCals.some(c => c.is_enabled) && !cal.calendar_name.toLowerCase().includes('reminders')) {
-        isEnabled = true;
-      }
-      return { ...cal, is_enabled: isEnabled };
+      return { ...cal, is_enabled: existing ? existing.is_enabled : !cal.calendar_name.toLowerCase().includes('reminders') };
     });
 
     if (calendarsToUpsert.length > 0) {
@@ -128,23 +118,14 @@ Deno.serve(async (req) => {
       });
     }
 
-    // 6. Fetch Events with custom range support
+    // 7. Fetch Events (Today onwards only)
     const enabledCalendars = calendarsToUpsert.filter(c => c.is_enabled);
     const allEvents = [];
     
-    // Safety check for customMin/customMax to prevent Invalid Date errors
-    const getIsoRange = (dateStr, defaultOffsetDays) => {
-      try {
-        const date = dateStr ? new Date(dateStr) : new Date(Date.now() + defaultOffsetDays * 24 * 60 * 60 * 1000);
-        if (isNaN(date.getTime())) throw new Error("Invalid Date");
-        return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-      } catch (e) {
-        return new Date(Date.now() + defaultOffsetDays * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-      }
-    };
-
-    const startRange = getIsoRange(customMin, -30);
-    const endRange = getIsoRange(customMax, 180);
+    const startRange = customMin ? new Date(customMin).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z' : 
+                      new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'; // Default to NOW
+    const endRange = customMax ? new Date(customMax).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z' : 
+                    new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
     for (const cal of enabledCalendars) {
       try {
@@ -174,12 +155,10 @@ Deno.serve(async (req) => {
           const unfolded = icsData.replace(/\r\n\s/g, '');
           const summaryMatch = unfolded.match(/SUMMARY:(.*)/i);
           const uidMatch = unfolded.match(/UID:(.*)/i);
-          
-          // Robust Regex for START and END with potential TZIDs
           const startMatch = unfolded.match(/DTSTART(?:;TZID=[^:]+)?[:](\d{8}T\d{6}Z?)/i);
           const endMatch = unfolded.match(/DTEND(?:;TZID=[^:]+)?[:](\d{8}T\d{6}Z?)/i);
 
-          if (uidMatch?.[1] && startMatch?.[1] && endMatch?.[1]) {
+          if (uidMatch?.[1] && startMatch?.[1]) {
             const parseIcalDate = (str, tz) => {
               const y = str.substring(0, 4), m = str.substring(4, 6), d = str.substring(6, 8);
               const h = str.substring(9, 11), min = str.substring(11, 13), s = str.substring(13, 15);
@@ -188,27 +167,35 @@ Deno.serve(async (req) => {
             };
 
             const startTime = parseIcalDate(startMatch[1].trim(), userTimezone);
-            const endTime = parseIcalDate(endMatch[1].trim(), userTimezone);
-            const title = summaryMatch?.[1]?.trim() || 'Untitled';
+            let endTime;
             
-            // Calculate duration in minutes
+            if (endMatch?.[1]) {
+              endTime = parseIcalDate(endMatch[1].trim(), userTimezone);
+            } else {
+              // Default to 30 minutes if DTEND is missing
+              endTime = addMinutes(parseISO(startTime), 30).toISOString();
+            }
+
+            const title = summaryMatch?.[1]?.trim() || 'Untitled';
             const durationMinutes = Math.round((new Date(endTime).getTime() - new Date(startTime).getTime()) / 60000);
 
-            // Debug Log as requested
-            console.log(`[${functionName}] [Debug] Event: ${title} | Start: ${startTime} | End: ${endTime} | Duration: ${durationMinutes}min`);
+            // Only include if it's today or future
+            if (!isBefore(parseISO(startTime), startOfDay(new Date()))) {
+              console.log(`[${functionName}] [Debug] Event: ${title} | Start: ${startTime} | End: ${endTime} | Duration: ${durationMinutes}min`);
 
-            allEvents.push({
-              user_id: user.id,
-              event_id: uidMatch[1].trim(),
-              title: title,
-              start_time: startTime,
-              end_time: endTime,
-              duration_minutes: durationMinutes,
-              provider: 'apple',
-              source_calendar: cal.calendar_name,
-              source_calendar_id: cal.calendar_id,
-              last_synced_at: new Date().toISOString()
-            });
+              allEvents.push({
+                user_id: user.id,
+                event_id: uidMatch[1].trim(),
+                title: title,
+                start_time: startTime,
+                end_time: endTime,
+                duration_minutes: durationMinutes,
+                provider: 'apple',
+                source_calendar: cal.calendar_name,
+                source_calendar_id: cal.calendar_id,
+                last_synced_at: new Date().toISOString()
+              });
+            }
           }
         }
       } catch (err) { console.error(`[${functionName}] Error in ${cal.calendar_name}:`, err.message); }
