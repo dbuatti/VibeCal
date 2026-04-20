@@ -151,14 +151,16 @@ serve(async (req) => {
           const dayKey = formatInTimeZone(currentDay, userTimezone, 'yyyy-MM-dd');
           const isToday = (dayKey === todayStr);
           
-          // FIX: Use ISO day of week (1=Mon, 7=Sun) and convert to 0=Sun, 1=Mon
-          const isoDay = parseInt(formatInTimeZone(currentDay, userTimezone, 'i'));
-          const dayOfWeek = isoDay % 7; 
+          // FIX: Use a more robust day-of-week calculation that ignores server UTC
+          // 'i' returns 1 (Mon) to 7 (Sun). We map 7 to 0 to match [0=Sun, 1=Mon...]
+          const isoDayStr = formatInTimeZone(currentDay, userTimezone, 'i');
+          const isoDay = parseInt(isoDayStr);
+          const dayOfWeek = isoDay === 7 ? 0 : isoDay;
 
           if (pass === 0 && !isToday) break; 
 
           if (!selectedDays.includes(dayOfWeek)) {
-            if (isToday) console.log(`[${functionName}] TODAY SKIP: Day ${dayOfWeek} (Monday=1) not in selectedDays ${JSON.stringify(selectedDays)}`);
+            if (isToday) console.log(`[${functionName}] TODAY SKIP: Day ${dayOfWeek} (ISO: ${isoDayStr}) not in selectedDays ${JSON.stringify(selectedDays)}`);
             dayOffset++; continue; 
           }
 
