@@ -50,7 +50,7 @@ serve(async (req) => {
       group_similar_tasks: true,
       work_keywords: ['meeting', 'call', 'lesson', 'audition', 'rehearsal']
     };
-    const userTimezone = profileRes.data?.timezone || 'Australia/Sydney';
+    const userTimezone = profileRes.data?.timezone || 'Australia/Melbourne';
     const allEvents = eventsRes.data || [];
     const dayThemes = themesRes.data || [];
     const workKeywords = settings.work_keywords || [];
