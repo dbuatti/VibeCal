@@ -114,7 +114,15 @@ const Vet = () => {
       if (fetchedEvents && fetchedEvents.length > 0) {
         await supabase.functions.invoke('classify-tasks', {
           body: {
-            events: fetchedEvents.map(e => ({ event_id: e.event_id, title: e.title })),
+            events: fetchedEvents.map(e => ({
+              event_id: e.event_id,
+              title: e.title,
+              start_time: e.start_time,
+              end_time: e.end_time,
+              provider: e.provider,
+              source_calendar: e.source_calendar,
+              source_calendar_id: e.source_calendar_id
+            })),
             movableKeywords: settings?.movable_keywords || [],
             lockedKeywords: settings?.locked_keywords || [],
             workKeywords: settings?.work_keywords || [],
@@ -146,7 +154,15 @@ const Vet = () => {
       
       const { data, error } = await supabase.functions.invoke('classify-tasks', {
         body: {
-          events: events.map(e => ({ event_id: e.event_id, title: e.title })),
+          events: events.map(e => ({
+            event_id: e.event_id,
+            title: e.title,
+            start_time: e.start_time,
+            end_time: e.end_time,
+            provider: e.provider,
+            source_calendar: e.source_calendar,
+            source_calendar_id: e.source_calendar_id
+          })),
           movableKeywords: settings?.movable_keywords || [],
           lockedKeywords: settings?.locked_keywords || [],
           workKeywords: settings?.work_keywords || [],

@@ -49,7 +49,7 @@ Deno.serve(async (req) => {
     }
     if (!token) throw new Error("No Google Token");
 
-    // 3. Fetch Calendars
+    // 3. Fetch Calendars from Google
     let listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { 
       headers: { Authorization: `Bearer ${token}` } 
     });
@@ -64,15 +64,57 @@ Deno.serve(async (req) => {
     const listData = await listRes.json();
     const googleCalendars = (listData.items || []).filter(cal => !cal.id.includes('@import.calendar.google.com'));
 
-    // 4. Sync Events (Last 7 days to +2 years)
+    // 4. Sync Calendar List to user_calendars table
+    // We want to keep track of which calendars are enabled/disabled
+    const existingCalsRes = await fetch(`${supabaseUrl}/rest/v1/user_calendars?user_id=eq.${user.id}&provider=eq.google`, {
+      headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
+    });
+    const existingCals = await existingCalsRes.json();
+    
+    const calendarsToUpsert = googleCalendars.map(cal => {
+      const existing = existingCals.find(e => e.calendar_id === cal.id);
+      return {
+        user_id: user.id,
+        calendar_id: cal.id,
+        calendar_name: cal.summaryOverride || cal.summary,
+        provider: 'google',
+        color: cal.backgroundColor,
+        // If it's new, default to true if it's the primary one, false otherwise to avoid cluttering
+        is_enabled: existing ? existing.is_enabled : (cal.primary || false)
+      };
+    });
+
+    if (calendarsToUpsert.length > 0) {
+      await fetch(`${supabaseUrl}/rest/v1/user_calendars?on_conflict=user_id,calendar_id`, {
+        method: 'POST',
+        headers: { 
+          'apikey': supabaseKey, 
+          'Authorization': `Bearer ${supabaseKey}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'resolution=merge-duplicates'
+        },
+        body: JSON.stringify(calendarsToUpsert)
+      });
+    }
+
+    // 5. Filter to only ENABLED calendars for event sync
+    // Re-fetch or use the merged list
+    const enabledCalendarIds = calendarsToUpsert
+      .filter(c => c.is_enabled)
+      .map(c => c.calendar_id);
+
+    console.log(`[${functionName}] Syncing events for ${enabledCalendarIds.length} enabled calendars`);
+
+    // 6. Sync Events (Last 7 days to +2 years)
     const syncStartTime = new Date();
     syncStartTime.setDate(syncStartTime.getDate() - 7);
     const syncEndTime = new Date();
     syncEndTime.setFullYear(syncEndTime.getFullYear() + 2);
 
     const allEvents = [];
-    for (const cal of googleCalendars) {
-      const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.id)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`;
+    for (const calId of enabledCalendarIds) {
+      const cal = googleCalendars.find(c => c.id === calId);
+      const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) continue;
       const data = await res.json();
@@ -91,7 +133,7 @@ Deno.serve(async (req) => {
       allEvents.push(...events);
     }
 
-    // 5. Upsert to Supabase (Direct REST)
+    // 7. Upsert to Supabase (Direct REST)
     if (allEvents.length > 0) {
       const upsertRes = await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
         method: 'POST',
@@ -108,6 +150,25 @@ Deno.serve(async (req) => {
         const errorText = await upsertRes.text();
         console.error(`[${functionName}] Upsert Error:`, errorText);
       }
+    }
+
+    // 8. Cleanup: Remove events from cache that belong to calendars that are now disabled
+    const disabledCalendarIds = calendarsToUpsert
+      .filter(c => !c.is_enabled)
+      .map(c => c.calendar_id);
+    
+    if (disabledCalendarIds.length > 0) {
+      // We can't easily do "IN" with REST API in a single call for multiple IDs without complex syntax
+      // but we can loop or use a single delete with multiple filters if supported.
+      // Actually, Supabase REST supports `id=in.(1,2,3)`
+      const idList = disabledCalendarIds.map(id => `"${id}"`).join(',');
+      await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&source_calendar_id=in.(${idList})`, {
+        method: 'DELETE',
+        headers: { 
+          'apikey': supabaseKey, 
+          'Authorization': `Bearer ${supabaseKey}`
+        }
+      });
     }
 
     return new Response(JSON.stringify({ count: allEvents.length }), { 

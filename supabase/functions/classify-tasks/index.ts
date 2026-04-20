@@ -127,9 +127,15 @@ Deno.serve(async (req) => {
         const updates = events.map((event, i) => ({
           event_id: event.event_id,
           user_id: userId,
-          title: event.title, // Added title to satisfy NOT NULL constraint
+          title: event.title,
+          start_time: event.start_time,
+          end_time: event.end_time,
+          provider: event.provider,
+          source_calendar: event.source_calendar,
+          source_calendar_id: event.source_calendar_id,
           is_locked: !results[i].isMovable,
-          is_work: results[i].isWork || false
+          is_work: results[i].isWork || false,
+          last_synced_at: new Date().toISOString()
         }));
 
         console.log(`[${functionName}] Persisting ${updates.length} classifications for user ${userId}`);

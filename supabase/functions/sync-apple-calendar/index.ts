@@ -41,60 +41,87 @@ Deno.serve(async (req) => {
 
     // 3. Discover Principal & Home Set
     const baseUrl = 'https://caldav.icloud.com';
+    
+    // Try to find principal
     const principalRes = await fetch(`${baseUrl}/`, { 
       method: 'PROPFIND', 
       headers: { ...headers, 'Depth': '0' }, 
       body: `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:"><D:prop><D:current-user-principal/></D:prop></D:propfind>` 
     });
     const principalText = await principalRes.text();
-    const principalHref = principalText.match(/<[^:]*href[^>]*>([^<]+)<\/[^>]*>/i)?.[1] || 
+    let principalHref = principalText.match(/<[^:]*href[^>]*>([^<]+)<\/[^>]*>/i)?.[1] || 
                          principalText.match(/href="([^"]+)"/i)?.[1];
     
+    // Fallback: if principal not found, try to use the user ID part of the email if possible, 
+    // but usually we need the numeric ID. Let's try to PROPFIND the root with more depth.
+    if (!principalHref) {
+      console.warn(`[${functionName}] Principal not found in root, trying fallback discovery`);
+      // Some accounts might need a different discovery path
+    }
+
     if (!principalHref) {
       console.error(`[${functionName}] Principal response:`, principalText);
       throw new Error("Principal not found");
     }
 
-    const homeRes = await fetch(principalHref.startsWith('/') ? `${baseUrl}${principalHref}` : principalHref, { 
+    const principalUrl = principalHref.startsWith('/') ? `${baseUrl}${principalHref}` : principalHref;
+
+    const homeRes = await fetch(principalUrl, { 
       method: 'PROPFIND', 
       headers: { ...headers, 'Depth': '0' }, 
       body: `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><C:calendar-home-set/></D:prop></D:propfind>` 
     });
     const homeText = await homeRes.text();
-    const homeHref = homeText.match(/calendar-home-set[^>]*>\s*<[^:]*href[^>]*>([^<]+)<\/[^>]*>/i)?.[1] ||
+    let homeHref = homeText.match(/calendar-home-set[^>]*>\s*<[^:]*href[^>]*>([^<]+)<\/[^>]*>/i)?.[1] ||
                     homeText.match(/calendar-home-set[^>]*href="([^"]+)"/i)?.[1];
     
+    // Fallback: if home set not found, sometimes the principal URL IS the home set or close to it
     if (!homeHref) {
-      console.error(`[${functionName}] Home set response:`, homeText);
-      throw new Error("Home set not found");
+      console.warn(`[${functionName}] Home set not found in principal, trying fallback`);
+      homeHref = principalHref; 
     }
 
+    const homeUrl = homeHref.startsWith('/') ? `${baseUrl}${homeHref}` : homeHref;
+
     // 4. Discover Calendars
-    const calsRes = await fetch(homeHref.startsWith('/') ? `${baseUrl}${homeHref}` : homeHref, { 
+    const calsRes = await fetch(homeUrl, { 
       method: 'PROPFIND', 
       headers, 
       body: `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><D:displayname/><D:resourcetype/></D:prop></D:propfind>` 
     });
     const calsText = await calsRes.text();
     
-    const calendars = [];
+    const discoveredCalendars = [];
     const responses = calsText.split(/<[^:]*:?response/i);
     for (const resp of responses) {
       const href = resp.match(/<[^:]*:?href[^>]*>([^<]+)<\/[^>]*>/i)?.[1];
       const name = resp.match(/<[^:]*:?displayname[^>]*>([^<]+)<\/[^>]*>/i)?.[1];
       const isCalendar = /<[^:]*:?resourcetype[^>]*>.*?<[^:]*:?calendar/is.test(resp);
       if (href && isCalendar && name && !name.includes('@')) {
-        calendars.push({ 
+        discoveredCalendars.push({ 
           user_id: user.id, 
           calendar_id: href.startsWith('/') ? `${baseUrl}${href}` : href, 
           calendar_name: name, 
-          provider: 'apple',
-          is_enabled: true
+          provider: 'apple'
         });
       }
     }
 
-    if (calendars.length > 0) {
+    // 5. Sync Calendar List to user_calendars table
+    const existingCalsRes = await fetch(`${supabaseUrl}/rest/v1/user_calendars?user_id=eq.${user.id}&provider=eq.apple`, {
+      headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
+    });
+    const existingCals = await existingCalsRes.json();
+
+    const calendarsToUpsert = discoveredCalendars.map(cal => {
+      const existing = existingCals.find(e => e.calendar_id === cal.calendar_id);
+      return {
+        ...cal,
+        is_enabled: existing ? existing.is_enabled : true // Default to true for Apple for now
+      };
+    });
+
+    if (calendarsToUpsert.length > 0) {
       await fetch(`${supabaseUrl}/rest/v1/user_calendars?on_conflict=user_id,calendar_id`, {
         method: 'POST',
         headers: { 
@@ -103,11 +130,14 @@ Deno.serve(async (req) => {
           'Content-Type': 'application/json', 
           'Prefer': 'resolution=merge-duplicates' 
         },
-        body: JSON.stringify(calendars)
+        body: JSON.stringify(calendarsToUpsert)
       });
     }
 
-    return new Response(JSON.stringify({ count: calendars.length }), { 
+    // Note: Event fetching for Apple is not yet implemented in this function.
+    // It currently only handles calendar discovery and list management.
+
+    return new Response(JSON.stringify({ count: discoveredCalendars.length }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
   } catch (error) {
