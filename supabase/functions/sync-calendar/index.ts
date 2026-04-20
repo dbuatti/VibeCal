@@ -7,6 +7,27 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+async function refreshGoogleToken(refreshToken: string) {
+  console.log("[sync-calendar] Refreshing Google Access Token...");
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: Deno.env.get('GOOGLE_CLIENT_ID') || '',
+      client_secret: Deno.env.get('GOOGLE_CLIENT_SECRET') || '',
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+    }),
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    console.error("[sync-calendar] Token refresh failed:", data);
+    throw new Error("Failed to refresh Google token");
+  }
+  return data.access_token;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
@@ -25,20 +46,43 @@ serve(async (req) => {
     const { data: { user } } = await supabaseUser.auth.getUser()
     if (!user) throw new Error("Unauthorized");
 
-    if (!googleAccessToken) {
-      const { data: profile } = await supabaseAdmin.from('profiles').select('google_access_token').eq('id', user.id).single();
-      googleAccessToken = profile?.google_access_token;
-    }
+    const { data: profile } = await supabaseAdmin.from('profiles').select('google_access_token, google_refresh_token').eq('id', user.id).single();
+    
+    let token = googleAccessToken || profile?.google_access_token;
+    const refreshToken = profile?.google_refresh_token;
 
-    if (!googleAccessToken) {
+    if (!token && !refreshToken) {
       return new Response(JSON.stringify({ error: "Missing Google Access Token" }), { status: 401, headers: corsHeaders });
     }
 
-    // 1. Discover & Update Calendars
-    const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { 
-      headers: { Authorization: `Bearer ${googleAccessToken}` } 
+    // Test token and refresh if needed
+    let listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1', { 
+      headers: { Authorization: `Bearer ${token}` } 
     });
-    const listData = await listRes.json();
+
+    if (listRes.status === 401 && refreshToken) {
+      try {
+        token = await refreshGoogleToken(refreshToken);
+        await supabaseAdmin.from('profiles').update({ google_access_token: token }).eq('id', user.id);
+        // Retry the list request
+        listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1', { 
+          headers: { Authorization: `Bearer ${token}` } 
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: "Token expired and refresh failed" }), { status: 401, headers: corsHeaders });
+      }
+    }
+
+    if (!listRes.ok) {
+      const errData = await listRes.json();
+      return new Response(JSON.stringify({ error: errData.error?.message || "Google API Error" }), { status: listRes.status, headers: corsHeaders });
+    }
+
+    // 1. Discover & Update Calendars
+    const fullListRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', { 
+      headers: { Authorization: `Bearer ${token}` } 
+    });
+    const listData = await fullListRes.json();
     if (listData.items) {
       const discovered = listData.items.filter(cal => !cal.id.includes('@import.calendar.google.com')).map(cal => ({
         user_id: user.id, 
@@ -80,7 +124,7 @@ serve(async (req) => {
 
     for (const cal of enabledCalendars) {
       const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.calendar_id)}/events?timeMin=${syncStartTime.toISOString()}&timeMax=${syncEndTime.toISOString()}&singleEvents=true&orderBy=startTime`;
-      let res = await fetch(url, { headers: { Authorization: `Bearer ${googleAccessToken}` } });
+      let res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) continue;
       
       const data = await res.json();

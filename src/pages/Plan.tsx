@@ -47,8 +47,13 @@ const Plan = () => {
 
       const { data: { session } } = await supabase.auth.getSession();
       
+      // Persist tokens if they are fresh in the session
       if (session?.provider_token) {
-        await supabase.from('profiles').update({ google_access_token: session.provider_token }).eq('id', user.id);
+        const updateData: any = { google_access_token: session.provider_token };
+        if (session.provider_refresh_token) {
+          updateData.google_refresh_token = session.provider_refresh_token;
+        }
+        await supabase.from('profiles').update(updateData).eq('id', user.id);
       }
 
       const { data: history } = await supabase
