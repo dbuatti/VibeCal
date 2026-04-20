@@ -82,10 +82,15 @@ const Vet = () => {
     fetchEvents();
   }, []);
 
-  const handleSync = async () => {
+  const handleFullSync = async () => {
     setIsProcessing(true);
-    setStatusText('Syncing calendars...');
+    setStatusText('Performing full system sync...');
     try {
+      // 1. Deep reset
+      const { error: resetError } = await supabase.rpc('full_reset_user_data');
+      if (resetError) throw resetError;
+
+      // 2. Auth & Tokens
       const { data: { session } } = await supabase.auth.getSession();
       const { data: { user } } = await supabase.auth.getUser();
       
@@ -95,15 +100,17 @@ const Vet = () => {
         token = profile?.google_access_token;
       }
 
+      // 3. Fresh pull
+      setStatusText('Syncing calendars...');
       await Promise.allSettled([
         supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: token } }),
         supabase.functions.invoke('sync-apple-calendar')
       ]);
 
       await fetchEvents();
-      showSuccess("Calendars synced!");
+      showSuccess("Full system sync complete!");
     } catch (err: any) {
-      showError(err.message);
+      showError("Sync failed: " + err.message);
     } finally {
       setIsProcessing(false);
       setStatusText('');
@@ -221,15 +228,19 @@ const Vet = () => {
           </div>
           
           <div className="flex items-center gap-3">
-            <Button 
-              variant="outline" 
-              onClick={handleSync} 
+            {/* Rainbow Full Sync Button */}
+            <button
+              onClick={handleFullSync}
               disabled={isProcessing}
-              className="rounded-2xl h-14 px-6 font-black text-xs uppercase tracking-widest flex gap-3 border-gray-100 text-gray-500 hover:bg-gray-50 shadow-sm"
+              title="Full Sync"
+              className={cn(
+                "w-14 h-14 rounded-2xl flex items-center justify-center transition-all shadow-lg hover:scale-110 active:scale-95 disabled:opacity-50 disabled:grayscale",
+                "bg-gradient-to-tr from-red-500 via-yellow-400 via-green-400 via-blue-500 to-purple-600 text-white"
+              )}
             >
-              <RefreshCw className={cn(isProcessing && statusText.includes('Syncing') && "animate-spin")} size={18} />
-              Sync
-            </Button>
+              <RefreshCw size={24} className={cn(isProcessing && statusText.includes('sync') && "animate-spin")} />
+            </button>
+
             <Button 
               variant="outline" 
               onClick={runAIClassification} 
