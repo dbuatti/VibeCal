@@ -30,11 +30,7 @@ serve(async (req) => {
       return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
     }
 
-    // Force Melbourne if not set, otherwise use profile
     const userTimezone = profile.timezone || 'Australia/Melbourne';
-    const isMelbourne = userTimezone.includes('Melbourne') || userTimezone.includes('Sydney');
-    const offsetString = isMelbourne ? "+10:00" : "+00:00"; // Simple fallback for AEST
-
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
     const headers = {
       'Authorization': `Basic ${auth}`,
@@ -64,7 +60,7 @@ serve(async (req) => {
     const calsRes = await fetch(homeHref, { method: 'PROPFIND', headers: { ...headers, 'Depth': '1' }, body: propfindCals });
     const calsText = await calsRes.text();
     
-    const calendarPaths = [];
+    const discoveredCalendars = [];
     const responses = calsText.split(/<[^:]*:?response/i);
     for (const resp of responses) {
       if (/<[^:]*:?resourcetype[^>]*>.*?<[^:]*:?calendar/is.test(resp)) {
@@ -76,9 +72,35 @@ serve(async (req) => {
             const urlObj = new URL(homeHref);
             href = `${urlObj.protocol}//${urlObj.host}${href}`;
           }
-          calendarPaths.push({ href, name: nameMatch ? nameMatch[1] : 'Untitled' });
+          discoveredCalendars.push({ 
+            user_id: user.id,
+            calendar_id: href, 
+            calendar_name: nameMatch ? nameMatch[1] : 'Untitled',
+            provider: 'apple'
+          });
         }
       }
+    }
+
+    // Upsert discovered calendars so user can manage them in Settings
+    if (discoveredCalendars.length > 0) {
+      await supabaseAdmin.from('user_calendars').upsert(discoveredCalendars, { onConflict: 'user_id, calendar_id' });
+    }
+
+    // Get enabled calendars
+    const { data: enabledCals } = await supabaseAdmin
+      .from('user_calendars')
+      .select('calendar_id, calendar_name, is_enabled')
+      .eq('user_id', user.id)
+      .eq('provider', 'apple');
+    
+    const enabledPaths = (enabledCals || []).filter(c => c.is_enabled);
+    const enabledIds = enabledPaths.map(c => c.calendar_id);
+
+    if (enabledPaths.length === 0) {
+      console.log(`[${functionName}] No Apple calendars enabled. Cleaning up cache.`);
+      await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'apple');
+      return new Response(JSON.stringify({ count: 0, message: "No calendars enabled" }), { headers: corsHeaders });
     }
 
     // 4. Fetch Events
@@ -110,11 +132,42 @@ serve(async (req) => {
     const lockedKeywords = settings?.locked_keywords || [];
     const workKeywords = settings?.work_keywords || ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session', 'work session'];
     
-    // Relaxed fixed keywords - only lock things that are definitely unmovable
     const fixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
 
-    for (const cal of calendarPaths) {
-      const eventsRes = await fetch(cal.href, { method: 'REPORT', headers: { ...headers, 'Depth': '1' }, body: reportQuery });
+    // Helper to interpret floating times in user's timezone
+    const interpretFloating = (icalTime, timeZone) => {
+      const s = icalTime.toString(); // "2026-04-20T17:45:00"
+      if (icalTime.isUtc || icalTime.timezone) {
+        return icalTime.toJSDate().toISOString();
+      }
+      
+      // It's floating. We need to find what UTC time corresponds to this local time in Melbourne.
+      const [datePart, timePart] = s.split('T');
+      const [y, m, d] = datePart.split('-').map(Number);
+      const [h, min, sec] = timePart.split(':').map(Number);
+      
+      // Create a date object assuming these components are UTC
+      const dummy = new Date(Date.UTC(y, m - 1, d, h, min, sec));
+      
+      // Find the offset of Melbourne at that specific UTC time
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        year: 'numeric', month: 'numeric', day: 'numeric',
+        hour: 'numeric', minute: 'numeric', second: 'numeric',
+        hour12: false
+      });
+      
+      const parts = formatter.formatToParts(dummy);
+      const getPart = (type) => parseInt(parts.find(p => p.type === type).value);
+      
+      const tzDate = new Date(Date.UTC(getPart('year'), getPart('month') - 1, getPart('day'), getPart('hour'), getPart('minute'), getPart('second')));
+      const offsetMs = tzDate.getTime() - dummy.getTime();
+      
+      return new Date(dummy.getTime() - offsetMs).toISOString();
+    };
+
+    for (const cal of enabledPaths) {
+      const eventsRes = await fetch(cal.calendar_id, { method: 'REPORT', headers: { ...headers, 'Depth': '1' }, body: reportQuery });
       if (!eventsRes.ok) continue;
       
       const eventsText = await eventsRes.text();
@@ -130,24 +183,12 @@ serve(async (req) => {
             const event = new ICAL.Event(vevent);
             const title = event.summary || 'Untitled';
             
-            let startIso, endIso;
-            
-            // STRICT TIMEZONE HANDLING
-            // If it's floating or has no TZ, we force it to Melbourne (+10:00)
-            if (!event.startDate.isUtc && !event.startDate.timezone) {
-              const s = event.startDate.toString(); // "2026-04-21T10:30:00"
-              const e = event.endDate.toString();
-              startIso = `${s}${offsetString}`;
-              endIso = `${e}${offsetString}`;
-            } else {
-              startIso = event.startDate.toJSDate().toISOString();
-              endIso = event.endDate.toJSDate().toISOString();
-            }
+            const startIso = interpretFloating(event.startDate, userTimezone);
+            const endIso = interpretFloating(event.endDate, userTimezone);
 
             const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
             const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
             
-            // Default to MOVABLE (false) unless it matches a strict fixed keyword or is explicitly locked
             const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && fixedKeywords.test(title));
             const isWork = workKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
 
@@ -163,8 +204,8 @@ serve(async (req) => {
               is_locked: isLocked,
               is_work: isWork,
               provider: 'apple',
-              source_calendar: cal.name,
-              source_calendar_id: cal.href,
+              source_calendar: cal.calendar_name,
+              source_calendar_id: cal.calendar_id,
               last_synced_at: syncTimestamp,
               last_seen_at: syncTimestamp
             });
@@ -180,7 +221,20 @@ serve(async (req) => {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
     }
 
+    // Cleanup: Remove events from calendars that are now disabled OR were not seen in this sync
     const cleanupThreshold = new Date(new Date(syncTimestamp).getTime() - 60000).toISOString();
+    
+    // 1. Remove events from disabled calendars
+    const disabledIds = (enabledCals || []).filter(c => !c.is_enabled).map(c => c.calendar_id);
+    if (disabledIds.length > 0) {
+      await supabaseAdmin.from('calendar_events_cache')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('provider', 'apple')
+        .in('source_calendar_id', disabledIds);
+    }
+
+    // 2. Remove events that were not seen in this sync (deleted from provider)
     await supabaseAdmin.from('calendar_events_cache')
       .delete()
       .eq('user_id', user.id)
@@ -188,6 +242,7 @@ serve(async (req) => {
       .gte('start_time', syncStartTime.toISOString())
       .lt('last_seen_at', cleanupThreshold);
 
+    console.log(`[${functionName}] SUCCESS - Synced ${uniqueEvents.length} events.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
     console.error(`[${functionName}] FATAL ERROR:`, error.message);

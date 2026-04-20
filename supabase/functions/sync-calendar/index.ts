@@ -53,9 +53,12 @@ serve(async (req) => {
     }
 
     // 2. Get Enabled Calendars
-    const { data: enabled } = await supabaseAdmin.from('user_calendars').select('calendar_id, calendar_name, is_enabled').eq('user_id', user.id).eq('provider', 'google');
-    const enabledCalendars = (enabled || []).filter(c => c.is_enabled);
+    const { data: allCals } = await supabaseAdmin.from('user_calendars').select('calendar_id, calendar_name, is_enabled').eq('user_id', user.id).eq('provider', 'google');
+    const enabledCalendars = (allCals || []).filter(c => c.is_enabled);
+    
     if (enabledCalendars.length === 0) {
+      console.log(`[${functionName}] No Google calendars enabled. Cleaning up cache.`);
+      await supabaseAdmin.from('calendar_events_cache').delete().eq('user_id', user.id).eq('provider', 'google');
       return new Response(JSON.stringify({ count: 0, message: "No calendars enabled" }), { headers: corsHeaders });
     }
 
@@ -73,7 +76,6 @@ serve(async (req) => {
     const lockedKeywords = settings?.locked_keywords || [];
     const workKeywords = settings?.work_keywords || ['meeting', 'call', 'lesson', 'audition', 'rehearsal', 'appt', 'appointment', 'coaching', 'session', 'work session'];
     
-    // Relaxed fixed keywords
     const fixedKeywords = /flight|train|hotel|check-in|check-out|reservation|doctor|dentist|hospital|wedding|funeral|performance|gig|concert|show|tech|dress|opening|closing|birthday|party|gala|anniversary/i;
 
     for (const cal of enabledCalendars) {
@@ -92,7 +94,6 @@ serve(async (req) => {
         const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
         const isExplicitlyLocked = lockedKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
         
-        // Default to MOVABLE unless strict match
         const isLocked = isExplicitlyLocked || (!isExplicitlyMovable && ((event.attendees?.length > 1) || fixedKeywords.test(title)));
         const isWork = workKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
         
@@ -121,7 +122,20 @@ serve(async (req) => {
       await supabaseAdmin.from('calendar_events_cache').upsert(uniqueEvents, { onConflict: 'user_id, event_id' });
     }
     
+    // Cleanup
     const cleanupThreshold = new Date(new Date(syncTimestamp).getTime() - 60000).toISOString();
+    
+    // 1. Remove events from disabled calendars
+    const disabledIds = (allCals || []).filter(c => !c.is_enabled).map(c => c.calendar_id);
+    if (disabledIds.length > 0) {
+      await supabaseAdmin.from('calendar_events_cache')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('provider', 'google')
+        .in('source_calendar_id', disabledIds);
+    }
+
+    // 2. Remove events not seen in this sync
     await supabaseAdmin.from('calendar_events_cache')
       .delete()
       .eq('user_id', user.id)
@@ -129,6 +143,7 @@ serve(async (req) => {
       .gte('start_time', syncStartTime.toISOString())
       .lt('last_seen_at', cleanupThreshold);
     
+    console.log(`[${functionName}] SUCCESS - Synced ${uniqueEvents.length} events.`);
     return new Response(JSON.stringify({ count: uniqueEvents.length }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
     console.error(`[${functionName}] FATAL ERROR:`, error.message);
