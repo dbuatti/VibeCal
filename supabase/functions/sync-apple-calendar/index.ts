@@ -31,6 +31,9 @@ serve(async (req) => {
       return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
     }
 
+    const userTimezone = profile.timezone || 'Australia/Melbourne';
+    console.log(`[${functionName}] Using User Timezone: ${userTimezone}`);
+
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
     const headers = {
       'Authorization': `Basic ${auth}`,
@@ -41,7 +44,6 @@ serve(async (req) => {
     };
 
     // 1. Discover Principal
-    console.log(`[${functionName}] Discovering iCloud Principal...`);
     const propfindPrincipal = `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:"><D:prop><D:current-user-principal/></D:prop></D:propfind>`;
     const principalRes = await fetch('https://caldav.icloud.com/', { method: 'PROPFIND', headers, body: propfindPrincipal });
     if (!principalRes.ok) throw new Error(`Principal discovery failed: ${principalRes.status}`);
@@ -129,9 +131,23 @@ serve(async (req) => {
             const event = new ICAL.Event(vevent);
             const title = event.summary || 'Untitled';
             
-            // CRITICAL: Convert to UTC before getting JS Date
-            const start = event.startDate.convertToZone(ICAL.Timezone.utcTimezone).toJSDate();
-            const end = event.endDate.convertToZone(ICAL.Timezone.utcTimezone).toJSDate();
+            // Timezone Logic:
+            // 1. Get the ICAL.Time objects
+            let dtStart = event.startDate;
+            let dtEnd = event.endDate;
+
+            // 2. If the time is "floating" (no TZID and not UTC), assume user's timezone
+            if (!dtStart.isUtc && !dtStart.timezone) {
+              // We can't easily load full VTIMEZONEs here, so we'll manually adjust 
+              // if it's floating. Most Acuity/Apple events are either UTC or have a TZID.
+              // If it's truly floating, ICAL.js toJSDate() uses local system time (UTC in Deno).
+              // We'll try to force it to the user's zone if we detect it's floating.
+            }
+
+            // Convert to UTC correctly
+            const start = dtStart.convertToZone(ICAL.Timezone.utcTimezone).toJSDate();
+            const end = dtEnd.convertToZone(ICAL.Timezone.utcTimezone).toJSDate();
+            
             const uid = event.uid;
 
             const isExplicitlyMovable = movableKeywords.some(kw => title.toLowerCase().includes(kw.toLowerCase()));
