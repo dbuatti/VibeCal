@@ -46,7 +46,7 @@ const Vet = () => {
   const [statusText, setStatusText] = useState('');
   const [events, setEvents] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [aiMetadata, setAiMetadata] = useState<Record<string, any>>({});
+  const [aiMetadata, setAiMetadata] = useState<Record<string, { explanation: string, confidence: number }>>({});
   
   const [showLocked, setShowLocked] = useState(true);
   const [showUnlocked, setShowUnlocked] = useState(true);
@@ -72,6 +72,67 @@ const Vet = () => {
   useEffect(() => {
     fetchEvents();
   }, []);
+
+  const runAIClassification = async () => {
+    if (events.length === 0) return;
+
+    setIsProcessing(true);
+    setStatusText('AI is vetting in the background...');
+    
+    try {
+      const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, natural_language_rules').single();
+      
+      // Process in batches of 20 for speed and reliability
+      const BATCH_SIZE = 20;
+      const batches = [];
+      for (let i = 0; i < events.length; i += BATCH_SIZE) {
+        batches.push(events.slice(i, i + BATCH_SIZE));
+      }
+
+      const updatedEvents = [...events];
+      const newMetadata = { ...aiMetadata };
+
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i];
+        setStatusText(`AI Vetting: Batch ${i + 1}/${batches.length}...`);
+        
+        const { data, error } = await supabase.functions.invoke('classify-tasks', {
+          body: {
+            events: batch.map(e => ({ event_id: e.event_id, title: e.title })),
+            movableKeywords: settings?.movable_keywords || [],
+            lockedKeywords: settings?.locked_keywords || [],
+            naturalLanguageRules: settings?.natural_language_rules || '',
+            persist: true
+          }
+        });
+
+        if (data?.classifications) {
+          batch.forEach((event, idx) => {
+            const classification = data.classifications[idx];
+            const eventIdx = updatedEvents.findIndex(e => e.event_id === event.event_id);
+            if (eventIdx !== -1) {
+              updatedEvents[eventIdx].is_locked = !classification.isMovable;
+              newMetadata[event.event_id] = {
+                explanation: classification.explanation,
+                confidence: classification.confidence || 1.0
+              };
+            }
+          });
+          // Update UI incrementally
+          setEvents([...updatedEvents]);
+          setAiMetadata({...newMetadata});
+        }
+      }
+
+      setIsProcessing(false);
+      setStatusText('');
+      showSuccess("AI vetting complete!");
+
+    } catch (err: any) {
+      showError("AI Vetting failed: " + err.message);
+      setIsProcessing(false);
+    }
+  };
 
   const toggleLock = async (event: any) => {
     const newLockedStatus = !event.is_locked;
@@ -145,6 +206,10 @@ const Vet = () => {
           </div>
           
           <div className="flex items-center gap-4">
+            <Button variant="outline" onClick={runAIClassification} disabled={isProcessing} className="rounded-2xl h-14 px-8 font-black text-xs uppercase tracking-widest flex gap-3 border-indigo-100 text-indigo-600 hover:bg-indigo-50">
+              {isProcessing ? <RefreshCw className="animate-spin" size={20} /> : <Sparkles size={20} />}
+              AI Auto-Vet
+            </Button>
             <Button onClick={() => navigate('/plan')} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl h-14 px-10 font-black text-xs uppercase tracking-widest shadow-xl">
               <CheckCircle2 className="mr-2" size={18} /> Done
             </Button>
@@ -179,25 +244,49 @@ const Vet = () => {
             <div key={dateKey} className="space-y-6">
               <h2 className="text-xs font-black text-gray-400 uppercase tracking-widest px-4">{format(parseISO(dateKey), 'EEEE, MMM do')}</h2>
               <div className="grid grid-cols-1 gap-3">
-                {groupedEvents[dateKey].map((event) => (
-                  <div key={event.event_id} className={cn(
-                    "px-6 py-4 rounded-[1.5rem] border transition-all duration-200 flex items-center justify-between group", 
-                    event.is_locked ? "bg-white border-gray-100" : "bg-indigo-50/40 border-indigo-100/50"
-                  )}>
-                    <div className="flex items-center gap-4 flex-1 min-w-0">
-                      <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center shrink-0", event.is_locked ? "bg-gray-50 text-gray-400" : "bg-white text-indigo-600 shadow-sm")}>
-                        {event.is_locked ? <Lock size={18} /> : <Unlock size={18} />}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <h3 className="font-black text-base text-gray-900 truncate">{event.title}</h3>
-                        <div className="flex items-center gap-3 text-[9px] font-black text-gray-400 uppercase tracking-widest">
-                          <Clock size={10} /> {format(parseISO(event.start_time), 'HH:mm')} • {event.duration_minutes}m
+                {groupedEvents[dateKey].map((event) => {
+                  const metadata = aiMetadata[event.event_id];
+                  const isLowConfidence = metadata && metadata.confidence < 0.7;
+
+                  return (
+                    <div key={event.event_id} className={cn(
+                      "px-6 py-4 rounded-[1.5rem] border transition-all duration-200 flex flex-col gap-3 group", 
+                      event.is_locked ? "bg-white border-gray-100" : "bg-indigo-50/40 border-indigo-100/50",
+                      isLowConfidence && "border-amber-200 ring-2 ring-amber-100/50"
+                    )}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-4 flex-1 min-w-0">
+                          <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center shrink-0", event.is_locked ? "bg-gray-50 text-gray-400" : "bg-white text-indigo-600 shadow-sm")}>
+                            {event.is_locked ? <Lock size={18} /> : <Unlock size={18} />}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <h3 className="font-black text-base text-gray-900 truncate">{event.title}</h3>
+                              {isLowConfidence && (
+                                <Badge variant="outline" className="bg-amber-50 text-amber-600 border-amber-200 text-[8px] font-black px-2 py-0 uppercase tracking-widest animate-pulse">
+                                  <AlertTriangle size={10} className="mr-1" /> Review
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-3 text-[9px] font-black text-gray-400 uppercase tracking-widest">
+                              <Clock size={10} /> {format(parseISO(event.start_time), 'HH:mm')} • {event.duration_minutes}m
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-4">
+                          <button onClick={() => { setTrainingTask(event); setIsTrainingModalOpen(true); }} className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100"><Brain size={14} /></button>
+                          <Switch checked={!event.is_locked} onCheckedChange={() => toggleLock(event)} className="data-[state=checked]:bg-indigo-600" />
                         </div>
                       </div>
+                      {metadata && (
+                        <div className="p-2 rounded-lg bg-white/50 border border-black/5 flex items-start gap-2 animate-in slide-in-from-top-1 duration-300">
+                          <MessageSquare size={12} className="text-indigo-400 mt-0.5 shrink-0" />
+                          <p className="text-[10px] font-bold text-gray-500 leading-tight">{metadata.explanation}</p>
+                        </div>
+                      )}
                     </div>
-                    <Switch checked={!event.is_locked} onCheckedChange={() => toggleLock(event)} className="data-[state=checked]:bg-indigo-600" />
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ))}

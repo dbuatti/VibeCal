@@ -132,6 +132,7 @@ const Plan = () => {
 
         setStatusText('Syncing calendars...');
         
+        // PARALLEL SYNC: Run Google and Apple syncs at the same time
         const syncPromises = [
           supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: token } }),
           supabase.functions.invoke('sync-apple-calendar')
