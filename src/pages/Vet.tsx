@@ -126,36 +126,57 @@ const Vet = () => {
     if (eventsToClassify.length === 0) return;
 
     setIsProcessing(true);
-    setStatusText('AI is analyzing your rules...');
+    
     try {
       const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, natural_language_rules').single();
-      const { data, error } = await supabase.functions.invoke('classify-tasks', {
-        body: {
-          tasks: eventsToClassify.map(e => e.title),
-          movableKeywords: settings?.movable_keywords || [],
-          lockedKeywords: settings?.locked_keywords || [],
-          naturalLanguageRules: settings?.natural_language_rules || ''
-        }
-      });
-      if (error) throw error;
       
+      // BATCHING LOGIC: Process in chunks of 40 to avoid timeouts and token limits
+      const BATCH_SIZE = 40;
+      const totalTasks = eventsToClassify.length;
       const updatedEvents = [...eventsToClassify];
-      const newExplanations: Record<string, string> = {};
+      const newExplanations = { ...aiExplanations };
 
-      for (let i = 0; i < updatedEvents.length; i++) {
-        const classification = data.classifications[i];
-        const isMovable = typeof classification === 'boolean' ? classification : classification.isMovable;
-        const explanation = typeof classification === 'object' ? classification.explanation : '';
+      for (let i = 0; i < totalTasks; i += BATCH_SIZE) {
+        const batch = eventsToClassify.slice(i, i + BATCH_SIZE);
+        const batchTitles = batch.map(e => e.title);
         
-        updatedEvents[i].is_locked = !isMovable;
-        newExplanations[updatedEvents[i].event_id] = explanation;
+        setStatusText(`AI Vetting: ${i + 1} to ${Math.min(i + BATCH_SIZE, totalTasks)} of ${totalTasks}...`);
 
-        await supabase.from('calendar_events_cache').update({ is_locked: !isMovable }).eq('event_id', updatedEvents[i].event_id);
+        const { data, error } = await supabase.functions.invoke('classify-tasks', {
+          body: {
+            tasks: batchTitles,
+            movableKeywords: settings?.movable_keywords || [],
+            lockedKeywords: settings?.locked_keywords || [],
+            naturalLanguageRules: settings?.natural_language_rules || ''
+          }
+        });
+
+        if (error) throw error;
+
+        // Apply batch results
+        for (let j = 0; j < batch.length; j++) {
+          const classification = data.classifications[j];
+          const isMovable = typeof classification === 'boolean' ? classification : classification.isMovable;
+          const explanation = typeof classification === 'object' ? classification.explanation : '';
+          
+          const eventIdx = updatedEvents.findIndex(e => e.event_id === batch[j].event_id);
+          if (eventIdx !== -1) {
+            updatedEvents[eventIdx].is_locked = !isMovable;
+            newExplanations[batch[j].event_id] = explanation;
+            
+            // Update DB for this specific event
+            await supabase.from('calendar_events_cache')
+              .update({ is_locked: !isMovable })
+              .eq('event_id', batch[j].event_id);
+          }
+        }
+        
+        // Update local state incrementally so user sees progress
+        setEvents([...updatedEvents]);
+        setAiExplanations({...newExplanations});
       }
       
-      setEvents(updatedEvents);
-      setAiExplanations(newExplanations);
-      showSuccess("AI has vetted your tasks!");
+      showSuccess("AI has vetted all tasks!");
     } catch (err: any) {
       showError("AI Vetting failed: " + err.message);
     } finally {
