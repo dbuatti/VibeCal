@@ -131,14 +131,14 @@ Deno.serve(async (req) => {
     
     const allEvents = [];
     const now = new Date();
+    // Broad range: -60 days to +180 days
     const startRange = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endRange = new Date(now.getTime() + 180 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
     for (const cal of enabledCalendars) {
-      console.log(`[${functionName}] Fetching: ${cal.calendar_name} (${cal.calendar_id})`);
+      console.log(`[${functionName}] Fetching: ${cal.calendar_name}`);
       try {
-        // Try with a broad filter first
-        let reportRes = await fetch(cal.calendar_id, {
+        const reportRes = await fetch(cal.calendar_id, {
           method: 'REPORT',
           headers: { ...headers, 'Content-Type': 'application/xml; charset=utf-8' },
           body: `<?xml version="1.0" encoding="utf-8" ?>
@@ -154,72 +154,46 @@ Deno.serve(async (req) => {
             </C:calendar-query>`
         });
 
-        let reportText = await reportRes.text();
-        let eventResponses = reportText.split(/<[^:]*:?response/i).slice(1);
+        const reportText = await reportRes.text();
+        const eventResponses = reportText.split(/<[^:]*:?response/i).slice(1);
+        console.log(`[${functionName}] Found ${eventResponses.length} responses in ${cal.calendar_name}`);
 
-        // FALLBACK: If no events found with time-range, try fetching ALL events in the calendar
-        if (eventResponses.length === 0) {
-          console.log(`[${functionName}] No events in range for ${cal.calendar_name}, trying fallback fetch...`);
-          reportRes = await fetch(cal.calendar_id, {
-            method: 'PROPFIND',
-            headers: { ...headers, 'Depth': '1' },
-            body: `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:"><D:prop><D:getcontenttype/><D:resourcetype/></D:prop></D:propfind>`
-          });
-          const propText = await reportRes.text();
-          const resources = propText.split(/<[^:]*:?response/i).slice(1);
-          
-          const eventUrls = [];
-          for (const res of resources) {
-            const href = res.match(/<[^:]*:?href[^>]*>([^<]+)<\/[^:]*:?href>/i)?.[1];
-            if (href && href.endsWith('.ics')) {
-              eventUrls.push(href.startsWith('http') ? href : `${baseUrl}${href}`);
-            }
-          }
-
-          if (eventUrls.length > 0) {
-            console.log(`[${functionName}] Found ${eventUrls.length} .ics files in ${cal.calendar_name}, fetching individually...`);
-            // Fetch first 50 to avoid timeout
-            for (const url of eventUrls.slice(0, 50)) {
-              const icsRes = await fetch(url, { headers });
-              if (icsRes.ok) {
-                const icsData = await icsRes.text();
-                parseAndAddEvents(icsData, cal, user.id, allEvents);
+        for (const resp of eventResponses) {
+          const icsData = resp.match(/<[^:]*:?calendar-data[^>]*>([\s\S]*?)<\/[^:]*:?calendar-data>/i)?.[1];
+          if (icsData) {
+            try {
+              const jcalData = ICAL.parse(icsData.trim());
+              const vcalendar = new ICAL.Component(jcalData);
+              const vevents = vcalendar.getAllSubcomponents('vevent');
+              
+              for (const vevent of vevents) {
+                const event = new ICAL.Event(vevent);
+                if (!event.uid || !event.startDate) continue;
+                
+                // Ensure we have valid dates
+                const start = event.startDate.toJSDate();
+                const end = event.endDate.toJSDate();
+                
+                allEvents.push({
+                  user_id: user.id,
+                  event_id: event.uid,
+                  title: event.summary || 'Untitled',
+                  start_time: start.toISOString(),
+                  end_time: end.toISOString(),
+                  provider: 'apple',
+                  source_calendar: cal.calendar_name,
+                  source_calendar_id: cal.calendar_id,
+                  last_synced_at: new Date().toISOString()
+                });
               }
+            } catch (parseErr) {
+              // Silent fail for individual bad ICAL records
             }
-          }
-        } else {
-          console.log(`[${functionName}] Found ${eventResponses.length} responses in ${cal.calendar_name}`);
-          for (const resp of eventResponses) {
-            const icsData = resp.match(/<[^:]*:?calendar-data[^>]*>([\s\S]*?)<\/[^:]*:?calendar-data>/i)?.[1];
-            if (icsData) parseAndAddEvents(icsData, cal, user.id, allEvents);
           }
         }
       } catch (err) {
         console.error(`[${functionName}] Error in ${cal.calendar_name}:`, err.message);
       }
-    }
-
-    function parseAndAddEvents(icsData, cal, userId, eventList) {
-      try {
-        const jcalData = ICAL.parse(icsData.trim());
-        const vcalendar = new ICAL.Component(jcalData);
-        const vevents = vcalendar.getAllSubcomponents('vevent');
-        for (const vevent of vevents) {
-          const event = new ICAL.Event(vevent);
-          if (!event.uid || !event.startDate) continue;
-          eventList.push({
-            user_id: userId,
-            event_id: event.uid,
-            title: event.summary || 'Untitled',
-            start_time: event.startDate.toJSDate().toISOString(),
-            end_time: event.endDate.toJSDate().toISOString(),
-            provider: 'apple',
-            source_calendar: cal.calendar_name,
-            source_calendar_id: cal.calendar_id,
-            last_synced_at: new Date().toISOString()
-          });
-        }
-      } catch (e) {}
     }
 
     // 8. Cleanup and Upsert
@@ -233,12 +207,26 @@ Deno.serve(async (req) => {
     }
 
     if (allEvents.length > 0) {
-      console.log(`[${functionName}] Upserting ${allEvents.length} total Apple events`);
-      await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
+      console.log(`[${functionName}] Upserting ${allEvents.length} total Apple events to database`);
+      const upsertRes = await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
         method: 'POST',
-        headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}`, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' },
+        headers: { 
+          'apikey': supabaseKey, 
+          'Authorization': `Bearer ${supabaseKey}`, 
+          'Content-Type': 'application/json', 
+          'Prefer': 'resolution=merge-duplicates' 
+        },
         body: JSON.stringify(allEvents)
       });
+      
+      if (!upsertRes.ok) {
+        const errText = await upsertRes.text();
+        console.error(`[${functionName}] Database Upsert Error:`, errText);
+      } else {
+        console.log(`[${functionName}] Successfully saved ${allEvents.length} events.`);
+      }
+    } else {
+      console.log(`[${functionName}] No valid events were parsed from the responses.`);
     }
 
     return new Response(JSON.stringify({ count: allEvents.length }), { 
