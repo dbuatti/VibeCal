@@ -17,17 +17,18 @@ interface PlannerStatsProps {
 }
 
 const PlannerStats = ({ 
-  fixedHours,
-  shuffledHours,
-  maxHours, 
-  tasks, 
-  maxTasks, 
-  isOverHours, 
-  isOverTasks 
+  fixedHours = 0,
+  shuffledHours = 0,
+  maxHours = 6, 
+  tasks = 0, 
+  maxTasks = 5, 
+  isOverHours = false, 
+  isOverTasks = false 
 }: PlannerStatsProps) => {
-  const totalHours = fixedHours + shuffledHours;
-  const fixedWidth = Math.min((fixedHours / maxHours) * 100, 100);
-  const shuffledWidth = Math.min((shuffledHours / maxHours) * 100, 100 - fixedWidth);
+  const totalHours = (fixedHours || 0) + (shuffledHours || 0);
+  const safeMaxHours = maxHours || 1;
+  const fixedWidth = Math.min(((fixedHours || 0) / safeMaxHours) * 100, 100);
+  const shuffledWidth = Math.min(((shuffledHours || 0) / safeMaxHours) * 100, 100 - fixedWidth);
 
   return (
     <TooltipProvider>
@@ -53,7 +54,7 @@ const PlannerStats = ({
                   />
                 </TooltipTrigger>
                 <TooltipContent className="font-bold text-[10px] uppercase tracking-widest">
-                  Fixed Work: {fixedHours.toFixed(1)}h
+                  Fixed Work: {(fixedHours || 0).toFixed(1)}h
                 </TooltipContent>
               </Tooltip>
               
@@ -65,14 +66,14 @@ const PlannerStats = ({
                   />
                 </TooltipTrigger>
                 <TooltipContent className="font-bold text-[10px] uppercase tracking-widest">
-                  Shuffled Tasks: {shuffledHours.toFixed(1)}h
+                  Shuffled Tasks: {(shuffledHours || 0).toFixed(1)}h
                 </TooltipContent>
               </Tooltip>
 
               {isOverHours && (
                 <div 
                   className="h-full bg-red-400 animate-pulse" 
-                  style={{ width: `${Math.min(((totalHours - maxHours) / maxHours) * 100, 100 - (fixedWidth + shuffledWidth))}%` }} 
+                  style={{ width: `${Math.min(((totalHours - safeMaxHours) / safeMaxHours) * 100, 100 - (fixedWidth + shuffledWidth))}%` }} 
                 />
               )}
             </div>
@@ -102,7 +103,7 @@ const PlannerStats = ({
             <div className="h-1.5 w-full bg-gray-50 rounded-full overflow-hidden">
               <div 
                 className={cn("h-full transition-all duration-700", isOverTasks ? "bg-red-400" : "bg-indigo-500")} 
-                style={{ width: `${Math.min((tasks / maxTasks) * 100, 100)}%` }} 
+                style={{ width: `${Math.min((tasks / (maxTasks || 1)) * 100, 100)}%` }} 
               />
             </div>
           </div>
