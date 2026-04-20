@@ -1,7 +1,6 @@
 // @ts-nocheck
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
 import { toDate } from 'https://esm.sh/date-fns-tz@3.2.0?deps=date-fns@3.6.0'
-import { differenceInMinutes, parseISO } from 'https://esm.sh/date-fns@3.6.0'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -133,10 +132,19 @@ Deno.serve(async (req) => {
     const enabledCalendars = calendarsToUpsert.filter(c => c.is_enabled);
     const allEvents = [];
     
-    const startRange = customMin ? new Date(customMin).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z' : 
-                      new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-    const endRange = customMax ? new Date(customMax).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z' : 
-                    new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    // Safety check for customMin/customMax to prevent Invalid Date errors
+    const getIsoRange = (dateStr, defaultOffsetDays) => {
+      try {
+        const date = dateStr ? new Date(dateStr) : new Date(Date.now() + defaultOffsetDays * 24 * 60 * 60 * 1000);
+        if (isNaN(date.getTime())) throw new Error("Invalid Date");
+        return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+      } catch (e) {
+        return new Date(Date.now() + defaultOffsetDays * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+      }
+    };
+
+    const startRange = getIsoRange(customMin, -30);
+    const endRange = getIsoRange(customMax, 180);
 
     for (const cal of enabledCalendars) {
       try {
@@ -218,6 +226,7 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
   } catch (error) {
+    console.error(`[${functionName}] Fatal Error:`, error.message);
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: corsHeaders });
   }
 })

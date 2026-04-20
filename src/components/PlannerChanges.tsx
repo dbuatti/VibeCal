@@ -3,7 +3,7 @@
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Sparkles, ArrowUpRight, AlertCircle, PlusCircle } from 'lucide-react';
-import { format, parseISO } from 'date-fns';
+import { format, parseISO, isValid } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 
@@ -31,8 +31,17 @@ const PlannerChanges = ({
       </CardHeader>
       <CardContent className="space-y-3 px-6 pb-6 max-h-[400px] overflow-y-auto">
         {dayChanges.length > 0 ? dayChanges.map((change, i) => {
-          const isMovingAway = format(parseISO(change.old_start), 'yyyy-MM-dd') === currentDateStr && 
-                               format(parseISO(change.new_start), 'yyyy-MM-dd') !== currentDateStr;
+          // Safety checks for parseISO to prevent crashes on null/invalid dates (surplus tasks)
+          const oldStartDate = change.old_start ? parseISO(change.old_start) : null;
+          const newStartDate = change.new_start ? parseISO(change.new_start) : null;
+          
+          const isOldValid = oldStartDate && isValid(oldStartDate);
+          const isNewValid = newStartDate && isValid(newStartDate);
+
+          const isMovingAway = isOldValid && isNewValid && 
+                               format(oldStartDate, 'yyyy-MM-dd') === currentDateStr && 
+                               format(newStartDate, 'yyyy-MM-dd') !== currentDateStr;
+          
           const isApplied = appliedChanges.includes(change.event_id);
 
           return (
@@ -41,27 +50,29 @@ const PlannerChanges = ({
               className={cn(
                 "p-4 rounded-xl border flex items-center justify-between transition-all group", 
                 isApplied ? "bg-green-50 border-green-100 opacity-60" : 
-                isMovingAway ? "bg-red-50/30 border-red-100" : "bg-gray-50/50 border-gray-100"
+                isMovingAway || change.is_surplus ? "bg-red-50/30 border-red-100" : "bg-gray-50/50 border-gray-100"
               )}
             >
               <div className="flex items-center gap-3 min-w-0">
                 <div className={cn(
                   "w-8 h-8 rounded-lg flex items-center justify-center shrink-0", 
-                  isMovingAway ? "bg-red-100 text-red-600" : "bg-white text-indigo-600 shadow-sm"
+                  (isMovingAway || change.is_surplus) ? "bg-red-100 text-red-600" : "bg-white text-indigo-600 shadow-sm"
                 )}>
-                  {isMovingAway ? <ArrowUpRight size={16} /> : <Sparkles size={16} />}
+                  {(isMovingAway || change.is_surplus) ? <ArrowUpRight size={16} /> : <Sparkles size={16} />}
                 </div>
                 <div className="min-w-0">
                   <p className="text-xs font-black text-gray-900 tracking-tight truncate">
                     {change.title}
                   </p>
                   <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest">
-                    {isMovingAway ? `To ${format(parseISO(change.new_start), 'EEE')}` : `To ${format(parseISO(change.new_start), 'HH:mm')}`}
+                    {change.is_surplus ? "Moved to Backlog" : 
+                     isMovingAway && isNewValid ? `To ${format(newStartDate, 'EEE')}` : 
+                     isNewValid ? `To ${format(newStartDate, 'HH:mm')}` : "Time TBD"}
                   </p>
                 </div>
               </div>
 
-              {isMovingAway && !isApplied && onReinsert && (
+              {(isMovingAway || change.is_surplus) && !isApplied && onReinsert && (
                 <Button
                   variant="ghost"
                   size="icon"

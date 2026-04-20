@@ -28,7 +28,7 @@ import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { format, parseISO, startOfDay, endOfDay } from 'date-fns';
+import { format, parseISO, startOfDay } from 'date-fns';
 import { formatInTimeZone, toDate } from 'date-fns-tz';
 import { cn } from '@/lib/utils';
 import TrainAIModal from '@/components/TrainAIModal';
@@ -92,6 +92,7 @@ const Vet = () => {
   }, []);
 
   const handleFullSync = async () => {
+    if (isProcessing) return;
     setIsProcessing(true);
     setStatusText('Performing full system sync...');
     try {
