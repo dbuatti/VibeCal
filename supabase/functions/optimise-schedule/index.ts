@@ -62,11 +62,11 @@ serve(async (req) => {
     const todayStr = formatInTimeZone(now, userTimezone, 'yyyy-MM-dd');
     const localTodayStart = toDate(`${todayStr}T00:00:00`, { timeZone: userTimezone });
 
-    console.log(`[${functionName}] --- SESSION START ---`);
-    console.log(`[${functionName}] TIMEZONE: ${userTimezone}`);
-    console.log(`[${functionName}] CURRENT TIME: ${formatInTimeZone(now, userTimezone, 'yyyy-MM-dd HH:mm:ss')}`);
-    console.log(`[${functionName}] WORK WINDOW: ${settings.day_start_time} to ${settings.day_end_time}`);
-    console.log(`[${functionName}] LIMITS: ${maxTasks} tasks, ${maxWorkHours}h work`);
+    console.log(`[${functionName}] --- DIAGNOSTIC START ---`);
+    console.log(`[${functionName}] TODAY STRING: ${todayStr}`);
+    console.log(`[${functionName}] USER TIMEZONE: ${userTimezone}`);
+    console.log(`[${functionName}] SELECTED DAYS: ${JSON.stringify(selectedDays)}`);
+    console.log(`[${functionName}] CURRENT TIME IN TZ: ${formatInTimeZone(now, userTimezone, 'HH:mm:ss')}`);
 
     const seenIds = new Set();
     const uniqueEvents = allEvents.filter(e => {
@@ -78,7 +78,7 @@ serve(async (req) => {
     const fixedEvents = uniqueEvents.filter(e => e.is_locked || vettedEventIds.includes(e.event_id));
     const movableEvents = uniqueEvents.filter(e => !e.is_locked && !vettedEventIds.includes(e.event_id));
 
-    console.log(`[${functionName}] DATA: ${fixedEvents.length} fixed, ${movableEvents.length} movable`);
+    console.log(`[${functionName}] TOTAL EVENTS: ${uniqueEvents.length} (${fixedEvents.length} fixed, ${movableEvents.length} movable)`);
 
     if (movableEvents.length === 0) {
       return new Response(JSON.stringify({ message: 'No movable events found.', changes: [] }), { headers: corsHeaders });
@@ -121,7 +121,7 @@ serve(async (req) => {
     const proposedChanges = [];
     const dailyStats = new Map();
 
-    // Initialize Today explicitly so we can see it in logs even if empty
+    // Initialize Today explicitly
     dailyStats.set(todayStr, { tasks: 0, hours: 0, lastPointer: null });
 
     const alignTime = (date, alignmentMinutes) => {
@@ -168,15 +168,18 @@ serve(async (req) => {
           const dayOfWeek = toDate(currentDay, { timeZone: userTimezone }).getDay();
           const dayTheme = dayThemes.find(t => t.day_of_week === dayOfWeek)?.theme || "General";
           
-          if (pass === 0 && dayOffset !== 0) break; 
+          const isToday = (dayKey === todayStr);
+
+          if (pass === 0 && !isToday) break; 
           if (pass === 1 && event.temp_category !== "General" && dayTheme !== event.temp_category) { dayOffset++; continue; }
-          if (!selectedDays.includes(dayOfWeek)) { dayOffset++; continue; }
+          
+          if (!selectedDays.includes(dayOfWeek)) {
+            if (isToday) console.log(`[${functionName}] TODAY REJECT: "${event.title}" - Monday (1) not in selectedDays ${JSON.stringify(selectedDays)}`);
+            dayOffset++; continue; 
+          }
 
           if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
           const stats = dailyStats.get(dayKey);
-          
-          // Diagnostic logging for Today
-          const isToday = (dayKey === todayStr);
           
           if (stats.tasks >= maxTasks) {
             if (isToday) console.log(`[${functionName}] TODAY REJECT: "${event.title}" - Hit max tasks (${stats.tasks}/${maxTasks})`);
