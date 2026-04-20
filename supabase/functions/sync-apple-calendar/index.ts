@@ -39,71 +39,82 @@ Deno.serve(async (req) => {
     const headers = {
       'Authorization': `Basic ${auth}`,
       'Content-Type': 'text/xml; charset=utf-8',
-      'User-Agent': 'VibeCal/1.0',
-      'Depth': '1'
+      'User-Agent': 'iOS/17.4.1 (21E236) dataaccessd/1.0',
+      'Depth': '0'
     };
 
     const baseUrl = 'https://caldav.icloud.com';
     
+    // Helper to extract href from XML
+    const extractHref = (xml, tag) => {
+      const regex = new RegExp(`<[^:]*:?${tag}[^>]*>\\s*<[^:]*:?href[^>]*>([^<]+)<\\/[^:]*:?href>\\s*<\\/[^:]*:?${tag}>`, 'i');
+      return xml.match(regex)?.[1];
+    };
+
     // 3. Discover Principal
-    console.log(`[${functionName}] Discovering principal...`);
+    console.log(`[${functionName}] Step 1: Discovering principal...`);
     const principalRes = await fetch(`${baseUrl}/`, { 
       method: 'PROPFIND', 
-      headers: { ...headers, 'Depth': '0' }, 
+      headers, 
       body: `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:"><D:prop><D:current-user-principal/></D:prop></D:propfind>` 
     });
     
     const principalText = await principalRes.text();
-    let principalHref = principalText.match(/<[a-zA-Z0-9:]*href[^>]*>([^<]+)<\/[a-zA-Z0-9:]*href>/i)?.[1];
+    let principalPath = extractHref(principalText, 'current-user-principal');
     
-    if (!principalHref || principalHref === '/') {
-      // Fallback: Try to get user ID from the principal path if the above fails
-      // iCloud often returns the principal in a multistatus response
-      principalHref = principalText.match(/href="([^"]+)"/i)?.[1] || principalHref;
+    if (!principalPath || principalPath === '/') {
+      // Fallback: Try to find any path that looks like a DSID (numeric ID)
+      principalPath = principalText.match(/href="([^"]*\/\d+\/principal\/)"/i)?.[1] || 
+                      principalText.match(/>(\/\d+\/principal\/)</i)?.[1];
     }
 
-    if (!principalHref) throw new Error("Could not find Apple Calendar principal URL");
-    const principalUrl = principalHref.startsWith('http') ? principalHref : `${baseUrl}${principalHref}`;
+    if (!principalPath) {
+      console.error(`[${functionName}] Principal discovery failed. Response:`, principalText.substring(0, 200));
+      throw new Error("Could not find iCloud principal path. Ensure you are using an App-Specific Password.");
+    }
+
+    const principalUrl = principalPath.startsWith('http') ? principalPath : `${baseUrl}${principalPath}`;
     console.log(`[${functionName}] Principal URL: ${principalUrl}`);
 
     // 4. Discover Home Set
-    console.log(`[${functionName}] Discovering home set...`);
+    console.log(`[${functionName}] Step 2: Discovering home set...`);
     const homeRes = await fetch(principalUrl, {
       method: 'PROPFIND',
-      headers: { ...headers, 'Depth': '0' },
+      headers,
       body: `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><C:calendar-home-set/></D:prop></D:propfind>`
     });
     
     const homeText = await homeRes.text();
-    let homeHref = homeText.match(/calendar-home-set[^>]*>\s*<[a-zA-Z0-9:]*href[^>]*>([^<]+)<\/[a-zA-Z0-9:]*href>/i)?.[1];
+    let homePath = extractHref(homeText, 'calendar-home-set');
     
-    if (!homeHref) {
-      // Try alternative regex for different namespace prefixes
-      homeHref = homeText.match(/<[a-zA-Z0-9:]*href[^>]*>([^<]+)<\/[a-zA-Z0-9:]*href>/i)?.[1];
+    if (!homePath) {
+      // Fallback: Construct home set path from principal path if possible
+      const dsidMatch = principalPath.match(/\/(\d+)\//);
+      if (dsidMatch) homePath = `/${dsidMatch[1]}/calendars/`;
+      else homePath = principalPath;
     }
 
-    const homeUrl = (homeHref && homeHref !== '/') ? (homeHref.startsWith('http') ? homeHref : `${baseUrl}${homeHref}`) : principalUrl;
+    const homeUrl = homePath.startsWith('http') ? homePath : `${baseUrl}${homePath}`;
     console.log(`[${functionName}] Home URL: ${homeUrl}`);
 
     // 5. Discover Calendars
-    console.log(`[${functionName}] Discovering calendars...`);
+    console.log(`[${functionName}] Step 3: Discovering calendars...`);
     const calsRes = await fetch(homeUrl, {
       method: 'PROPFIND',
-      headers,
+      headers: { ...headers, 'Depth': '1' },
       body: `<?xml version="1.0" encoding="utf-8" ?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><D:displayname/><D:resourcetype/></D:prop></D:propfind>`
     });
     const calsText = await calsRes.text();
     
     const discoveredCalendars = [];
-    // Split by response tags to process each calendar individually
-    const responses = calsText.split(/<[a-zA-Z0-9:]*response/i).slice(1);
+    const responses = calsText.split(/<[^:]*:?response/i).slice(1);
     
     for (const resp of responses) {
-      const href = resp.match(/<[a-zA-Z0-9:]*href[^>]*>([^<]+)<\/[a-zA-Z0-9:]*href>/i)?.[1];
-      const name = resp.match(/<[a-zA-Z0-9:]*displayname[^>]*>([^<]+)<\/[a-zA-Z0-9:]*displayname>/i)?.[1];
+      const href = resp.match(/<[^:]*:?href[^>]*>([^<]+)<\/[^:]*:?href>/i)?.[1];
+      const name = resp.match(/<[^:]*:?displayname[^>]*>([^<]+)<\/[^:]*:?displayname>/i)?.[1];
       const isCalendar = /resourcetype[^>]*>.*?calendar/is.test(resp);
       
-      if (href && isCalendar && name) {
+      if (href && isCalendar && name && !name.includes('@')) {
         discoveredCalendars.push({
           user_id: user.id,
           calendar_id: href.startsWith('http') ? href : `${baseUrl}${href}`,
@@ -172,10 +183,10 @@ Deno.serve(async (req) => {
       });
 
       const reportText = await reportRes.text();
-      const eventResponses = reportText.split(/<[a-zA-Z0-9:]*response/i).slice(1);
+      const eventResponses = reportText.split(/<[^:]*:?response/i).slice(1);
       
       for (const resp of eventResponses) {
-        const icsData = resp.match(/<[a-zA-Z0-9:]*calendar-data[^>]*>([\s\S]*?)<\/[a-zA-Z0-9:]*calendar-data>/i)?.[1];
+        const icsData = resp.match(/<[^:]*:?calendar-data[^>]*>([\s\S]*?)<\/[^:]*:?calendar-data>/i)?.[1];
         if (!icsData) continue;
 
         try {
@@ -206,7 +217,7 @@ Deno.serve(async (req) => {
     // 8. Upsert Events to Cache
     if (allEvents.length > 0) {
       console.log(`[${functionName}] Upserting ${allEvents.length} Apple events to cache`);
-      const upsertRes = await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
+      await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
         method: 'POST',
         headers: { 
           'apikey': supabaseKey, 
@@ -216,10 +227,6 @@ Deno.serve(async (req) => {
         },
         body: JSON.stringify(allEvents)
       });
-      
-      if (!upsertRes.ok) {
-        console.error(`[${functionName}] Cache Upsert Error:`, await upsertRes.text());
-      }
     }
 
     return new Response(JSON.stringify({ count: allEvents.length }), { 
