@@ -64,8 +64,7 @@ serve(async (req) => {
 
     console.log(`[${functionName}] --- DIAGNOSTIC START ---`);
     console.log(`[${functionName}] TODAY: ${todayStr} | TZ: ${userTimezone}`);
-    console.log(`[${functionName}] NOW: ${formatInTimeZone(now, userTimezone, 'HH:mm:ss')}`);
-    console.log(`[${functionName}] WINDOW: ${settings.day_start_time} - ${settings.day_end_time}`);
+    console.log(`[${functionName}] SELECTED DAYS: ${JSON.stringify(selectedDays)}`);
 
     const seenIds = new Set();
     const uniqueEvents = allEvents.filter(e => {
@@ -85,7 +84,6 @@ serve(async (req) => {
     const dailyStats = new Map();
     dailyStats.set(todayStr, { tasks: 0, hours: 0, lastPointer: null });
 
-    // Pre-calculate fixed load and find the "end" of the last fixed event for today
     fixedEvents.forEach(f => {
       const dayKey = formatInTimeZone(new Date(f.start_time), userTimezone, 'yyyy-MM-dd');
       if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
@@ -101,14 +99,8 @@ serve(async (req) => {
                      !f.title?.toLowerCase().includes('break') && 
                      !f.title?.toLowerCase().includes('dinner');
       if (isTask) stats.tasks += 1;
-
-      // If this fixed event is today, log it
-      if (dayKey === todayStr) {
-        console.log(`[${functionName}] TODAY FIXED: "${f.title}" (${formatInTimeZone(new Date(f.start_time), userTimezone, 'HH:mm')} - ${formatInTimeZone(new Date(f.end_time), userTimezone, 'HH:mm')})`);
-      }
     });
 
-    // Categorization...
     let categories = movableEvents.map(() => "General");
     const themeList = dayThemes.map(t => t.theme).filter(Boolean);
     if (themeList.length > 0) {
@@ -159,25 +151,21 @@ serve(async (req) => {
           const dayKey = formatInTimeZone(currentDay, userTimezone, 'yyyy-MM-dd');
           const isToday = (dayKey === todayStr);
           
+          // FIX: Use formatInTimeZone to get the day of week (0-6) relative to the user's timezone
+          // 'e' returns 1 (Sun) to 7 (Sat). Subtracting 1 gives 0-6.
+          const dayOfWeek = parseInt(formatInTimeZone(currentDay, userTimezone, 'e')) - 1;
+
           if (pass === 0 && !isToday) break; 
 
-          const dayOfWeek = toDate(currentDay, { timeZone: userTimezone }).getDay();
           if (!selectedDays.includes(dayOfWeek)) {
-            if (isToday) console.log(`[${functionName}] TODAY SKIP: Monday not in selectedDays`);
+            if (isToday) console.log(`[${functionName}] TODAY SKIP: Day ${dayOfWeek} (Monday=1) not in selectedDays ${JSON.stringify(selectedDays)}`);
             dayOffset++; continue; 
           }
 
           if (!dailyStats.has(dayKey)) dailyStats.set(dayKey, { tasks: 0, hours: 0, lastPointer: null });
           const stats = dailyStats.get(dayKey);
           
-          if (isToday) console.log(`[${functionName}] TODAY CHECK: "${event.title}" (Pass ${pass}) | Current: ${stats.tasks} tasks, ${stats.hours.toFixed(1)}h`);
-
-          if (stats.tasks >= maxTasks) {
-            if (isToday) console.log(`[${functionName}] TODAY REJECT: "${event.title}" - Max tasks reached (${maxTasks})`);
-            dayOffset++; continue;
-          }
-          if (stats.hours >= maxWorkHours) {
-            if (isToday) console.log(`[${functionName}] TODAY REJECT: "${event.title}" - Max hours reached (${maxWorkHours})`);
+          if (stats.tasks >= maxTasks || stats.hours >= maxWorkHours) {
             dayOffset++; continue;
           }
 
@@ -194,15 +182,10 @@ serve(async (req) => {
           }
 
           let searchPointer = new Date(stats.lastPointer);
-          if (isToday) console.log(`[${functionName}] TODAY SEARCH: Starting at ${formatInTimeZone(searchPointer, userTimezone, 'HH:mm')}`);
 
           while (searchPointer < dayEnd && !foundSlot) {
             const potentialEnd = new Date(searchPointer.getTime() + durationMs);
-            
-            if (potentialEnd > dayEnd) {
-              if (isToday) console.log(`[${functionName}] TODAY REJECT: "${event.title}" ends at ${formatInTimeZone(potentialEnd, userTimezone, 'HH:mm')}, past window end ${settings.day_end_time}`);
-              break;
-            }
+            if (potentialEnd > dayEnd) break;
             
             const collision = fixedEvents.find(f => {
               const fStart = new Date(f.start_time);
@@ -217,8 +200,6 @@ serve(async (req) => {
               stats.tasks += 1;
               if (event.is_work) stats.hours += (effectiveDuration / 60);
               stats.lastPointer = alignTime(new Date(potentialEnd.getTime()), slotAlignment);
-
-              if (isToday) console.log(`[${functionName}] TODAY PLACED: "${event.title}" at ${formatInTimeZone(searchPointer, userTimezone, 'HH:mm')}`);
 
               proposedChanges.push({
                 event_id: event.event_id,
@@ -259,7 +240,6 @@ serve(async (req) => {
       }
     }
 
-    console.log(`[${functionName}] SUCCESS - Generated ${proposedChanges.length} changes.`);
     return new Response(JSON.stringify({ changes: proposedChanges }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
     console.error(`[${functionName}] Error:`, error.message);
