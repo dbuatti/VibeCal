@@ -49,14 +49,16 @@ serve(async (req) => {
     const { data: { user } } = await supabaseUser.auth.getUser();
     if (!user) throw new Error("Unauthorized");
 
-    // 1. STAGE 1: SEMANTIC MEMORY & HEURISTIC PRE-FILTER (Zero API Cost)
+    // 1. STAGE 1: SEMANTIC MEMORY & USER RULES (Highest Priority)
     const { data: feedback } = await supabaseAdmin
       .from('task_classification_feedback')
       .select('task_name, is_movable')
       .eq('user_id', user.id);
 
     const results = taskList.map(title => {
-      // Check manual feedback first
+      const t = title.toLowerCase();
+
+      // A. Check manual feedback first (User explicitly vetted this exact task before)
       const match = feedback?.find(f => isSemanticMatch(title, f.task_name));
       if (match) {
         return { 
@@ -67,7 +69,15 @@ serve(async (req) => {
         };
       }
 
-      // Check hard-coded fixed patterns
+      // B. Check User Keywords (User intent overrides heuristics)
+      if (lockedKeywords.some(kw => t.includes(kw.toLowerCase()) || kw.toLowerCase().includes(t))) {
+        return { isMovable: false, explanation: "User Rule: Found in your 'Locked' list.", confidence: 1.0, isPredefined: true };
+      }
+      if (movableKeywords.some(kw => t.includes(kw.toLowerCase()) || kw.toLowerCase().includes(t))) {
+        return { isMovable: true, explanation: "User Rule: Found in your 'Movable' list.", confidence: 1.0, isPredefined: true };
+      }
+
+      // C. Check hard-coded fixed patterns
       if (HARD_FIXED_PATTERNS.test(title)) {
         return {
           isMovable: false,
@@ -77,7 +87,7 @@ serve(async (req) => {
         };
       }
 
-      // Check hard-coded movable patterns
+      // D. Check hard-coded movable patterns
       if (HARD_MOVABLE_PATTERNS.test(title)) {
         return {
           isMovable: true,
@@ -85,15 +95,6 @@ serve(async (req) => {
           confidence: 0.8,
           isPredefined: true
         };
-      }
-
-      // Check user keywords
-      const t = title.toLowerCase();
-      if (lockedKeywords.some(kw => t.includes(kw.toLowerCase()))) {
-        return { isMovable: false, explanation: "User Rule: Found in your 'Locked' list.", confidence: 1.0, isPredefined: true };
-      }
-      if (movableKeywords.some(kw => t.includes(kw.toLowerCase()))) {
-        return { isMovable: true, explanation: "User Rule: Found in your 'Movable' list.", confidence: 1.0, isPredefined: true };
       }
 
       return null;
@@ -141,12 +142,6 @@ serve(async (req) => {
       } catch (aiError) {
         isLocalMode = true;
         const isQuotaError = aiError.message?.includes('429') || aiError.message?.includes('quota');
-        
-        if (isQuotaError) {
-          console.log(`[${functionName}] Quota Exceeded. Switching to Local Power-Saving Mode.`);
-        } else {
-          console.warn(`[${functionName}] AI Error, using Local Fallback:`, aiError.message);
-        }
         
         // 3. STAGE 3: SMART HEURISTIC FALLBACK (AI Busy/Quota)
         indicesToAI.forEach(idx => {
