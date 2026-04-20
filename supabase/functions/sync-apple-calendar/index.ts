@@ -1,4 +1,7 @@
 // @ts-nocheck
+import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
+import ICAL from "https://esm.sh/ical.js@1.5.0"
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -42,7 +45,6 @@ Deno.serve(async (req) => {
     // 3. Discover Principal & Home Set
     const baseUrl = 'https://caldav.icloud.com';
     
-    // Try to find principal
     const principalRes = await fetch(`${baseUrl}/`, { 
       method: 'PROPFIND', 
       headers: { ...headers, 'Depth': '0' }, 
@@ -52,20 +54,8 @@ Deno.serve(async (req) => {
     let principalHref = principalText.match(/<[^:]*href[^>]*>([^<]+)<\/[^>]*>/i)?.[1] || 
                          principalText.match(/href="([^"]+)"/i)?.[1];
     
-    // Fallback: if principal not found, try to use the user ID part of the email if possible, 
-    // but usually we need the numeric ID. Let's try to PROPFIND the root with more depth.
-    if (!principalHref) {
-      console.warn(`[${functionName}] Principal not found in root, trying fallback discovery`);
-      // Some accounts might need a different discovery path
-    }
-
-    if (!principalHref) {
-      console.error(`[${functionName}] Principal response:`, principalText);
-      throw new Error("Principal not found");
-    }
-
+    if (!principalHref) throw new Error("Principal not found");
     const principalUrl = principalHref.startsWith('/') ? `${baseUrl}${principalHref}` : principalHref;
-    console.log(`[${functionName}] Principal URL: ${principalUrl}`);
 
     const homeRes = await fetch(principalUrl, {
       method: 'PROPFIND',
@@ -76,14 +66,8 @@ Deno.serve(async (req) => {
     let homeHref = homeText.match(/calendar-home-set[^>]*>\s*<[^:]*href[^>]*>([^<]+)<\/[^>]*>/i)?.[1] ||
                     homeText.match(/calendar-home-set[^>]*href="([^"]+)"/i)?.[1];
     
-    // Fallback: if home set not found, sometimes the principal URL IS the home set or close to it
-    if (!homeHref) {
-      console.warn(`[${functionName}] Home set not found in principal, trying fallback`);
-      homeHref = principalHref;
-    }
-
+    if (!homeHref) homeHref = principalHref;
     const homeUrl = homeHref.startsWith('/') ? `${baseUrl}${homeHref}` : homeHref;
-    console.log(`[${functionName}] Home URL: ${homeUrl}`);
 
     // 4. Discover Calendars
     const calsRes = await fetch(homeUrl, {
@@ -108,9 +92,8 @@ Deno.serve(async (req) => {
         });
       }
     }
-    console.log(`[${functionName}] Discovered ${discoveredCalendars.length} Apple calendars`);
 
-    // 5. Sync Calendar List to user_calendars table
+    // 5. Sync Calendar List
     const existingCalsRes = await fetch(`${supabaseUrl}/rest/v1/user_calendars?user_id=eq.${user.id}&provider=eq.apple`, {
       headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
     });
@@ -120,27 +103,90 @@ Deno.serve(async (req) => {
       const existing = existingCals.find(e => e.calendar_id === cal.calendar_id);
       return {
         ...cal,
-        is_enabled: existing ? existing.is_enabled : true // Default to true for Apple for now
+        is_enabled: existing ? existing.is_enabled : true
       };
     });
 
     if (calendarsToUpsert.length > 0) {
       await fetch(`${supabaseUrl}/rest/v1/user_calendars?on_conflict=user_id,calendar_id`, {
         method: 'POST',
-        headers: { 
-          'apikey': supabaseKey, 
-          'Authorization': `Bearer ${supabaseKey}`, 
-          'Content-Type': 'application/json', 
-          'Prefer': 'resolution=merge-duplicates' 
-        },
+        headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}`, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' },
         body: JSON.stringify(calendarsToUpsert)
       });
     }
 
-    // Note: Event fetching for Apple is not yet implemented in this function.
-    // It currently only handles calendar discovery and list management.
+    // 6. Fetch Events for Enabled Calendars
+    const enabledCalendars = calendarsToUpsert.filter(c => c.is_enabled);
+    const allEvents = [];
+    
+    const now = new Date();
+    const startRange = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    const endRange = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
-    return new Response(JSON.stringify({ count: discoveredCalendars.length }), { 
+    for (const cal of enabledCalendars) {
+      console.log(`[${functionName}] Fetching events for: ${cal.calendar_name}`);
+      const reportRes = await fetch(cal.calendar_id, {
+        method: 'REPORT',
+        headers: { ...headers, 'Content-Type': 'application/xml; charset=utf-8' },
+        body: `<?xml version="1.0" encoding="utf-8" ?>
+          <C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+            <D:prop>
+              <D:getetag/>
+              <C:calendar-data/>
+            </D:prop>
+            <C:filter>
+              <C:comp-filter name="VCALENDAR">
+                <C:comp-filter name="VEVENT">
+                  <C:time-range start="${startRange}" end="${endRange}"/>
+                </C:comp-filter>
+              </C:comp-filter>
+            </C:filter>
+          </C:calendar-query>`
+      });
+
+      const reportText = await reportRes.text();
+      const eventResponses = reportText.split(/<[^:]*:?response/i);
+      
+      for (const resp of eventResponses) {
+        const icsData = resp.match(/<[^:]*:?calendar-data[^>]*>([\s\S]*?)<\/[^>]*:?calendar-data>/i)?.[1];
+        if (!icsData) continue;
+
+        try {
+          const jcalData = ICAL.parse(icsData.trim());
+          const vcalendar = new ICAL.Component(jcalData);
+          const vevents = vcalendar.getAllSubcomponents('vevent');
+
+          for (const vevent of vevents) {
+            const event = new ICAL.Event(vevent);
+            allEvents.push({
+              user_id: user.id,
+              event_id: event.uid,
+              title: event.summary || 'Untitled',
+              start_time: event.startDate.toJSDate().toISOString(),
+              end_time: event.endDate.toJSDate().toISOString(),
+              provider: 'apple',
+              source_calendar: cal.calendar_name,
+              source_calendar_id: cal.calendar_id,
+              last_synced_at: new Date().toISOString()
+            });
+          }
+        } catch (e) {
+          console.error(`[${functionName}] Error parsing ICS:`, e.message);
+        }
+      }
+    }
+
+    // 7. Upsert Events to Cache
+    if (allEvents.length > 0) {
+      console.log(`[${functionName}] Upserting ${allEvents.length} Apple events`);
+      await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
+        method: 'POST',
+        headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}`, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' },
+        body: JSON.stringify(allEvents)
+      });
+    }
+
+    return new Response(JSON.stringify({ count: allEvents.length }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
   } catch (error) {
