@@ -105,10 +105,10 @@ const DayByDayPlanner = ({
     return false;
   }, [dayChanges, appliedChanges, currentDate, selectedDays]);
 
-  const isWorkEvent = (event: any) => {
-    if (event.is_work === true) return true;
+  // Helper to identify events that contribute to "Load" (everything except restorative breaks)
+  const isLoadEvent = (event: any) => {
     const title = (event.title || '').toLowerCase();
-    return workKeywords.some(kw => title.includes(kw.toLowerCase()));
+    return !title.includes('lunch') && !title.includes('dinner') && !title.includes('break');
   };
 
   useEffect(() => {
@@ -141,18 +141,18 @@ const DayByDayPlanner = ({
       ...changes.filter(c => c.new_start && formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd') === currentDateStr && !c.is_surplus)
     ];
 
-    const fixedWorkEvents = dayLockedEvents
-      .filter(e => !changedIds.has(e.event_id) && isWorkEvent(e))
+    const fixedLoadEvents = dayLockedEvents
+      .filter(e => !changedIds.has(e.event_id) && isLoadEvent(e))
       .sort((a, b) => parseISO(a.start_time).getTime() - parseISO(b.start_time).getTime());
 
-    const shuffledWorkEvents = changes
-      .filter(c => c.new_start && formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd') === currentDateStr && !c.is_surplus && isWorkEvent(c))
+    const shuffledLoadEvents = changes
+      .filter(c => c.new_start && formatInTimeZone(parseISO(c.new_start), timezone, 'yyyy-MM-dd') === currentDateStr && !c.is_surplus && isLoadEvent(c))
       .sort((a, b) => parseISO(a.new_start).getTime() - parseISO(b.new_start).getTime());
 
-    const calculateTotalMinutes = (workEvents: any[]) => {
+    const calculateTotalMinutes = (loadEvents: any[]) => {
       let totalMinutes = 0;
       let lastEnd = new Date(0);
-      workEvents.forEach(e => {
+      loadEvents.forEach(e => {
         const startStr = e.start_time || e.new_start;
         const endStr = e.end_time || e.new_end;
         if (!startStr || !endStr) return;
@@ -168,24 +168,21 @@ const DayByDayPlanner = ({
       return totalMinutes;
     };
 
-    const fixedWorkMinutes = calculateTotalMinutes(fixedWorkEvents);
-    const shuffledWorkMinutes = calculateTotalMinutes(shuffledWorkEvents);
-    const totalWorkMinutes = fixedWorkMinutes + shuffledWorkMinutes;
+    const fixedLoadMinutes = calculateTotalMinutes(fixedLoadEvents);
+    const shuffledLoadMinutes = calculateTotalMinutes(shuffledLoadEvents);
+    const totalLoadMinutes = fixedLoadMinutes + shuffledLoadMinutes;
 
-    const taskEvents = eventsOnThisDay.filter(e => {
-      const title = e.title?.toLowerCase() || '';
-      return !title.includes('lunch') && !title.includes('break') && !title.includes('dinner');
-    });
+    const taskEvents = eventsOnThisDay.filter(isLoadEvent);
 
     return {
       tasks: taskEvents.length,
-      fixedHours: fixedWorkMinutes / 60,
-      shuffledHours: shuffledWorkMinutes / 60,
-      hours: totalWorkMinutes / 60,
+      fixedHours: fixedLoadMinutes / 60,
+      shuffledHours: shuffledLoadMinutes / 60,
+      hours: totalLoadMinutes / 60,
       isOverTasks: taskEvents.length > maxTasks,
-      isOverHours: (totalWorkMinutes / 60) > maxHours
+      isOverHours: (totalLoadMinutes / 60) > maxHours
     };
-  }, [dayLockedEvents, changes, currentDateStr, maxTasks, maxHours, workKeywords]);
+  }, [dayLockedEvents, changes, currentDateStr, maxTasks, maxHours]);
 
   const handleSyncDay = async () => {
     setIsSyncing(true);

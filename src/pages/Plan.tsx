@@ -11,7 +11,7 @@ import PlanPageHeader from '@/components/plan/PlanPageHeader';
 import PlanInitialView from '@/components/plan/PlanInitialView';
 import PlanLoadingView from '@/components/plan/PlanLoadingView';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { format, nextSaturday, parseISO, addMinutes, isAfter, isBefore } from 'date-fns';
+import { format, nextSaturday, parseISO, addMinutes, isAfter, isBefore, isValid } from 'date-fns';
 import { AlertCircle, LogIn, Sparkles, Calendar } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -318,7 +318,6 @@ const Plan = () => {
   };
 
   const handleApplyDay = async (dateChanges: any[]) => {
-    console.log("[Plan] handleApplyDay started", { count: dateChanges.length });
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const { data: { user } } = await supabase.auth.getUser();
@@ -333,13 +332,9 @@ const Plan = () => {
 
       for (const change of dateChanges) {
         const eventIdx = updatedEvents.findIndex(e => e.event_id === change.event_id);
-        if (eventIdx === -1) {
-          console.warn("[Plan] Event not found in cache", change.event_id);
-          continue;
-        }
+        if (eventIdx === -1) continue;
         const eventInCache = updatedEvents[eventIdx];
 
-        console.log("[Plan] Invoking push-to-provider for", change.title);
         const { error: pushError } = await supabase.functions.invoke('push-to-provider', {
           body: { 
             eventId: change.event_id, 
@@ -351,10 +346,7 @@ const Plan = () => {
           }
         });
 
-        if (pushError) {
-          console.error("[Plan] push-to-provider failed", pushError);
-          throw pushError;
-        }
+        if (pushError) throw pushError;
 
         await supabase.from('calendar_events_cache')
           .update({ 
@@ -375,9 +367,7 @@ const Plan = () => {
       setEvents(updatedEvents);
       setAppliedChanges(newAppliedIds);
       setProposal({ ...proposal, proposed_changes: updatedProposedChanges });
-      console.log("[Plan] handleApplyDay complete");
     } catch (err: any) { 
-      console.error("[Plan] handleApplyDay error", err);
       showError(err.message); 
       throw err; 
     }
@@ -401,7 +391,14 @@ const Plan = () => {
         const eventIdx = updatedEvents.findIndex(e => e.event_id === change.event_id);
         if (eventIdx === -1) continue;
         const eventInCache = updatedEvents[eventIdx];
-        const oldEnd = addMinutes(parseISO(change.old_start), change.old_duration).toISOString();
+        
+        // Safety check for time values
+        if (!change.old_start) continue;
+        const oldStart = parseISO(change.old_start);
+        if (!isValid(oldStart)) continue;
+
+        const oldDuration = change.old_duration || eventInCache.duration_minutes || 30;
+        const oldEnd = addMinutes(oldStart, oldDuration).toISOString();
 
         await supabase.functions.invoke('push-to-provider', {
           body: { 
@@ -415,10 +412,10 @@ const Plan = () => {
         });
 
         await supabase.from('calendar_events_cache')
-          .update({ start_time: change.old_start, end_time: oldEnd, duration_minutes: change.old_duration, last_synced_at: new Date().toISOString() })
+          .update({ start_time: change.old_start, end_time: oldEnd, duration_minutes: oldDuration, last_synced_at: new Date().toISOString() })
           .eq('event_id', change.event_id);
 
-        updatedEvents[eventIdx] = { ...eventInCache, start_time: change.old_start, end_time: oldEnd, duration_minutes: change.old_duration };
+        updatedEvents[eventIdx] = { ...eventInCache, start_time: change.old_start, end_time: oldEnd, duration_minutes: oldDuration };
       }
 
       const updatedProposedChanges = proposal.proposed_changes.map((c: any) => ({ ...c, applied: newAppliedIds.includes(c.event_id) }));

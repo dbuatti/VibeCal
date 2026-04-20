@@ -44,7 +44,6 @@ serve(async (req) => {
       targetDate 
     } = body;
 
-    // Fetch both settings and profile to get the most accurate timezone
     const [settingsRes, profileRes, eventsRes] = await Promise.all([
       supabase.from('user_settings').select('*').eq('user_id', user.id).maybeSingle(),
       supabase.from('profiles').select('timezone').eq('id', user.id).maybeSingle(),
@@ -53,8 +52,6 @@ serve(async (req) => {
 
     const settings = settingsRes.data || {};
     const profile = profileRes.data || {};
-    
-    // Priority: Settings > Profile > Default Melbourne
     const userTimezone = settings.timezone || profile.timezone || 'Australia/Melbourne';
     const allEvents = eventsRes.data || [];
     const workKeywords = settings.work_keywords || ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt'];
@@ -68,8 +65,6 @@ serve(async (req) => {
     const proposedChanges = [];
     const fixedEvents = allEvents.filter(e => e.is_locked === true || vettedEventIds.includes(e.event_id));
     const movableEvents = allEvents.filter(e => e.is_locked !== true && !vettedEventIds.includes(e.event_id));
-
-    console.log(`[${functionName}] User: ${user.id} | TZ: ${userTimezone} | Movable: ${movableEvents.length}`);
 
     const now = new Date();
     const todayStr = formatInTimeZone(now, userTimezone, 'yyyy-MM-dd');
@@ -86,13 +81,9 @@ serve(async (req) => {
       if (!targetDate && !selectedDays.includes(dayOfWeek)) continue;
 
       const dayStr = formatInTimeZone(currentDayDate, userTimezone, 'yyyy-MM-dd');
-      
-      // CRITICAL: Ensure window is created in the user's local timezone
       const dayStart = toDate(`${dayStr}T${settings.day_start_time || '09:00'}:00`, { timeZone: userTimezone });
       const dayEnd = toDate(`${dayStr}T${settings.day_end_time || '17:00'}:00`, { timeZone: userTimezone });
       
-      console.log(`[${functionName}] Day: ${dayStr} | Window: ${formatInTimeZone(dayStart, userTimezone, 'HH:mm')} - ${formatInTimeZone(dayEnd, userTimezone, 'HH:mm')}`);
-
       const dayFixedEvents = fixedEvents.filter(e => {
         const start = parseISO(e.start_time);
         return isValid(start) && formatInTimeZone(start, userTimezone, 'yyyy-MM-dd') === dayStr;
@@ -117,17 +108,11 @@ serve(async (req) => {
 
       let currentTime = dayStart;
       const maxDailyMinutes = (Number(maxHoursOverride || settings.max_hours_per_day) || 6) * 60;
-      const maxDailyTasks = Number(maxTasksOverride || settings.max_tasks_per_day) || 50; // Default to 50 if not specified
+      const maxDailyTasks = Number(maxTasksOverride || settings.max_tasks_per_day) || 50;
 
       while (currentTime < dayEnd && currentMovableIdx < movableEvents.length) {
-        if (dailyWorkMinutes >= maxDailyMinutes) {
-          console.log(`[${functionName}] ${dayStr}: Max work hours reached (${maxDailyMinutes/60}h)`);
-          break;
-        }
-        if (dailyTaskCount >= maxDailyTasks) {
-          console.log(`[${functionName}] ${dayStr}: Max task count reached (${maxDailyTasks})`);
-          break;
-        }
+        if (dailyWorkMinutes >= maxDailyMinutes) break;
+        if (dailyTaskCount >= maxDailyTasks) break;
 
         const event = movableEvents[currentMovableIdx];
         const duration = durationOverride === "original" || !durationOverride ? (event.duration_minutes || 30) : parseInt(durationOverride);
@@ -153,6 +138,7 @@ serve(async (req) => {
             event_id: event.event_id,
             title: event.title,
             old_start: event.start_time,
+            old_duration: event.duration_minutes, // CRITICAL: Store original duration
             new_start: slotStart.toISOString(),
             new_end: slotEnd.toISOString(),
             duration: duration,
@@ -169,21 +155,19 @@ serve(async (req) => {
       }
     }
 
-    // Handle overflow
     for (let i = currentMovableIdx; i < movableEvents.length; i++) {
       const event = movableEvents[i];
       proposedChanges.push({
         event_id: event.event_id,
         title: event.title,
         old_start: event.start_time,
+        old_duration: event.duration_minutes, // CRITICAL: Store original duration
         new_start: null,
         new_end: null,
         duration: durationOverride === "original" || !durationOverride ? (event.duration_minutes || 30) : parseInt(durationOverride),
         is_surplus: true
       });
     }
-
-    console.log(`[${functionName}] Optimisation complete. Changes: ${proposedChanges.length}`);
 
     return new Response(JSON.stringify({ changes: proposedChanges }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
