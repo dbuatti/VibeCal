@@ -33,15 +33,17 @@ serve(async (req) => {
     if (userError || !user) throw new Error("Unauthorized");
 
     const body = await req.json().catch(() => ({}));
-    const { 
-      durationOverride, 
-      maxTasksOverride, 
+    const {
+      durationOverride,
+      maxTasksOverride,
       maxHoursOverride,
-      slotAlignment = 15, 
+      slotAlignment = 15,
       selectedDays = [1, 2, 3, 4, 5],
       placeholderDate,
       vettedEventIds = [],
-      targetDate 
+      targetDate,
+      startDate,
+      endDate
     } = body;
 
     const [settingsRes, profileRes, eventsRes] = await Promise.all([
@@ -70,8 +72,21 @@ serve(async (req) => {
     const todayStr = formatInTimeZone(now, userTimezone, 'yyyy-MM-dd');
     
     let currentMovableIdx = 0;
-    const daysToProcess = targetDate ? 1 : 14;
-    const startDayStr = targetDate || todayStr;
+    
+    let daysToProcess = 14;
+    let startDayStr = todayStr;
+
+    if (targetDate) {
+      daysToProcess = 1;
+      startDayStr = targetDate;
+    } else if (startDate && endDate) {
+      const start = parseISO(startDate);
+      const end = parseISO(endDate);
+      if (isValid(start) && isValid(end)) {
+        daysToProcess = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1);
+        startDayStr = formatInTimeZone(start, userTimezone, 'yyyy-MM-dd');
+      }
+    }
 
     for (let d = 0; d < daysToProcess; d++) {
       const baseDate = toDate(`${startDayStr}T00:00:00`, { timeZone: userTimezone });

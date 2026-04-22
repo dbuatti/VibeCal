@@ -11,9 +11,10 @@ import PlanPageHeader from '@/components/plan/PlanPageHeader';
 import PlanInitialView from '@/components/plan/PlanInitialView';
 import PlanLoadingView from '@/components/plan/PlanLoadingView';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { format, nextSaturday, parseISO, addMinutes, isAfter, isBefore, isValid } from 'date-fns';
+import { format, nextSaturday, parseISO, addMinutes, isAfter, isBefore, isValid, startOfDay, endOfDay } from 'date-fns';
 import { AlertCircle, LogIn, Sparkles, Calendar } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { DateRange } from "react-day-picker";
 
 type PlanStep = 'initial' | 'analysis' | 'vetting_tasks' | 'requirements' | 'active_plan';
 
@@ -31,6 +32,7 @@ const Plan = () => {
   const [appliedChanges, setAppliedChanges] = useState<string[]>([]);
   const [settings, setSettings] = useState<any>(null);
   const [deepFocus, setDeepFocus] = useState(false);
+  const [dateRange, setDateRange] = useState<DateRange | undefined>();
 
   // Requirements state
   const [durationOverride, setDurationOverride] = useState<string>("original");
@@ -237,7 +239,7 @@ const Plan = () => {
     }
   };
 
-  const runOptimisation = async (isResuggest = false, overrideAppliedIds?: string[]) => {
+  const runOptimisation = async (isResuggest = false, overrideAppliedIds?: string[], range?: DateRange) => {
     if (selectedDays.length === 0) { showError("Select at least one day."); return; }
     
     setIsProcessing(true);
@@ -263,14 +265,16 @@ const Plan = () => {
       const currentApplied = overrideAppliedIds !== undefined ? overrideAppliedIds : (isResuggest ? appliedChanges : []);
 
       const { data, error } = await supabase.functions.invoke('optimise-schedule', {
-        body: { 
-          durationOverride: durationOverride === "original" ? null : parseInt(durationOverride), 
-          maxTasksOverride, 
+        body: {
+          durationOverride: durationOverride === "original" ? null : parseInt(durationOverride),
+          maxTasksOverride,
           maxHoursOverride,
-          slotAlignment: parseInt(slotAlignment), 
+          slotAlignment: parseInt(slotAlignment),
           selectedDays,
           placeholderDate,
-          vettedEventIds: currentApplied 
+          vettedEventIds: currentApplied,
+          startDate: range?.from?.toISOString(),
+          endDate: range?.to?.toISOString()
         }
       });
       
@@ -288,7 +292,7 @@ const Plan = () => {
         user_id: user.id,
         proposed_changes: finalChanges.map((c: any) => ({ ...c, applied: currentApplied.includes(c.event_id) })),
         status: 'proposed',
-        metadata: { selectedDays, maxTasksOverride, maxHoursOverride, durationOverride, isResuggest, placeholderDate }
+        metadata: { selectedDays, maxTasksOverride, maxHoursOverride, durationOverride, isResuggest, placeholderDate, range }
       }).select().single();
 
       setProposal(newProposal);
@@ -296,10 +300,10 @@ const Plan = () => {
       setProgress(100);
       setCurrentStep('active_plan');
       showSuccess(isResuggest ? "Day resuggested!" : "Optimisation complete!");
-    } catch (err: any) { 
-      showError(err.message); 
+    } catch (err: any) {
+      showError(err.message);
     }
-    finally { 
+    finally {
       setTimeout(() => setIsProcessing(false), 500);
     }
   };
@@ -318,7 +322,13 @@ const Plan = () => {
     }
   };
 
-  const handleApplyDay = async (dateChanges: any[]) => {
+  const applyChanges = async (changesToApply: any[]) => {
+    if (changesToApply.length === 0) return;
+    
+    setIsProcessing(true);
+    setStatusText(`Syncing ${changesToApply.length} changes...`);
+    setProgress(0);
+
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const { data: { user } } = await supabase.auth.getUser();
@@ -331,30 +341,34 @@ const Plan = () => {
         token = profile?.google_access_token;
       }
 
-      for (const change of dateChanges) {
+      for (let i = 0; i < changesToApply.length; i++) {
+        const change = changesToApply[i];
         const eventIdx = updatedEvents.findIndex(e => e.event_id === change.event_id);
         if (eventIdx === -1) continue;
         const eventInCache = updatedEvents[eventIdx];
 
+        setStatusText(`Syncing: ${change.title}...`);
+        setProgress(Math.round((i / changesToApply.length) * 100));
+
         const { error: pushError } = await supabase.functions.invoke('push-to-provider', {
-          body: { 
-            eventId: change.event_id, 
-            provider: eventInCache.provider, 
-            calendarId: eventInCache.source_calendar_id, 
-            startTime: change.new_start, 
-            endTime: change.new_end, 
-            googleAccessToken: token 
+          body: {
+            eventId: change.event_id,
+            provider: eventInCache.provider,
+            calendarId: eventInCache.source_calendar_id,
+            startTime: change.new_start,
+            endTime: change.new_end,
+            googleAccessToken: token
           }
         });
 
         if (pushError) throw pushError;
 
         await supabase.from('calendar_events_cache')
-          .update({ 
-            start_time: change.new_start, 
-            end_time: change.new_end, 
+          .update({
+            start_time: change.new_start,
+            end_time: change.new_end,
             duration_minutes: change.duration,
-            last_synced_at: new Date().toISOString() 
+            last_synced_at: new Date().toISOString()
           })
           .eq('event_id', change.event_id);
         
@@ -368,10 +382,47 @@ const Plan = () => {
       setEvents(updatedEvents);
       setAppliedChanges(newAppliedIds);
       setProposal({ ...proposal, proposed_changes: updatedProposedChanges });
-    } catch (err: any) { 
-      showError(err.message); 
-      throw err; 
+      setProgress(100);
+      showSuccess(`Successfully synced ${changesToApply.length} changes`);
+    } catch (err: any) {
+      showError(err.message);
+      throw err;
+    } finally {
+      setTimeout(() => setIsProcessing(false), 500);
     }
+  };
+
+  const handleApplyDay = async (dateChanges: any[]) => {
+    await applyChanges(dateChanges);
+  };
+
+  const handleSyncAll = async () => {
+    if (!proposal) return;
+    const unappliedChanges = proposal.proposed_changes.filter((c: any) => !c.applied && !c.is_surplus);
+    if (unappliedChanges.length === 0) {
+      showSuccess("All changes already applied");
+      return;
+    }
+    await applyChanges(unappliedChanges);
+  };
+
+  const handleSyncRange = async () => {
+    if (!proposal || !dateRange?.from || !dateRange?.to) return;
+    
+    const start = startOfDay(dateRange.from);
+    const end = endOfDay(dateRange.to);
+
+    const rangeChanges = proposal.proposed_changes.filter((c: any) => {
+      if (c.applied || c.is_surplus || !c.new_start) return false;
+      const changeDate = parseISO(c.new_start);
+      return isAfter(changeDate, start) && isBefore(changeDate, end);
+    });
+
+    if (rangeChanges.length === 0) {
+      showSuccess("No unapplied changes in this range");
+      return;
+    }
+    await applyChanges(rangeChanges);
   };
 
   const handleUndoApplyDay = async (dateChanges: any[]) => {
@@ -481,7 +532,7 @@ const Plan = () => {
 
   return (
     <Layout hideSidebar={deepFocus}>
-      <PlanPageHeader 
+      <PlanPageHeader
         currentStep={currentStep}
         isProcessing={isProcessing}
         deepFocus={deepFocus}
@@ -490,6 +541,11 @@ const Plan = () => {
         onFullSync={handleFullSync}
         onReset={handleResetPlan}
         renderRequirementsForm={renderRequirementsForm}
+        dateRange={dateRange}
+        setDateRange={setDateRange}
+        onSyncAll={handleSyncAll}
+        onSyncRange={handleSyncRange}
+        onResuggestRange={() => runOptimisation(true, undefined, dateRange)}
       />
 
       {tokenMissing && (
@@ -541,19 +597,20 @@ const Plan = () => {
           )}
 
           {currentStep === 'active_plan' && proposal && (
-            <DayByDayPlanner 
+            <DayByDayPlanner
               events={events}
               changes={proposal.proposed_changes}
               appliedChanges={appliedChanges}
               onApplyDay={handleApplyDay}
               onUndoApplyDay={handleUndoApplyDay}
               onUndoAndResuggestDay={handleUndoAndResuggest}
-              onResuggestDay={() => runOptimisation(true)} 
+              onResuggestDay={() => runOptimisation(true)}
               onReinsertTask={handleReinsertTask}
               maxHours={maxHoursOverride}
               maxTasks={maxTasksOverride}
               workKeywords={settings?.work_keywords}
               selectedDays={selectedDays}
+              dateRange={dateRange}
             />
           )}
         </>

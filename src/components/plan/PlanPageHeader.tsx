@@ -1,13 +1,16 @@
 "use client";
 
 import React from 'react';
-import { Brain, Eye, EyeOff, CheckSquare, Settings2, RefreshCw, Trash2 } from 'lucide-react';
+import { Brain, Eye, EyeOff, CheckSquare, Settings2, RefreshCw, Trash2, Calendar as CalendarIcon, Zap, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Calendar } from '@/components/ui/calendar';
 import { cn } from '@/lib/utils';
+import { format } from 'date-fns';
+import { DateRange } from "react-day-picker";
 
 interface PlanPageHeaderProps {
   currentStep: string;
@@ -18,6 +21,11 @@ interface PlanPageHeaderProps {
   onFullSync: () => void;
   onReset: () => void;
   renderRequirementsForm: () => React.ReactNode;
+  dateRange?: DateRange;
+  setDateRange: (range: DateRange | undefined) => void;
+  onSyncAll: () => void;
+  onSyncRange: () => void;
+  onResuggestRange: () => void;
 }
 
 const PlanPageHeader = ({
@@ -28,7 +36,12 @@ const PlanPageHeader = ({
   onVetTasks,
   onFullSync,
   onReset,
-  renderRequirementsForm
+  renderRequirementsForm,
+  dateRange,
+  setDateRange,
+  onSyncAll,
+  onSyncRange,
+  onResuggestRange
 }: PlanPageHeaderProps) => {
   return (
     <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
@@ -50,9 +63,78 @@ const PlanPageHeader = ({
         <h1 className="text-3xl font-black text-gray-900 tracking-tight">Daily Plan</h1>
       </div>
       <div className="flex items-center gap-3">
+        {currentStep === 'active_plan' && (
+          <div className="flex items-center gap-2 mr-2">
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  className={cn(
+                    "bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm",
+                    !dateRange && "text-muted-foreground"
+                  )}
+                >
+                  <CalendarIcon className="mr-2 h-4 w-4" />
+                  {dateRange?.from ? (
+                    dateRange.to ? (
+                      <>
+                        {format(dateRange.from, "LLL dd")} -{" "}
+                        {format(dateRange.to, "LLL dd")}
+                      </>
+                    ) : (
+                      format(dateRange.from, "LLL dd")
+                    )
+                  ) : (
+                    <span>Pick a range</span>
+                  )}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0 rounded-3xl overflow-hidden border-none shadow-2xl" align="end">
+                <Calendar
+                  initialFocus
+                  mode="range"
+                  defaultMonth={dateRange?.from}
+                  selected={dateRange}
+                  onSelect={setDateRange}
+                  numberOfMonths={2}
+                />
+              </PopoverContent>
+            </Popover>
+
+            {dateRange?.from && dateRange?.to && (
+              <>
+                <Button
+                  onClick={onSyncRange}
+                  disabled={isProcessing}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-lg"
+                >
+                  <Zap size={14} className="mr-2" /> Sync Range
+                </Button>
+                <Button
+                  onClick={onResuggestRange}
+                  disabled={isProcessing}
+                  variant="outline"
+                  className="bg-white border-indigo-100 text-indigo-600 hover:bg-indigo-50 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm"
+                >
+                  <Wand2 size={14} className="mr-2" /> Resuggest Range
+                </Button>
+              </>
+            )}
+
+            <Button
+              onClick={onSyncAll}
+              disabled={isProcessing}
+              variant="outline"
+              className="bg-white border-gray-100 text-gray-500 hover:text-indigo-600 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm"
+            >
+              <Zap size={14} className="mr-2" /> Sync All
+            </Button>
+          </div>
+        )}
+
         {(currentStep === 'active_plan' || currentStep === 'vetting_tasks') && (
-          <Button 
-            variant="outline" 
+          <Button
+            variant="outline"
             onClick={onVetTasks}
             className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm"
           >

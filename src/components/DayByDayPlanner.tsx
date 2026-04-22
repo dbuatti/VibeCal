@@ -19,6 +19,7 @@ import PlannerStats from './PlannerStats';
 import PlannerChanges from './PlannerChanges';
 import PlannerHeader from '@/components/PlannerHeader';
 import { Link } from 'react-router-dom';
+import { DateRange } from "react-day-picker";
 
 interface DayByDayPlannerProps {
   events: any[];
@@ -33,21 +34,23 @@ interface DayByDayPlannerProps {
   maxTasks: number;
   workKeywords?: string[];
   selectedDays?: number[];
+  dateRange?: DateRange;
 }
 
-const DayByDayPlanner = ({ 
-  events, 
-  changes, 
-  appliedChanges, 
-  onApplyDay, 
+const DayByDayPlanner = ({
+  events,
+  changes,
+  appliedChanges,
+  onApplyDay,
   onUndoApplyDay,
   onUndoAndResuggestDay,
   onResuggestDay,
   onReinsertTask,
-  maxHours, 
+  maxHours,
   maxTasks,
   workKeywords = ['work', 'session', 'meeting', 'call', 'rehearsal', 'lesson', 'audition', 'coaching', 'appt', 'program', 'ceremony', 'gig', 'meetup', 'planning', 'workshop', 'presentation'],
-  selectedDays = [1, 2, 3, 4, 5]
+  selectedDays = [1, 2, 3, 4, 5],
+  dateRange
 }: DayByDayPlannerProps) => {
   const timezone = 'Australia/Melbourne';
 
@@ -133,6 +136,16 @@ const DayByDayPlanner = ({
       setHasAutoDefaulted(true);
     }
   }, [allDates, changes, appliedChanges, hasAutoDefaulted]);
+
+  useEffect(() => {
+    if (dateRange?.from && allDates.length > 0) {
+      const rangeStartStr = formatInTimeZone(dateRange.from, timezone, 'yyyy-MM-dd');
+      const rangeStartIndex = allDates.findIndex(d => d >= rangeStartStr);
+      if (rangeStartIndex !== -1) {
+        setCurrentIndex(rangeStartIndex);
+      }
+    }
+  }, [dateRange, allDates]);
 
   const stats = useMemo(() => {
     const changedIds = new Set(changes.map(c => c.event_id));
