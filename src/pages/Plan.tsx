@@ -10,10 +10,10 @@ import RequirementsForm from '@/components/RequirementsForm';
 import PlanPageHeader from '@/components/plan/PlanPageHeader';
 import PlanInitialView from '@/components/plan/PlanInitialView';
 import PlanLoadingView from '@/components/plan/PlanLoadingView';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { format, nextSaturday, parseISO, addMinutes, isAfter, isBefore, isValid, startOfDay, endOfDay } from 'date-fns';
-import { AlertCircle, LogIn, Sparkles, Calendar } from 'lucide-react';
+import { AlertCircle, LogIn, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { DateRange } from "react-day-picker";
 
 type PlanStep = 'initial' | 'analysis' | 'vetting_tasks' | 'requirements' | 'active_plan';
@@ -261,7 +261,6 @@ const Plan = () => {
       }, { onConflict: 'user_id' });
 
       setProgress(40);
-      // Use override IDs if provided (crucial for Undo & Resuggest sequence)
       const currentApplied = overrideAppliedIds !== undefined ? overrideAppliedIds : (isResuggest ? appliedChanges : []);
 
       const { data, error } = await supabase.functions.invoke('optimise-schedule', {
@@ -344,8 +343,8 @@ const Plan = () => {
       for (let i = 0; i < changesToApply.length; i++) {
         const change = changesToApply[i];
         
-        // Skip provider sync for surplus tasks that don't have a scheduled time
-        if (change.is_surplus || !change.new_start) {
+        // Surplus tasks now have a new_start (on the placeholder date) so we sync them!
+        if (!change.new_start) {
           if (!newAppliedIds.includes(change.event_id)) newAppliedIds.push(change.event_id);
           continue;
         }
@@ -405,7 +404,7 @@ const Plan = () => {
 
   const handleSyncAll = async () => {
     if (!proposal) return;
-    const unappliedChanges = proposal.proposed_changes.filter((c: any) => !c.applied && !c.is_surplus);
+    const unappliedChanges = proposal.proposed_changes.filter((c: any) => !c.applied);
     if (unappliedChanges.length === 0) {
       showSuccess("All changes already applied");
       return;
@@ -420,7 +419,7 @@ const Plan = () => {
     const end = endOfDay(dateRange.to);
 
     const rangeChanges = proposal.proposed_changes.filter((c: any) => {
-      if (c.applied || c.is_surplus || !c.new_start) return false;
+      if (c.applied || !c.new_start) return false;
       const changeDate = parseISO(c.new_start);
       return isAfter(changeDate, start) && isBefore(changeDate, end);
     });
@@ -482,7 +481,7 @@ const Plan = () => {
       setEvents(updatedEvents);
       setAppliedChanges(newAppliedIds);
       setProposal({ ...proposal, proposed_changes: updatedProposedChanges });
-      return newAppliedIds; // Return for sequential operations
+      return newAppliedIds;
     } catch (err: any) { 
       showError("Failed to undo: " + err.message); 
       throw err;
@@ -491,12 +490,8 @@ const Plan = () => {
 
   const handleUndoAndResuggest = async (dateChanges: any[]) => {
     try {
-      // 1. Perform undo and get the updated applied IDs immediately
       const newAppliedIds = await handleUndoApplyDay(dateChanges);
-      
-      // 2. Run optimisation using these new IDs to ensure reshuffle works
       await runOptimisation(true, newAppliedIds);
-      
       showSuccess("Day reverted and reshuffled.");
     } catch (err: any) {
       console.error("[Plan] handleUndoAndResuggest error:", err);

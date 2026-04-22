@@ -153,7 +153,7 @@ serve(async (req) => {
             event_id: event.event_id,
             title: event.title,
             old_start: event.start_time,
-            old_duration: event.duration_minutes, // CRITICAL: Store original duration
+            old_duration: event.duration_minutes,
             new_start: slotStart.toISOString(),
             new_end: slotEnd.toISOString(),
             duration: duration,
@@ -170,16 +170,22 @@ serve(async (req) => {
       }
     }
 
+    // Handle Surplus (Backlog)
+    const pDate = placeholderDate || todayStr;
     for (let i = currentMovableIdx; i < movableEvents.length; i++) {
       const event = movableEvents[i];
+      // Assign to 00:00 on the placeholder date so it can be synced
+      const surplusStart = toDate(`${pDate}T00:00:00`, { timeZone: userTimezone });
+      const surplusEnd = addMinutes(surplusStart, event.duration_minutes || 30);
+      
       proposedChanges.push({
         event_id: event.event_id,
         title: event.title,
         old_start: event.start_time,
-        old_duration: event.duration_minutes, // CRITICAL: Store original duration
-        new_start: null,
-        new_end: null,
-        duration: durationOverride === "original" || !durationOverride ? (event.duration_minutes || 30) : parseInt(durationOverride),
+        old_duration: event.duration_minutes,
+        new_start: surplusStart.toISOString(),
+        new_end: surplusEnd.toISOString(),
+        duration: event.duration_minutes || 30,
         is_surplus: true
       });
     }
