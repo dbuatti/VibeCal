@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Layout from '@/components/Layout';
+import PageHeader from '@/components/PageHeader';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { History as HistoryIcon, TrendingUp, Calendar, Filter, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
@@ -32,7 +33,6 @@ const History = () => {
           setHistory(data);
           
           // Generate dummy chart data based on real history count for now
-          // In a real app, we'd calculate vibe scores over time
           const last7Days = Array.from({ length: 7 }).map((_, i) => {
             const date = subDays(new Date(), 6 - i);
             const dayStr = format(date, 'EEE');
@@ -56,20 +56,21 @@ const History = () => {
 
   return (
     <Layout>
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-8 gap-4">
-        <div>
-          <h1 className="text-3xl font-black text-gray-900 tracking-tight">Vibe History</h1>
-          <p className="text-gray-500 font-medium mt-1">Track your alignment and productivity trends.</p>
-        </div>
-        <div className="flex gap-3">
-          <Button variant="outline" className="rounded-xl border-gray-200 font-bold text-xs uppercase tracking-widest">
-            <Filter size={14} className="mr-2" /> Filter
-          </Button>
-          <Button variant="outline" className="rounded-xl border-gray-200 font-bold text-xs uppercase tracking-widest">
-            <Calendar size={14} className="mr-2" /> Last 30 Days
-          </Button>
-        </div>
-      </div>
+      <PageHeader 
+        title="Vibe History"
+        subtitle="Track your alignment and productivity trends."
+        icon={HistoryIcon}
+        actions={
+          <div className="flex gap-3">
+            <Button variant="outline" className="rounded-xl border-gray-200 font-bold text-xs uppercase tracking-widest h-12 px-6">
+              <Filter size={14} className="mr-2" /> Filter
+            </Button>
+            <Button variant="outline" className="rounded-xl border-gray-200 font-bold text-xs uppercase tracking-widest h-12 px-6">
+              <Calendar size={14} className="mr-2" /> Last 30 Days
+            </Button>
+          </div>
+        }
+      />
 
       <div className="grid grid-cols-1 gap-8">
         <Card className="border-none shadow-sm rounded-[2.5rem] overflow-hidden bg-white">

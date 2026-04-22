@@ -32,7 +32,7 @@ const FloatingMenu = () => {
     { icon: Brain, label: 'Daily Plan', path: '/plan' },
     { icon: CheckSquare, label: 'Vet Tasks', path: '/vet' },
     { icon: Sparkles, label: 'Optimiser', path: '/optimise' },
-    { icon: History, label: 'History', path: '/history' },
+    { icon: History, label: 'Vibe History', path: '/history' },
     { icon: Settings, label: 'Settings', path: '/settings' },
   ];
 
@@ -68,6 +68,8 @@ const FloatingMenu = () => {
             <span className="font-black text-xs uppercase tracking-widest">{item.label}</span>
           </Link>
         ))}
+        
+        <div className="h-px w-full bg-gray-100 my-2" />
         
         <button 
           onClick={handleSignOut}

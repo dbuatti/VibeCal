@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Layout from '@/components/Layout';
+import PageHeader from '@/components/PageHeader';
 import WorkWindowSettings from '@/components/settings/WorkWindowSettings';
 import KeywordManager from '@/components/settings/KeywordManager';
 import DayThemesSettings from '@/components/settings/DayThemesSettings';
@@ -15,7 +16,7 @@ import { Label } from '@/components/ui/label';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { cn } from '@/lib/utils';
-import { Save, Sparkles, Ban, Briefcase, RefreshCw, Link2, AlertCircle, CheckCircle2, Globe } from 'lucide-react';
+import { Save, Sparkles, Ban, Briefcase, RefreshCw, Link2, AlertCircle, CheckCircle2, Globe, Settings as SettingsIcon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 const TIMEZONES = [
@@ -250,20 +251,21 @@ const Settings = () => {
 
   return (
     <Layout>
-      <div className="flex justify-between items-end mb-8">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">Control Layer</h1>
-          <p className="text-gray-500 mt-1">Configure your scheduling rules and AI preferences.</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <a href="https://gemini.google.com/app/7f2a6f927c67ca43" target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-full bg-white border border-gray-100 shadow-sm flex items-center justify-center hover:bg-indigo-50 transition-all hover:scale-110" title="Open Gemini">
-            <GeminiLogo className="w-6 h-6" />
-          </a>
-          <Button onClick={handleSave} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-6">
-            <Save size={18} className="mr-2" /> Save Changes
-          </Button>
-        </div>
-      </div>
+      <PageHeader 
+        title="Settings"
+        subtitle="Configure your scheduling rules and AI preferences."
+        icon={SettingsIcon}
+        actions={
+          <div className="flex items-center gap-3">
+            <a href="https://gemini.google.com/app/7f2a6f927c67ca43" target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-full bg-white border border-gray-100 shadow-sm flex items-center justify-center hover:bg-indigo-50 transition-all hover:scale-110" title="Open Gemini">
+              <GeminiLogo className="w-6 h-6" />
+            </a>
+            <Button onClick={handleSave} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-6 h-12 font-black text-xs uppercase tracking-widest shadow-lg shadow-indigo-100">
+              <Save size={18} className="mr-2" /> Save Changes
+            </Button>
+          </div>
+        }
+      />
 
       <div className="space-y-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

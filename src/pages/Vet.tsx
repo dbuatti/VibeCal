@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '@/components/Layout';
+import PageHeader from '@/components/PageHeader';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { 
@@ -428,59 +429,61 @@ const Vet = () => {
   return (
     <Layout>
       <div className="max-w-5xl mx-auto pb-24">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-6">
-          <div className="space-y-1">
-            <button onClick={() => navigate('/plan')} className="group flex items-center gap-2 text-gray-400 hover:text-indigo-600 font-black text-[10px] uppercase tracking-widest mb-4 transition-all">
+        <PageHeader 
+          title="Vet Tasks"
+          subtitle="Fast-scan and toggle movable tasks."
+          icon={CheckSquare}
+          breadcrumbs={
+            <button onClick={() => navigate('/plan')} className="group flex items-center gap-2 text-gray-400 hover:text-indigo-600 font-black text-[10px] uppercase tracking-widest transition-all">
               <ChevronLeft size={14} /> Back to Plan
             </button>
-            <h1 className="text-4xl font-black text-gray-900 tracking-tight">Vet Your Tasks</h1>
-            <p className="text-gray-500 font-medium">Fast-scan and toggle movable tasks.</p>
-          </div>
-          
-          <div className="flex items-center gap-3">
-            {isLocalMode && (
-              <Badge variant="outline" className="bg-amber-50 text-amber-600 border-amber-200 px-4 py-2 rounded-xl font-black text-[10px] uppercase tracking-widest flex gap-2 shadow-sm">
-                <ShieldAlert size={14} /> Local Intelligence Mode
-              </Badge>
-            )}
-
-            <Button
-              variant="outline"
-              onClick={handleResetPositions}
-              disabled={isProcessing}
-              className="rounded-2xl h-14 px-6 font-black text-xs uppercase tracking-widest flex gap-3 border-red-100 text-red-600 hover:bg-red-50 shadow-sm"
-              title="Reset all tasks to their original calendar times"
-            >
-              <RotateCcw size={20} />
-              Reset Positions
-            </Button>
-
-            <button
-              onClick={handleFullSync}
-              disabled={isProcessing}
-              title="Full Sync"
-              className={cn(
-                "w-14 h-14 rounded-2xl flex items-center justify-center transition-all shadow-lg hover:scale-110 active:scale-95 disabled:opacity-50 disabled:grayscale",
-                "bg-gradient-to-tr from-red-500 via-yellow-400 via-green-400 via-blue-500 to-purple-600 text-white"
+          }
+          actions={
+            <div className="flex items-center gap-3">
+              {isLocalMode && (
+                <Badge variant="outline" className="bg-amber-50 text-amber-600 border-amber-200 px-4 py-2 rounded-xl font-black text-[10px] uppercase tracking-widest flex gap-2 shadow-sm">
+                  <ShieldAlert size={14} /> Local Intelligence Mode
+                </Badge>
               )}
-            >
-              <RefreshCw size={24} className={cn(isProcessing && statusText.includes('sync') && "animate-spin")} />
-            </button>
 
-            <Button
-              variant="outline"
-              onClick={runAIClassification}
-              disabled={isProcessing}
-              className="rounded-2xl h-14 px-8 font-black text-xs uppercase tracking-widest flex gap-3 border-indigo-100 text-indigo-600 hover:bg-indigo-50 shadow-sm"
-            >
-              {isProcessing && statusText.includes('AI') ? <RefreshCw className="animate-spin" size={20} /> : <Sparkles size={20} />}
-              Classify Tasks
-            </Button>
-            <Button onClick={() => navigate('/plan')} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl h-14 px-10 font-black text-xs uppercase tracking-widest shadow-xl">
-              <CheckCircle2 className="mr-2" size={18} /> Done
-            </Button>
-          </div>
-        </div>
+              <Button
+                variant="outline"
+                onClick={handleResetPositions}
+                disabled={isProcessing}
+                className="rounded-2xl h-14 px-6 font-black text-xs uppercase tracking-widest flex gap-3 border-red-100 text-red-600 hover:bg-red-50 shadow-sm"
+                title="Reset all tasks to their original calendar times"
+              >
+                <RotateCcw size={20} />
+                Reset Positions
+              </Button>
+
+              <button
+                onClick={handleFullSync}
+                disabled={isProcessing}
+                title="Full Sync"
+                className={cn(
+                  "w-14 h-14 rounded-2xl flex items-center justify-center transition-all shadow-lg hover:scale-110 active:scale-95 disabled:opacity-50 disabled:grayscale",
+                  "bg-gradient-to-tr from-red-500 via-yellow-400 via-green-400 via-blue-500 to-purple-600 text-white"
+                )}
+              >
+                <RefreshCw size={24} className={cn(isProcessing && statusText.includes('sync') && "animate-spin")} />
+              </button>
+
+              <Button
+                variant="outline"
+                onClick={runAIClassification}
+                disabled={isProcessing}
+                className="rounded-2xl h-14 px-8 font-black text-xs uppercase tracking-widest flex gap-3 border-indigo-100 text-indigo-600 hover:bg-indigo-50 shadow-sm"
+              >
+                {isProcessing && statusText.includes('AI') ? <RefreshCw className="animate-spin" size={20} /> : <Sparkles size={20} />}
+                Classify Tasks
+              </Button>
+              <Button onClick={() => navigate('/plan')} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl h-14 px-10 font-black text-xs uppercase tracking-widest shadow-xl">
+                <CheckCircle2 className="mr-2" size={18} /> Done
+              </Button>
+            </div>
+          }
+        />
 
         {isProcessing && (
           <div className="mb-8 p-4 bg-indigo-600 text-white rounded-2xl flex items-center justify-center gap-3 animate-pulse shadow-lg">

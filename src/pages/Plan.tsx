@@ -3,18 +3,24 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '@/components/Layout';
+import PageHeader from '@/components/PageHeader';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import DayByDayPlanner from '@/components/DayByDayPlanner';
 import RequirementsForm from '@/components/RequirementsForm';
-import PlanPageHeader from '@/components/plan/PlanPageHeader';
 import PlanInitialView from '@/components/plan/PlanInitialView';
 import PlanLoadingView from '@/components/plan/PlanLoadingView';
 import { format, nextSaturday, parseISO, addMinutes, isAfter, isBefore, isValid, startOfDay, endOfDay, isWithinInterval } from 'date-fns';
-import { AlertCircle, LogIn, Sparkles } from 'lucide-react';
+import { AlertCircle, LogIn, Sparkles, Brain, Eye, EyeOff, CheckSquare, Settings2, RefreshCw, Trash2, Calendar as CalendarIcon, Zap, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Calendar } from '@/components/ui/calendar';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { DateRange } from "react-day-picker";
+import { cn } from '@/lib/utils';
 
 type PlanStep = 'initial' | 'analysis' | 'vetting_tasks' | 'requirements' | 'active_plan';
 
@@ -534,20 +540,135 @@ const Plan = () => {
 
   return (
     <Layout hideSidebar={deepFocus}>
-      <PlanPageHeader
-        currentStep={currentStep}
-        isProcessing={isProcessing}
-        deepFocus={deepFocus}
-        setDeepFocus={setDeepFocus}
-        onVetTasks={() => navigate('/vet')}
-        onFullSync={handleFullSync}
-        onReset={handleResetPlan}
-        renderRequirementsForm={renderRequirementsForm}
-        dateRange={dateRange}
-        setDateRange={setDateRange}
-        onSyncAll={handleSyncAll}
-        onSyncRange={handleSyncRange}
-        onResuggestRange={() => runOptimisation(true, undefined, dateRange)}
+      <PageHeader 
+        title="Daily Plan"
+        subtitle="Align your schedule with your life."
+        icon={Brain}
+        actions={
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full lg:w-auto lg:justify-end">
+            {currentStep === 'active_plan' && (
+              <>
+                <div className="flex items-center gap-2 px-3 py-1 bg-white rounded-full border border-gray-100 shadow-sm mr-2">
+                  <Switch id="deep-focus" checked={deepFocus} onCheckedChange={setDeepFocus} className="h-4 w-8" />
+                  <Label htmlFor="deep-focus" className="text-[9px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5 cursor-pointer">
+                    {deepFocus ? <EyeOff size={12} /> : <Eye size={12} />}
+                    Compact
+                  </Label>
+                </div>
+
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className={cn(
+                        "bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm",
+                        !dateRange && "text-muted-foreground"
+                      )}
+                    >
+                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      {dateRange?.from ? (
+                        dateRange.to ? (
+                          <>{format(dateRange.from, "LLL dd")} - {format(dateRange.to, "LLL dd")}</>
+                        ) : (
+                          format(dateRange.from, "LLL dd")
+                        )
+                      ) : (
+                        <span>Pick a range</span>
+                      )}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0 rounded-3xl overflow-hidden border-none shadow-2xl" align="end">
+                    <Calendar
+                      initialFocus
+                      mode="range"
+                      defaultMonth={dateRange?.from}
+                      selected={dateRange}
+                      onSelect={setDateRange}
+                      numberOfMonths={2}
+                    />
+                  </PopoverContent>
+                </Popover>
+
+                {dateRange?.from && dateRange?.to && (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      onClick={handleSyncRange}
+                      disabled={isProcessing}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-lg"
+                    >
+                      <Zap size={14} className="mr-2" /> Sync Range
+                    </Button>
+                    <Button
+                      onClick={() => runOptimisation(true, undefined, dateRange)}
+                      disabled={isProcessing}
+                      variant="outline"
+                      className="bg-white border-indigo-100 text-indigo-600 hover:bg-indigo-50 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm"
+                    >
+                      <Wand2 size={14} className="mr-2" /> Resuggest Range
+                    </Button>
+                  </div>
+                )}
+
+                <Button
+                  onClick={handleSyncAll}
+                  disabled={isProcessing}
+                  variant="outline"
+                  className="bg-white border-gray-100 text-gray-500 hover:text-indigo-600 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm"
+                >
+                  <Zap size={14} className="mr-2" /> Sync All
+                </Button>
+              </>
+            )}
+
+            {(currentStep === 'active_plan' || currentStep === 'vetting_tasks') && (
+              <Button
+                variant="outline"
+                onClick={() => navigate('/vet')}
+                className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm"
+              >
+                <CheckSquare size={14} className="mr-2" /> Vet Tasks
+              </Button>
+            )}
+            
+            {currentStep === 'active_plan' ? (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
+                    <Settings2 size={14} className="mr-2" /> Requirements
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-80 rounded-[2rem] shadow-2xl border-none p-6" align="end">
+                  <h3 className="text-sm font-black text-gray-900 mb-4 uppercase tracking-widest">Plan Requirements</h3>
+                  {renderRequirementsForm()}
+                </PopoverContent>
+              </Popover>
+            ) : currentStep === 'requirements' && (
+              <Button variant="outline" className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
+                <Settings2 size={14} className="mr-2" /> Requirements
+              </Button>
+            )}
+            
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleFullSync}
+                disabled={isProcessing}
+                title="Full Sync"
+                className={cn(
+                  "w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-lg hover:scale-110 active:scale-95 disabled:opacity-50 disabled:grayscale shrink-0",
+                  "bg-gradient-to-tr from-red-500 via-yellow-400 via-green-400 via-blue-500 to-purple-600 text-white"
+                )}
+              >
+                <RefreshCw size={18} className={cn(isProcessing && "animate-spin")} />
+              </button>
+
+              {currentStep === 'active_plan' && (
+                <Button variant="outline" onClick={handleResetPlan} className="bg-white border-gray-100 text-gray-400 hover:text-red-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
+                  <Trash2 size={14} className="mr-2" /> Clear Plan
+                </Button>
+              )}
+            </div>
+          </div>
+        }
       />
 
       {tokenMissing && (

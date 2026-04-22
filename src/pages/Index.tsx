@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import Layout from '@/components/Layout';
+import PageHeader from '@/components/PageHeader';
 import { 
   Sparkles, 
   Calendar, 
@@ -64,27 +65,18 @@ const Index = () => {
   return (
     <Layout>
       <div className="max-w-4xl mx-auto space-y-10 pb-20">
-        {/* Hero Section */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-indigo-600 font-black text-[10px] uppercase tracking-[0.3em]">
-              <Sparkles size={14} />
-              Good Morning
-            </div>
-            <h1 className="text-5xl font-black text-gray-900 tracking-tight">
-              Your day is <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600">Optimised.</span>
-            </h1>
-            <p className="text-gray-500 font-medium text-lg">
-              {format(new Date(), 'EEEE, MMMM do')}
-            </p>
-          </div>
-          
-          <Link to="/plan">
-            <Button className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl px-8 h-14 font-black text-xs uppercase tracking-widest shadow-xl shadow-indigo-100 group">
-              View Full Plan <ArrowRight size={18} className="ml-2 group-hover:translate-x-1 transition-transform" />
-            </Button>
-          </Link>
-        </div>
+        <PageHeader 
+          title="Dashboard"
+          subtitle={`Your day is ${stats.vibeScore > 80 ? 'Optimised' : 'Building'}.`}
+          icon={Sparkles}
+          actions={
+            <Link to="/plan">
+              <Button className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl px-8 h-14 font-black text-xs uppercase tracking-widest shadow-xl shadow-indigo-100 group">
+                View Full Plan <ArrowRight size={18} className="ml-2 group-hover:translate-x-1 transition-transform" />
+              </Button>
+            </Link>
+          }
+        />
 
         {/* Stats Grid */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
