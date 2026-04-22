@@ -44,8 +44,8 @@ const PlanPageHeader = ({
   onResuggestRange
 }: PlanPageHeaderProps) => {
   return (
-    <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
-      <div>
+    <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-8 gap-6">
+      <div className="shrink-0">
         <div className="flex items-center gap-3 mb-2">
           <Badge className="bg-indigo-50 text-indigo-600 border-none px-3 py-1 rounded-full font-black flex gap-2 text-[9px] uppercase tracking-widest">
             <Brain size={12} /> ADHD Focus
@@ -62,9 +62,10 @@ const PlanPageHeader = ({
         </div>
         <h1 className="text-3xl font-black text-gray-900 tracking-tight">Daily Plan</h1>
       </div>
-      <div className="flex items-center gap-3">
+
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full lg:w-auto lg:justify-end">
         {currentStep === 'active_plan' && (
-          <div className="flex items-center gap-2 mr-2">
+          <>
             <Popover>
               <PopoverTrigger asChild>
                 <Button
@@ -102,7 +103,7 @@ const PlanPageHeader = ({
             </Popover>
 
             {dateRange?.from && dateRange?.to && (
-              <>
+              <div className="flex items-center gap-2">
                 <Button
                   onClick={onSyncRange}
                   disabled={isProcessing}
@@ -118,7 +119,7 @@ const PlanPageHeader = ({
                 >
                   <Wand2 size={14} className="mr-2" /> Resuggest Range
                 </Button>
-              </>
+              </div>
             )}
 
             <Button
@@ -129,7 +130,7 @@ const PlanPageHeader = ({
             >
               <Zap size={14} className="mr-2" /> Sync All
             </Button>
-          </div>
+          </>
         )}
 
         {(currentStep === 'active_plan' || currentStep === 'vetting_tasks') && (
@@ -160,24 +161,26 @@ const PlanPageHeader = ({
           </Button>
         )}
         
-        {/* Rainbow Full Sync Button */}
-        <button
-          onClick={onFullSync}
-          disabled={isProcessing}
-          title="Full Sync"
-          className={cn(
-            "w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-lg hover:scale-110 active:scale-95 disabled:opacity-50 disabled:grayscale",
-            "bg-gradient-to-tr from-red-500 via-yellow-400 via-green-400 via-blue-500 to-purple-600 text-white"
-          )}
-        >
-          <RefreshCw size={18} className={cn(isProcessing && "animate-spin")} />
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Rainbow Full Sync Button */}
+          <button
+            onClick={onFullSync}
+            disabled={isProcessing}
+            title="Full Sync"
+            className={cn(
+              "w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-lg hover:scale-110 active:scale-95 disabled:opacity-50 disabled:grayscale shrink-0",
+              "bg-gradient-to-tr from-red-500 via-yellow-400 via-green-400 via-blue-500 to-purple-600 text-white"
+            )}
+          >
+            <RefreshCw size={18} className={cn(isProcessing && "animate-spin")} />
+          </button>
 
-        {currentStep === 'active_plan' && (
-          <Button variant="outline" onClick={onReset} className="bg-white border-gray-100 text-gray-400 hover:text-red-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
-            <Trash2 size={14} className="mr-2" /> Clear Plan
-          </Button>
-        )}
+          {currentStep === 'active_plan' && (
+            <Button variant="outline" onClick={onReset} className="bg-white border-gray-100 text-gray-400 hover:text-red-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
+              <Trash2 size={14} className="mr-2" /> Clear Plan
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   );
