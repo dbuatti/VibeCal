@@ -23,7 +23,8 @@ import {
   ShieldAlert,
   Send,
   Wand2,
-  RotateCcw
+  RotateCcw,
+  CheckSquare
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';

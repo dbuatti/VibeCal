@@ -2,12 +2,13 @@
 
 import React, { useState, useEffect } from 'react';
 import Layout from '@/components/Layout';
+import PageHeader from '@/components/PageHeader';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
-import { Sparkles, RefreshCw, Calendar, Clock, Lock, Unlock, ChevronRight, ListOrdered, BrainCircuit, Inbox } from 'lucide-react';
+import { Sparkles, RefreshCw, Calendar, Clock, Lock, Unlock, ChevronRight, ListOrdered, BrainCircuit, Inbox, ChevronLeft } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import { format, nextSaturday } from 'date-fns';
@@ -140,26 +141,34 @@ const Optimise = () => {
   return (
     <Layout>
       <div className="max-w-4xl mx-auto">
-        <div className="mb-12">
-          <h1 className="text-4xl font-black text-gray-900 mb-2 tracking-tight">Schedule Optimiser</h1>
-          <p className="text-lg text-gray-500 font-medium">Align your movable tasks with your work window.</p>
-          <div className="flex items-center gap-4 mt-10">
-            {['initial', 'vetting', 'requirements'].map((s, i) => (
-              <React.Fragment key={s}>
-                <div className={cn("flex items-center gap-3 transition-all duration-500", currentStep === s ? "opacity-100" : "opacity-30")}>
-                  <div className={cn(
-                    "w-10 h-10 rounded-2xl flex items-center justify-center text-sm font-black shadow-sm",
-                    currentStep === s ? "bg-indigo-600 text-white ring-4 ring-indigo-100" : "bg-gray-100 text-gray-400"
-                  )}>
-                    {i + 1}
+        <PageHeader 
+          title="Optimiser"
+          subtitle="Align your movable tasks with your work window."
+          icon={Sparkles}
+          breadcrumbs={
+            <button onClick={() => navigate('/plan')} className="group flex items-center gap-2 text-gray-400 hover:text-indigo-600 font-black text-[10px] uppercase tracking-widest transition-all">
+              <ChevronLeft size={14} /> Back to Plan
+            </button>
+          }
+          actions={
+            <div className="flex items-center gap-4">
+              {['initial', 'vetting', 'requirements'].map((s, i) => (
+                <React.Fragment key={s}>
+                  <div className={cn("flex items-center gap-3 transition-all duration-500", currentStep === s ? "opacity-100" : "opacity-30")}>
+                    <div className={cn(
+                      "w-8 h-8 rounded-xl flex items-center justify-center text-[10px] font-black shadow-sm",
+                      currentStep === s ? "bg-indigo-600 text-white ring-4 ring-indigo-100" : "bg-gray-100 text-gray-400"
+                    )}>
+                      {i + 1}
+                    </div>
+                    <span className="text-[10px] font-black uppercase tracking-widest hidden sm:inline">{s}</span>
                   </div>
-                  <span className="text-xs font-black uppercase tracking-widest">{s}</span>
-                </div>
-                {i < 2 && <div className="h-px w-12 bg-gray-100" />}
-              </React.Fragment>
-            ))}
-          </div>
-        </div>
+                  {i < 2 && <div className="h-px w-8 bg-gray-100" />}
+                </React.Fragment>
+              ))}
+            </div>
+          }
+        />
 
         {currentStep === 'initial' && !isProcessing && (
           <Card className="border-none shadow-2xl shadow-indigo-100/50 rounded-[3rem] overflow-hidden bg-white">
