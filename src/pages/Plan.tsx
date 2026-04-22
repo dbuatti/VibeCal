@@ -10,7 +10,7 @@ import RequirementsForm from '@/components/RequirementsForm';
 import PlanPageHeader from '@/components/plan/PlanPageHeader';
 import PlanInitialView from '@/components/plan/PlanInitialView';
 import PlanLoadingView from '@/components/plan/PlanLoadingView';
-import { format, nextSaturday, parseISO, addMinutes, isAfter, isBefore, isValid, startOfDay, endOfDay } from 'date-fns';
+import { format, nextSaturday, parseISO, addMinutes, isAfter, isBefore, isValid, startOfDay, endOfDay, isWithinInterval } from 'date-fns';
 import { AlertCircle, LogIn, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -343,7 +343,6 @@ const Plan = () => {
       for (let i = 0; i < changesToApply.length; i++) {
         const change = changesToApply[i];
         
-        // Surplus tasks now have a new_start (on the placeholder date) so we sync them!
         if (!change.new_start) {
           if (!newAppliedIds.includes(change.event_id)) newAppliedIds.push(change.event_id);
           continue;
@@ -421,7 +420,8 @@ const Plan = () => {
     const rangeChanges = proposal.proposed_changes.filter((c: any) => {
       if (c.applied || !c.new_start) return false;
       const changeDate = parseISO(c.new_start);
-      return isAfter(changeDate, start) && isBefore(changeDate, end);
+      // Use inclusive check for the range
+      return isWithinInterval(changeDate, { start, end });
     });
 
     if (rangeChanges.length === 0) {

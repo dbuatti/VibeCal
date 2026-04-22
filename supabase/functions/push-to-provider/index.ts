@@ -4,6 +4,43 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+async function refreshGoogleToken(refreshToken, supabaseUrl, supabaseKey, userId) {
+  console.log(`[push-to-provider] Attempting to refresh token for user: ${userId}`);
+  
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: Deno.env.get('GOOGLE_CLIENT_ID'),
+      client_secret: Deno.env.get('GOOGLE_CLIENT_SECRET'),
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+    }),
+  });
+  
+  const data = await res.json();
+  
+  if (!res.ok) {
+    console.error(`[push-to-provider] Refresh Failed:`, data);
+    throw new Error("AUTH_EXPIRED");
+  }
+
+  const newAccessToken = data.access_token;
+
+  // Persist the new token immediately
+  await fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${userId}`, {
+    method: 'PATCH',
+    headers: { 
+      'apikey': supabaseKey, 
+      'Authorization': `Bearer ${supabaseKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ google_access_token: newAccessToken })
+  });
+
+  return newAccessToken;
+}
+
 Deno.serve(async (req) => {
   const functionName = "push-to-provider";
   
@@ -12,63 +49,55 @@ Deno.serve(async (req) => {
   }
 
   try {
-    console.log(`[${functionName}] Request received`, { method: req.method });
-    
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
-      console.error(`[${functionName}] Unauthorized: No auth header`);
-      throw new Error("Unauthorized");
-    }
+    if (!authHeader) throw new Error("Unauthorized");
 
     const body = await req.json().catch(() => ({}));
     const { eventId, provider, startTime, endTime, googleAccessToken, calendarId } = body;
 
-    console.log(`[${functionName}] Processing event: ${eventId} for provider: ${provider}`);
-
     if (!eventId || !provider || !startTime || !endTime) {
-      console.error(`[${functionName}] Missing parameters`, { eventId, provider, startTime, endTime });
       throw new Error("Missing required parameters");
     }
 
     if (provider === 'google') {
-      let token = googleAccessToken;
+      const supabaseUrl = Deno.env.get('SUPABASE_URL');
+      const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
       
-      if (!token) {
-        console.log(`[${functionName}] No token provided in body, fetching from database...`);
-        const supabaseUrl = Deno.env.get('SUPABASE_URL');
-        const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-        
-        const userRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
-          headers: { 'Authorization': authHeader, 'apikey': Deno.env.get('SUPABASE_ANON_KEY') }
-        });
-        const userData = await userRes.json();
-        const userId = userData.id;
-
-        if (userId) {
-          const profileRes = await fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${userId}&select=google_access_token`, {
-            headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
-          });
-          const profiles = await profileRes.json();
-          token = profiles[0]?.google_access_token;
-        }
-      }
-
-      if (!token) {
-        console.error(`[${functionName}] Missing Google Access Token`);
-        throw new Error("Missing Google Access Token");
-      }
-      
-      const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId || 'primary')}/events/${eventId}`;
-      console.log(`[${functionName}] Patching Google Calendar event...`, { url });
-      
-      const res = await fetch(url, {
-        method: 'PATCH',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          start: { dateTime: startTime },
-          end: { dateTime: endTime }
-        })
+      // Get user ID
+      const userRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
+        headers: { 'Authorization': authHeader, 'apikey': Deno.env.get('SUPABASE_ANON_KEY') }
       });
+      const userData = await userRes.json();
+      const userId = userData.id;
+
+      // Get Profile for tokens
+      const profileRes = await fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${userId}&select=google_access_token,google_refresh_token`, {
+        headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
+      });
+      const profiles = await profileRes.json();
+      const profile = profiles[0];
+
+      let token = googleAccessToken || profile?.google_access_token;
+      
+      const patchEvent = async (t) => {
+        const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId || 'primary')}/events/${eventId}`;
+        return fetch(url, {
+          method: 'PATCH',
+          headers: { 'Authorization': `Bearer ${t}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            start: { dateTime: startTime },
+            end: { dateTime: endTime }
+          })
+        });
+      };
+
+      let res = await patchEvent(token);
+
+      // If unauthorized, try refreshing
+      if (res.status === 401 && profile?.google_refresh_token) {
+        token = await refreshGoogleToken(profile.google_refresh_token, supabaseUrl, supabaseKey, userId);
+        res = await patchEvent(token);
+      }
 
       const data = await res.json();
       if (!res.ok) {
@@ -76,20 +105,17 @@ Deno.serve(async (req) => {
         throw new Error(`Google API Error: ${data.error?.message || 'Unknown'}`);
       }
       
-      console.log(`[${functionName}] Successfully updated Google event`);
       return new Response(JSON.stringify({ success: true, data }), { 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
       });
     }
 
     if (provider === 'apple') {
-      console.log(`[${functionName}] Apple provider sync is currently handled via local cache updates. Direct push coming soon.`);
       return new Response(JSON.stringify({ success: true, message: "Apple sync handled locally" }), { 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
       });
     }
 
-    console.error(`[${functionName}] Unsupported provider: ${provider}`);
     throw new Error(`Unsupported provider: ${provider}`);
   } catch (error) {
     console.error(`[${functionName}] Fatal Error:`, error.message);
