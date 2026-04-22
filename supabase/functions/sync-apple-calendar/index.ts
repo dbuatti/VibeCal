@@ -39,10 +39,8 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
     }
 
-    // 3. Cleanup Step: Delete past Apple events to fix "Ghost" data
+    // 3. Cleanup Step
     const todayStartISO = formatInTimeZone(new Date(), userTimezone, "yyyy-MM-dd'T'00:00:00XXX");
-    console.log(`[${functionName}] Cleaning up events before ${todayStartISO}`);
-    
     const cleanupUrl = `${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&provider=eq.apple&start_time=lt.${encodeURIComponent(todayStartISO)}`;
     await fetch(cleanupUrl, {
       method: 'DELETE',
@@ -121,7 +119,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    // 7. Fetch Events (Today onwards only)
+    // 7. Fetch Events
     const enabledCalendars = calendarsToUpsert.filter(c => c.is_enabled);
     const allEvents = [];
     
@@ -158,8 +156,11 @@ Deno.serve(async (req) => {
           const unfolded = icsData.replace(/\r\n\s/g, '');
           const summaryMatch = unfolded.match(/SUMMARY:(.*)/i);
           const uidMatch = unfolded.match(/UID:(.*)/i);
-          const startMatch = unfolded.match(/DTSTART(?:;TZID=[^:]+)?[:](\d{8}T\d{6}Z?)/i);
-          const endMatch = unfolded.match(/DTEND(?:;TZID=[^:]+)?[:](\d{8}T\d{6}Z?)/i);
+          
+          // Improved regex to handle parameters like ;TZID=...
+          const startMatch = unfolded.match(/DTSTART(?:;[^:]*)?:(\d{8}T\d{6}Z?)/i);
+          const endMatch = unfolded.match(/DTEND(?:;[^:]*)?:(\d{8}T\d{6}Z?)/i);
+          const durationMatch = unfolded.match(/DURATION(?:;[^:]*)?:PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/i);
 
           if (uidMatch?.[1] && startMatch?.[1]) {
             const parseIcalDate = (str, tz) => {
@@ -174,6 +175,12 @@ Deno.serve(async (req) => {
             
             if (endMatch?.[1]) {
               endTime = parseIcalDate(endMatch[1].trim(), userTimezone);
+            } else if (durationMatch) {
+              const hours = parseInt(durationMatch[1] || '0');
+              const mins = parseInt(durationMatch[2] || '0');
+              const secs = parseInt(durationMatch[3] || '0');
+              const totalMins = (hours * 60) + mins + (secs / 60);
+              endTime = addMinutes(parseISO(startTime), totalMins).toISOString();
             } else {
               endTime = addMinutes(parseISO(startTime), 30).toISOString();
             }
@@ -181,7 +188,6 @@ Deno.serve(async (req) => {
             const title = summaryMatch?.[1]?.trim() || 'Untitled';
             const durationMinutes = Math.round((new Date(endTime).getTime() - new Date(startTime).getTime()) / 60000);
 
-            // Only include if it's today or future
             if (!isBefore(parseISO(startTime), parseISO(todayStartISO))) {
               allEvents.push({
                 user_id: user.id,
