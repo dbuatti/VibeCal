@@ -343,6 +343,13 @@ const Plan = () => {
 
       for (let i = 0; i < changesToApply.length; i++) {
         const change = changesToApply[i];
+        
+        // Skip provider sync for surplus tasks that don't have a scheduled time
+        if (change.is_surplus || !change.new_start) {
+          if (!newAppliedIds.includes(change.event_id)) newAppliedIds.push(change.event_id);
+          continue;
+        }
+
         const eventIdx = updatedEvents.findIndex(e => e.event_id === change.event_id);
         if (eventIdx === -1) continue;
         const eventInCache = updatedEvents[eventIdx];
