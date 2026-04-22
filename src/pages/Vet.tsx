@@ -381,6 +381,21 @@ const Vet = () => {
     }
   };
 
+  const handleBulkToggle = async (lock: boolean) => {
+    const idsToUpdate = filteredEvents.map(e => e.event_id);
+    if (idsToUpdate.length === 0) return;
+
+    setEvents(prev => prev.map(e => idsToUpdate.includes(e.event_id) ? { ...e, is_locked: lock } : e));
+
+    try {
+      await supabase.from('calendar_events_cache').update({ is_locked: lock }).in('event_id', idsToUpdate);
+      showSuccess(`Bulk updated ${idsToUpdate.length} tasks to ${lock ? 'Fixed' : 'Movable'}`);
+    } catch (err) {
+      showError("Bulk update failed");
+      fetchEvents();
+    }
+  };
+
   const filteredEvents = useMemo(() => {
     const today = startOfDay(new Date());
     return events.filter(e => {
@@ -509,6 +524,15 @@ const Vet = () => {
                 <button onClick={() => setShowApple(!showApple)} className={cn("px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-[9px] font-black uppercase tracking-widest", showApple ? "bg-white text-indigo-600 shadow-sm" : "text-gray-400")}>
                   <ProviderIcon provider="apple" /> Apple
                 </button>
+              </div>
+
+              <div className="flex gap-2 ml-2">
+                <Button variant="ghost" size="sm" onClick={() => handleBulkToggle(true)} className="text-[9px] font-black uppercase tracking-widest text-red-500 hover:bg-red-50">
+                  Lock All
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => handleBulkToggle(false)} className="text-[9px] font-black uppercase tracking-widest text-green-600 hover:bg-green-50">
+                  Unlock All
+                </Button>
               </div>
             </div>
           </div>
