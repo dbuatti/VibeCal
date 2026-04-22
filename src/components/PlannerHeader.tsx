@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { format } from 'date-fns';
-import { ChevronLeft, ChevronRight, Wand2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Wand2, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
@@ -18,6 +18,7 @@ interface PlannerHeaderProps {
   onPrev: () => void;
   onNext: () => void;
   onResuggest?: () => void;
+  onToggleVetted?: () => void;
 }
 
 const PlannerHeader = ({
@@ -30,7 +31,8 @@ const PlannerHeader = ({
   showXP,
   onPrev,
   onNext,
-  onResuggest
+  onResuggest,
+  onToggleVetted
 }: PlannerHeaderProps) => {
   return (
     <div className="space-y-8">
@@ -74,13 +76,26 @@ const PlannerHeader = ({
           <h2 className="text-xl font-black text-gray-900 tracking-tight">
             {format(currentDate, 'EEEE, MMM do')}
           </h2>
-          <div className="flex items-center gap-2 mt-1">
-            <Badge className={cn(
-              "border-none px-3 py-0.5 rounded-full font-black text-[8px] uppercase tracking-widest", 
-              !hasChanges && isDayVetted ? "bg-gray-100 text-gray-400" : isDayVetted ? "bg-green-500 text-white" : "bg-indigo-100 text-indigo-600"
-            )}>
-              {!hasChanges && isDayVetted ? "No Changes" : isDayVetted ? "Vetted" : "Vetting"}
-            </Badge>
+          <div className="flex items-center gap-3 mt-1">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={onToggleVetted}
+                className={cn(
+                  "w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all",
+                  isDayVetted 
+                    ? "bg-green-500 border-green-500 text-white" 
+                    : "bg-white border-gray-200 hover:border-indigo-300"
+                )}
+              >
+                {isDayVetted && <Check size={12} strokeWidth={4} />}
+              </button>
+              <Badge className={cn(
+                "border-none px-3 py-0.5 rounded-full font-black text-[8px] uppercase tracking-widest", 
+                !hasChanges && isDayVetted ? "bg-gray-100 text-gray-400" : isDayVetted ? "bg-green-500 text-white" : "bg-indigo-100 text-indigo-600"
+              )}>
+                {!hasChanges && isDayVetted ? "No Changes" : isDayVetted ? "Vetted" : "Vetting"}
+              </Badge>
+            </div>
             {!isDayVetted && onResuggest && (
               <button 
                 onClick={onResuggest}

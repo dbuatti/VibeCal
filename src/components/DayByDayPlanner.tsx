@@ -215,6 +215,15 @@ const DayByDayPlanner = ({
     finally { setIsSyncing(false); }
   };
 
+  const handleToggleVetted = async () => {
+    if (isSyncing) return;
+    if (isDayVetted) {
+      await handleUndoDay();
+    } else {
+      await handleSyncDay();
+    }
+  };
+
   const handleResuggest = async () => {
     if (!onResuggestDay) return;
     setIsResuggesting(true);
@@ -262,6 +271,7 @@ const DayByDayPlanner = ({
         onPrev={() => setCurrentIndex(prev => Math.max(0, prev - 1))}
         onNext={() => setCurrentIndex(prev => Math.min(allDates.length - 1, prev + 1))}
         onResuggest={handleResuggest}
+        onToggleVetted={handleToggleVetted}
       />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
