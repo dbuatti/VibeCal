@@ -4,9 +4,10 @@ import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Copy, FileText, Check, Apple, Loader2 } from 'lucide-react';
+import { Copy, FileText, Check, Apple, Loader2, Clock } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { format, addMonths, parseISO } from 'date-fns';
+import { formatInTimeZone } from 'date-fns-tz';
 import { showSuccess, showError } from '@/utils/toast';
 
 const CalendarExporter = () => {
@@ -22,6 +23,14 @@ const CalendarExporter = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
+      // Fetch user timezone for accurate time formatting
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('timezone')
+        .eq('id', user.id)
+        .single();
+      
+      const timezone = profile?.timezone || 'Australia/Melbourne';
       const endDate = addMonths(new Date(), parseInt(months)).toISOString();
       
       const { data: events, error } = await supabase
@@ -41,9 +50,11 @@ const CalendarExporter = () => {
       }
 
       const text = events.map(e => {
-        const dateStr = format(parseISO(e.start_time), 'yyyy-MM-dd');
+        const date = parseISO(e.start_time);
+        const dateStr = formatInTimeZone(date, timezone, 'yyyy-MM-dd');
+        const timeStr = formatInTimeZone(date, timezone, 'HH:mm');
         const notes = e.description ? ` - ${e.description.replace(/\n/g, ' ')}` : '';
-        return `${dateStr} - ${e.title}${notes}`;
+        return `${dateStr} ${timeStr} - ${e.title}${notes}`;
       }).join('\n');
 
       await navigator.clipboard.writeText(text);
@@ -100,10 +111,13 @@ const CalendarExporter = () => {
           </Button>
         </div>
 
-        <div className="p-4 bg-indigo-50/50 rounded-xl border border-indigo-100 flex gap-3">
-          <FileText className="text-indigo-600 shrink-0" size={18} />
+        <div className="p-4 bg-indigo-50/50 rounded-xl border border-indigo-100 flex flex-col gap-2">
+          <div className="flex items-center gap-2 text-indigo-600">
+            <FileText size={16} />
+            <span className="text-[10px] font-black uppercase tracking-widest">Format</span>
+          </div>
           <p className="text-xs text-indigo-700 font-medium leading-relaxed">
-            Format: <code className="bg-white px-1.5 py-0.5 rounded border border-indigo-100 font-bold">Date - Title - Notes</code>
+            <code className="bg-white px-1.5 py-0.5 rounded border border-indigo-100 font-bold">Date Time - Title - Notes</code>
           </p>
         </div>
       </CardContent>
