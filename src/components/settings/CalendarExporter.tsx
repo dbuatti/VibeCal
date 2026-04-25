@@ -4,9 +4,9 @@ import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Copy, FileText, Check, Apple, Loader2, Clock } from 'lucide-react';
+import { Copy, FileText, Check, Apple, Loader2 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { format, addMonths, parseISO } from 'date-fns';
+import { addMonths, parseISO } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
 import { showSuccess, showError } from '@/utils/toast';
 
@@ -35,7 +35,7 @@ const CalendarExporter = () => {
       
       const { data: events, error } = await supabase
         .from('calendar_events_cache')
-        .select('title, start_time, description')
+        .select('title, start_time, end_time, description')
         .eq('user_id', user.id)
         .eq('provider', 'apple')
         .gte('start_time', new Date().toISOString())
@@ -50,11 +50,15 @@ const CalendarExporter = () => {
       }
 
       const text = events.map(e => {
-        const date = parseISO(e.start_time);
-        const dateStr = formatInTimeZone(date, timezone, 'yyyy-MM-dd');
-        const timeStr = formatInTimeZone(date, timezone, 'HH:mm');
+        const start = parseISO(e.start_time);
+        const end = e.end_time ? parseISO(e.end_time) : null;
+        
+        const dateStr = formatInTimeZone(start, timezone, 'yyyy-MM-dd');
+        const startTimeStr = formatInTimeZone(start, timezone, 'HH:mm');
+        const endTimeStr = end ? formatInTimeZone(end, timezone, 'HH:mm') : '??:??';
+        
         const notes = e.description ? ` - ${e.description.replace(/\n/g, ' ')}` : '';
-        return `${dateStr} ${timeStr} - ${e.title}${notes}`;
+        return `${dateStr} ${startTimeStr}-${endTimeStr} - ${e.title}${notes}`;
       }).join('\n');
 
       await navigator.clipboard.writeText(text);
@@ -117,7 +121,7 @@ const CalendarExporter = () => {
             <span className="text-[10px] font-black uppercase tracking-widest">Format</span>
           </div>
           <p className="text-xs text-indigo-700 font-medium leading-relaxed">
-            <code className="bg-white px-1.5 py-0.5 rounded border border-indigo-100 font-bold">Date Time - Title - Notes</code>
+            <code className="bg-white px-1.5 py-0.5 rounded border border-indigo-100 font-bold">Date Start-End - Title - Notes</code>
           </p>
         </div>
       </CardContent>
