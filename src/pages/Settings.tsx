@@ -9,6 +9,7 @@ import DayThemesSettings from '@/components/settings/DayThemesSettings';
 import OptimisationLogicSettings from '@/components/settings/OptimisationLogicSettings';
 import CalendarSettings from '@/components/settings/CalendarSettings';
 import IntelligenceCenter from '@/components/settings/IntelligenceCenter';
+import CalendarExporter from '@/components/settings/CalendarExporter';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -331,6 +332,9 @@ const Settings = () => {
             </div>
 
             <IntelligenceCenter naturalLanguageRules={settings.natural_language_rules} onRulesChange={(rules) => setSettings(prev => ({ ...prev, natural_language_rules: rules }))} movableKeywords={settings.movable_keywords} lockedKeywords={settings.locked_keywords} />
+            
+            <CalendarExporter />
+
             <DayThemesSettings themes={themes} onThemeChange={handleThemeChange} />
           </div>
           <div className="space-y-8"><OptimisationLogicSettings settings={settings} setSettings={setSettings} /></div>
