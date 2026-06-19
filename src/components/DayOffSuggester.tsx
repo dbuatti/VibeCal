@@ -153,14 +153,14 @@ const DayOffSuggester: React.FC<DayOffSuggesterProps> = ({
   const weekSuggestions = useMemo(() => {
     return weekDays.map(({ week, days }) => {
       const scored = days.map((d) => ({ day: d, score: scoreDay(d) }));
-      const alreadyHasDayOff = days.some((d) => d.hasExistingDayOff);
-      const best = alreadyHasDayOff
-        ? []
-        : scored
-            .filter((s) => s.score < Infinity)
-            .sort((a, b) => a.score - b.score)
-            .slice(0, daysOffPerWeek)
-            .map((s) => s.day);
+      const existingDayOffCount = days.filter((d) => d.hasExistingDayOff).length;
+      const remaining = Math.max(0, daysOffPerWeek - existingDayOffCount);
+      const alreadyHasDayOff = existingDayOffCount > 0;
+      const best = scored
+        .filter((s) => s.score < Infinity)
+        .sort((a, b) => a.score - b.score)
+        .slice(0, remaining)
+        .map((s) => s.day);
       const overload = week.totalWorkHours > threshold;
       const overloadRatio = week.totalWorkHours / threshold;
 
@@ -381,20 +381,27 @@ const DayOffSuggester: React.FC<DayOffSuggesterProps> = ({
                 <p className="text-xs font-black text-gray-800 uppercase tracking-widest mb-0.5">
                   {alreadyHasDayOff && best.length === 0
                     ? 'Already protected'
-                    : best.length > 0
-                      ? `Suggest${best.length > 1 ? '' : 'ed'}: ${best.map((d) => DAY_NAMES[days.indexOf(d)]).join(' + ')}`
-                      : 'No clear day available'}
+                    : alreadyHasDayOff && best.length > 0
+                      ? `Add: ${best.map((d) => DAY_NAMES[days.indexOf(d)]).join(' + ')}`
+                      : best.length > 0
+                        ? `Suggest${best.length > 1 ? '' : 'ed'}: ${best.map((d) => DAY_NAMES[days.indexOf(d)]).join(' + ')}`
+                        : 'No clear day available'}
                 </p>
                 <p className="text-[11px] text-gray-500 font-medium leading-snug">
                   {alreadyHasDayOff && best.length === 0
-                    ? 'You already have a day off blocked this week.'
-                    : best.length > 0
-                      ? best.map((d) => {
+                    ? 'You already have enough day offs blocked this week.'
+                    : alreadyHasDayOff && best.length > 0
+                      ? `You have ${existingDayOffCount} day off${existingDayOffCount > 1 ? 's' : ''} — ${best.map((d) => {
                           if (d.workHours === 0 && d.eventCount === 0) return `${DAY_NAMES[days.indexOf(d)]} is completely free`;
-                          if (d.isWeekend) return `${DAY_NAMES[days.indexOf(d)]} is the lightest weekend day (${d.workHours}h)`;
-                          return `${DAY_NAMES[days.indexOf(d)]} has the least load (${d.workHours}h)`;
-                        }).join('; ')
-                      : 'Every day has events — consider dropping something.'}
+                          return `${DAY_NAMES[days.indexOf(d)]} is the next lightest (${d.workHours}h)`;
+                        }).join('; ')}`
+                      : best.length > 0
+                        ? best.map((d) => {
+                            if (d.workHours === 0 && d.eventCount === 0) return `${DAY_NAMES[days.indexOf(d)]} is completely free`;
+                            if (d.isWeekend) return `${DAY_NAMES[days.indexOf(d)]} is the lightest weekend day (${d.workHours}h)`;
+                            return `${DAY_NAMES[days.indexOf(d)]} has the least load (${d.workHours}h)`;
+                          }).join('; ')
+                        : 'Every day has events — consider dropping something.'}
                 </p>
               </div>
             </div>
