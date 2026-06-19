@@ -154,6 +154,16 @@ Deno.serve(async (req) => {
       });
     }
 
+    // 6b. Fetch custom labels from user_calendars
+    const updatedCalsRes = await fetch(`${supabaseUrl}/rest/v1/user_calendars?user_id=eq.${user.id}&provider=eq.google&select=calendar_id,custom_label`, {
+      headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
+    });
+    const updatedCals = await updatedCalsRes.json();
+    const labelMap: Record<string, string> = {};
+    for (const uc of updatedCals) {
+      if (uc.custom_label) labelMap[uc.calendar_id] = uc.custom_label;
+    }
+
     const enabledCalendarIds = calendarsToUpsert.filter(c => c.is_enabled).map(c => c.calendar_id);
 
     // 7. Sync Events (Today onwards only)
@@ -179,7 +189,7 @@ Deno.serve(async (req) => {
           end_time: end,
           duration_minutes: durationMinutes,
           provider: 'google',
-          source_calendar: data.summary || 'Unknown',
+          source_calendar: labelMap[calId] || data.summary || 'Unknown',
           source_calendar_id: calId,
           last_synced_at: new Date().toISOString()
         };

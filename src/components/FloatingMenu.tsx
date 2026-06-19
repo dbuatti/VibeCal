@@ -2,16 +2,16 @@
 
 import React, { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { 
-  Settings, 
-  LayoutDashboard, 
-  Sparkles, 
-  History, 
-  LogOut, 
-  Menu, 
+import {
+  Settings,
+  Sparkles,
+  History,
+  LogOut,
+  Menu,
   X,
   Brain,
-  CheckSquare
+  CheckSquare,
+  Activity,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
@@ -28,7 +28,7 @@ const FloatingMenu = () => {
   };
 
   const menuItems = [
-    { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
+    { icon: Activity, label: 'Energy & Load', path: '/' },
     { icon: Brain, label: 'Daily Plan', path: '/plan' },
     { icon: CheckSquare, label: 'Vet Tasks', path: '/vet' },
     { icon: Sparkles, label: 'Optimiser', path: '/optimise' },

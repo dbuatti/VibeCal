@@ -4,8 +4,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useEffect, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import Index from "./pages/Index";
+import Energy from "./pages/Energy";
 import Optimise from "./pages/Optimise";
 import Settings from "./pages/Settings";
 import History from "./pages/History";
@@ -17,7 +19,7 @@ import NotFound from "./pages/NotFound";
 const queryClient = new QueryClient();
 
 const App = () => {
-  const [session, setSession] = useState<any>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -48,7 +50,9 @@ const App = () => {
         >
           <Routes>
             <Route path="/login" element={!session ? <Login /> : <Navigate to="/" replace />} />
-            <Route path="/" element={session ? <Index /> : <Navigate to="/login" replace />} />
+            <Route path="/" element={session ? <Energy /> : <Navigate to="/login" replace />} />
+            <Route path="/dashboard" element={<Navigate to="/" replace />} />
+            <Route path="/energy" element={<Navigate to="/" replace />} />
             <Route path="/optimise" element={session ? <Optimise /> : <Navigate to="/login" replace />} />
             <Route path="/plan" element={session ? <Plan /> : <Navigate to="/login" replace />} />
             <Route path="/vet" element={session ? <Vet /> : <Navigate to="/login" replace />} />

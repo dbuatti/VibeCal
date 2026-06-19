@@ -119,6 +119,16 @@ Deno.serve(async (req) => {
       });
     }
 
+    // 6b. Fetch custom labels from user_calendars
+    const updatedCalsRes = await fetch(`${supabaseUrl}/rest/v1/user_calendars?user_id=eq.${user.id}&provider=eq.apple&select=calendar_id,custom_label`, {
+      headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
+    });
+    const updatedCals = await updatedCalsRes.json();
+    const labelMap: Record<string, string> = {};
+    for (const uc of updatedCals) {
+      if (uc.custom_label) labelMap[uc.calendar_id] = uc.custom_label;
+    }
+
     // 7. Fetch Events
     const enabledCalendars = calendarsToUpsert.filter(c => c.is_enabled);
     const allEvents = [];
@@ -197,7 +207,7 @@ Deno.serve(async (req) => {
                 end_time: endTime,
                 duration_minutes: durationMinutes,
                 provider: 'apple',
-                source_calendar: cal.calendar_name,
+                source_calendar: labelMap[cal.calendar_id] || cal.calendar_name,
                 source_calendar_id: cal.calendar_id,
                 last_synced_at: new Date().toISOString()
               });

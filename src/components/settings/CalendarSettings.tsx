@@ -1,11 +1,11 @@
 "use client";
 
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Calendar, RefreshCw, Globe, CheckSquare, Square } from 'lucide-react';
+import { Calendar, RefreshCw, Globe, CheckSquare, Square, Pencil, Check, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
@@ -14,6 +14,7 @@ interface CalendarSettingsProps {
   isTesting: boolean;
   onDiscover: () => void;
   onToggle: (id: string, enabled: boolean) => void;
+  onUpdateLabel: (id: string, label: string) => void;
   onBulkToggle?: (provider: string, enabled: boolean) => void;
 }
 
@@ -38,7 +39,43 @@ const ProviderIcon = ({ provider }: { provider: string }) => {
   return <Globe size={16} className="shrink-0" />;
 };
 
-const CalendarSettings = ({ calendars, isTesting, onDiscover, onToggle, onBulkToggle }: CalendarSettingsProps) => {
+const CalendarSettings = ({ calendars, isTesting, onDiscover, onToggle, onUpdateLabel, onBulkToggle }: CalendarSettingsProps) => {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editingId && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editingId]);
+
+  const startEdit = (cal: any) => {
+    setEditingId(cal.id);
+    setEditValue(cal.custom_label || cal.calendar_name);
+  };
+
+  const saveEdit = () => {
+    if (editingId) {
+      onUpdateLabel(editingId, editValue.trim());
+      setEditingId(null);
+      setEditValue('');
+    }
+  };
+
+  const clearLabel = () => {
+    if (editingId) {
+      onUpdateLabel(editingId, '');
+      setEditingId(null);
+      setEditValue('');
+    }
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditValue('');
+  };
   const grouped = calendars.reduce((acc: any, cal) => {
     const provider = cal.provider || 'other';
     if (!acc[provider]) acc[provider] = [];
@@ -112,18 +149,49 @@ const CalendarSettings = ({ calendars, isTesting, onDiscover, onToggle, onBulkTo
                   <div className="space-y-2 min-w-0">
                     {grouped[provider].map((cal: any) => (
                       <div key={cal.id} className="flex items-center justify-between p-3 bg-gray-50/50 rounded-xl border border-gray-100 hover:border-indigo-100 transition-colors gap-3 min-w-0">
-                        <div className="flex items-center gap-3 overflow-hidden flex-1 min-w-0">
+                          <div className="flex items-center gap-3 overflow-hidden flex-1 min-w-0">
                           <div className="w-2.5 h-2.5 rounded-full shrink-0 shadow-sm" style={{ backgroundColor: cal.color || '#6366f1' }} />
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span className="text-xs font-bold text-gray-700 truncate cursor-default">
-                                {cal.calendar_name}
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent className="rounded-lg font-bold text-[10px] max-w-[200px]">
-                              {cal.calendar_name}
-                            </TooltipContent>
-                          </Tooltip>
+                          {editingId === cal.id ? (
+                            <div className="flex items-center gap-1 flex-1 min-w-0">
+                              <input
+                                ref={inputRef}
+                                value={editValue}
+                                onChange={(e) => setEditValue(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') saveEdit(); if (e.key === 'Escape') cancelEdit(); }}
+                                className="flex-1 min-w-0 text-xs font-bold text-gray-700 bg-white border border-indigo-300 rounded-md px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-400"
+                                placeholder="Label this calendar..."
+                              />
+                              <button onClick={saveEdit} className="text-indigo-600 hover:text-indigo-800 p-0.5 shrink-0" title="Save">
+                                <Check size={14} />
+                              </button>
+                              <button onClick={cancelEdit} className="text-gray-400 hover:text-gray-600 p-0.5 shrink-0" title="Cancel">
+                                <X size={14} />
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className={cn(
+                                    "text-xs font-bold truncate cursor-default",
+                                    cal.custom_label ? "text-indigo-700" : "text-gray-700"
+                                  )}>
+                                    {cal.custom_label || cal.calendar_name}
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent className="rounded-lg font-bold text-[10px] max-w-[200px]">
+                                  {cal.calendar_name}{cal.custom_label ? ` (custom: ${cal.custom_label})` : ''}
+                                </TooltipContent>
+                              </Tooltip>
+                              <button
+                                onClick={() => startEdit(cal)}
+                                className="text-gray-300 hover:text-indigo-500 transition-colors p-0.5 shrink-0"
+                                title="Rename this calendar"
+                              >
+                                <Pencil size={12} />
+                              </button>
+                            </>
+                          )}
                         </div>
                         <Switch 
                           checked={cal.is_enabled} 

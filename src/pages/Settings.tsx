@@ -193,6 +193,18 @@ const Settings = () => {
     } catch (err) { showError("Failed to remove keyword"); }
   };
 
+  const updateCalendarLabel = async (id: string, label: string) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const value = label || null;
+      const { error } = await supabase.from('user_calendars').update({ custom_label: value }).eq('id', id);
+      if (error) throw error;
+      setCalendars(calendars.map(c => c.id === id ? { ...c, custom_label: value } : c));
+      showSuccess(value ? 'Calendar labeled' : 'Label cleared');
+    } catch (err: any) { showError(err.message); }
+  };
+
   const toggleCalendar = async (id: string, enabled: boolean) => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -339,7 +351,7 @@ const Settings = () => {
           </div>
           <div className="space-y-8"><OptimisationLogicSettings settings={settings} setSettings={setSettings} /></div>
         </div>
-        <div className="w-full"><CalendarSettings calendars={calendars} isTesting={isTesting} onDiscover={discoverCalendars} onToggle={toggleCalendar} onBulkToggle={handleBulkToggleCalendars} /></div>
+        <div className="w-full"><CalendarSettings calendars={calendars} isTesting={isTesting} onDiscover={discoverCalendars} onToggle={toggleCalendar} onUpdateLabel={updateCalendarLabel} onBulkToggle={handleBulkToggleCalendars} /></div>
       </div>
     </Layout>
   );
