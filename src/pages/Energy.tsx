@@ -13,7 +13,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Activity, RefreshCw, AlertTriangle, TrendingUp, Gauge, Sparkles,
   CalendarClock, Lightbulb, ShieldCheck, CalendarOff, Layers, Target,
-  CalendarHeart, Plus,
+  CalendarHeart, Plus, Clock,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
