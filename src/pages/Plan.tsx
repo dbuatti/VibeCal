@@ -652,10 +652,10 @@ const Plan = () => {
               <button
                 onClick={handleFullSync}
                 disabled={isProcessing}
-                title="Full Sync"
+                aria-label="Full sync all calendars"
                 className={cn(
                   "w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-lg hover:scale-110 active:scale-95 disabled:opacity-50 disabled:grayscale shrink-0",
-                  "bg-gradient-to-tr from-red-500 via-yellow-400 via-green-400 via-blue-500 to-purple-600 text-white"
+                  "bg-gradient-to-tr from-indigo-500 to-purple-600 text-white"
                 )}
               >
                 <RefreshCw size={18} className={cn(isProcessing && "animate-spin")} />

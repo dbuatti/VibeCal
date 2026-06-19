@@ -7,7 +7,7 @@ import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  ResponsiveContainer, Cell,
+  ResponsiveContainer, Cell, ReferenceLine,
 } from 'recharts';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -118,6 +118,16 @@ const Energy = () => {
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
   const [weekRange, setWeekRange] = useState<WeekRangeOption>(6);
   const [showImporter, setShowImporter] = useState(false);
+  const [now, setNow] = useState(new Date());
+  const [celebrationStreak, setCelebrationStreak] = useState(() => {
+    const saved = localStorage.getItem('vibecal_streak');
+    return saved ? JSON.parse(saved) : { count: 0, lastWeek: '' };
+  });
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(timer);
+  }, []);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -456,6 +466,61 @@ const Energy = () => {
     };
   }, [summary, threshold]);
 
+  // --- ADHD timeblindness assists ---
+
+  // Today's events for the "Right Now" banner and "Today's Load" card
+  const todayInfo = useMemo(() => {
+    const todayEvents = events.filter((e) => {
+      if (!e.start_time) return false;
+      const s = parseISO(e.start_time);
+      return isValid(s) && isToday(s);
+    });
+
+    const currentEvent = todayEvents.find((e) => {
+      if (!e.start_time || !e.end_time) return false;
+      const s = parseISO(e.start_time);
+      const en = parseISO(e.end_time);
+      return isValid(s) && isValid(en) && now >= s && now <= en;
+    });
+
+    const nextEvent = !currentEvent
+      ? todayEvents
+          .filter((e) => {
+            if (!e.start_time) return false;
+            return parseISO(e.start_time) > now;
+          })
+          .sort(
+            (a, b) =>
+              parseISO(a.start_time).getTime() - parseISO(b.start_time).getTime()
+          )[0] || null
+      : null;
+
+    const todayTotalHours = todayEvents.reduce((sum, e) => {
+      const cat = categoriesByEvent[e.event_id] || 'other';
+      if (!CATEGORY_META[cat].countsAsWork) return sum;
+      return sum + durationHours(e);
+    }, 0);
+
+    return { currentEvent, nextEvent, todayTotalHours };
+  }, [events, categoriesByEvent, now]);
+
+  // Streak tracking for under-goal weeks
+  useEffect(() => {
+    if (weeks.length === 0) return;
+    const lastCompletedWeek = [...weeks]
+      .filter((w) => isPast(endOfWeek(w.weekStart, { weekStartsOn: 1 })))
+      .pop();
+    if (!lastCompletedWeek) return;
+    const weekId = lastCompletedWeek.label;
+    if (weekId === celebrationStreak.lastWeek) return;
+    const underGoal = lastCompletedWeek.totalWorkHours <= threshold;
+    const newStreak = underGoal
+      ? { count: celebrationStreak.count + 1, lastWeek: weekId }
+      : { count: 0, lastWeek: '' };
+    setCelebrationStreak(newStreak);
+    localStorage.setItem('vibecal_streak', JSON.stringify(newStreak));
+  }, [weeks, threshold, celebrationStreak.lastWeek]);
+
   if (loading) {
     return (
       <Layout>
@@ -548,10 +613,66 @@ const Energy = () => {
         </Card>
       ) : (
         <div className="space-y-6 pb-24">
-          {/* Summary stat cards */}
+          {/* "Right Now" banner — live awareness for ADHD timeblindness */}
+          {(todayInfo.currentEvent || todayInfo.nextEvent) && (
+            <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm overflow-hidden">
+              <div className="p-4 flex items-center gap-4">
+                <div className={cn(
+                  'w-12 h-12 rounded-xl flex items-center justify-center shrink-0',
+                  todayInfo.currentEvent ? 'bg-green-100 text-green-600' : 'bg-indigo-50 text-indigo-500'
+                )}>
+                  {todayInfo.currentEvent ? (
+                    <div className="w-3 h-3 rounded-full bg-green-500 animate-pulse" />
+                  ) : (
+                    <Clock size={20} />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  {todayInfo.currentEvent ? (
+                    <div>
+                      <p className="text-[9px] font-black text-green-600 uppercase tracking-widest mb-0.5">Happening now</p>
+                      <p className="font-black text-gray-900 text-sm truncate">{todayInfo.currentEvent.title}</p>
+                      <p className="text-xs font-medium text-gray-500">
+                        Ends {format(parseISO(todayInfo.currentEvent.end_time), 'h:mm a')}
+                        {' · '}
+                        {Math.max(0, Math.round((parseISO(todayInfo.currentEvent.end_time).getTime() - now.getTime()) / 60000))}m left
+                      </p>
+                    </div>
+                  ) : (
+                    <div>
+                      <p className="text-[9px] font-black text-indigo-600 uppercase tracking-widest mb-0.5">Up next today</p>
+                      <p className="font-black text-gray-900 text-sm truncate">{todayInfo.nextEvent.title}</p>
+                      <p className="text-xs font-medium text-gray-500">
+                        {format(parseISO(todayInfo.nextEvent.start_time), 'h:mm a')}
+                        {' · starts in '}
+                        {Math.max(0, Math.round((parseISO(todayInfo.nextEvent.start_time).getTime() - now.getTime()) / 60000))}m
+                      </p>
+                    </div>
+                  )}
+                </div>
+                {celebrationStreak.count > 2 && (
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 rounded-full shrink-0">
+                    <Sparkles size={12} className="text-amber-500" />
+                    <span className="text-[9px] font-black text-amber-600 uppercase tracking-widest">
+                      {celebrationStreak.count}w streak
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Summary stat cards + Today's Load */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <StatCard icon={Gauge} label="Avg hrs / week" value={summary ? `${summary.avg}` : '0'} accent="indigo" />
-            <StatCard icon={Activity} label="Heaviest week" value={summary ? `${summary.heaviest.totalWorkHours}` : '0'} sub={summary ? summary.heaviest.label : ''} accent="amber" />
+            {/* "Today's Load" — live progress for ADHD timeblindness */}
+            <StatCard
+              icon={Clock}
+              label="Today's load"
+              value={`${Math.round(todayInfo.todayTotalHours * 10) / 10}h`}
+              sub={threshold > 0 ? `of ${Math.round(threshold / 7)}h daily` : ''}
+              accent={todayInfo.todayTotalHours > threshold / 7 ? 'amber' : 'green'}
+            />
             <StatCard icon={AlertTriangle} label="Weeks over limit" value={summary ? `${summary.overThreshold.length}` : '0'} sub={`limit ${threshold}h`} accent={summary && summary.overThreshold.length > 0 ? 'red' : 'green'} />
             <StatCard icon={CalendarClock} label="Working weeks" value={summary ? `${summary.workWeekCount}` : '0'} sub={summary ? `of ${summary.weekCount}` : ''} accent="purple" />
           </div>
@@ -702,6 +823,16 @@ const Energy = () => {
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F3F4F6" />
                     <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: '#9CA3AF', fontSize: 10, fontWeight: 800 }} dy={10} />
                     <YAxis axisLine={false} tickLine={false} tick={{ fill: '#9CA3AF', fontSize: 10, fontWeight: 800 }} unit="h" />
+                    <ReferenceLine
+                      x={chartData.find((d) => {
+                        const ws = startOfWeek(new Date(), { weekStartsOn: 1 });
+                        return d.label === format(ws, 'MMM d');
+                      })?.label || ''}
+                      stroke="#6366F1"
+                      strokeDasharray="5 5"
+                      strokeWidth={2}
+                      label={{ value: 'Now', position: 'top', fill: '#6366F1', fontSize: 10, fontWeight: 800 }}
+                    />
                     <Tooltip
                       cursor={{ fill: 'rgba(79,70,229,0.05)' }}
                       contentStyle={{ borderRadius: '20px', border: 'none', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)', padding: '12px' }}
@@ -795,6 +926,11 @@ const Energy = () => {
                           {isCurrentWeek && (
                             <span className="px-2 py-0.5 rounded-full bg-indigo-600 text-white text-[8px] font-black uppercase tracking-widest">
                               This Week
+                            </span>
+                          )}
+                          {!isCurrentWeek && w.totalWorkHours > 0 && w.totalWorkHours <= threshold && (
+                            <span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-[8px] font-black uppercase tracking-widest flex items-center gap-1">
+                              <Sparkles size={10} /> Under goal
                             </span>
                           )}
                           {w.hasDayOff && (

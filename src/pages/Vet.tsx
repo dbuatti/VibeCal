@@ -461,10 +461,10 @@ const Vet = () => {
               <button
                 onClick={handleFullSync}
                 disabled={isProcessing}
-                title="Full Sync"
+                aria-label="Full sync all calendars"
                 className={cn(
                   "w-14 h-14 rounded-2xl flex items-center justify-center transition-all shadow-lg hover:scale-110 active:scale-95 disabled:opacity-50 disabled:grayscale",
-                  "bg-gradient-to-tr from-red-500 via-yellow-400 via-green-400 via-blue-500 to-purple-600 text-white"
+                  "bg-gradient-to-tr from-indigo-500 to-purple-600 text-white"
                 )}
               >
                 <RefreshCw size={24} className={cn(isProcessing && statusText.includes('sync') && "animate-spin")} />
@@ -565,7 +565,7 @@ const Vet = () => {
                     onClick={() => handlePushSyncDay(dateKey, groupedEvents[dateKey])}
                     disabled={isProcessing}
                     className="p-2 rounded-lg hover:bg-white hover:text-indigo-600 text-gray-400 transition-all hover:shadow-sm"
-                    title="Push Sync: Update external calendars"
+                    aria-label="Push sync changes to calendar"
                   >
                     <Send size={14} />
                   </button>
@@ -573,7 +573,7 @@ const Vet = () => {
                     onClick={() => handleRefreshDay(dateKey)}
                     disabled={isProcessing}
                     className="p-2 rounded-lg hover:bg-white hover:text-indigo-600 text-gray-400 transition-all hover:shadow-sm"
-                    title="Refresh Day: Re-fetch from providers"
+                    aria-label="Refresh events from calendar"
                   >
                     <RefreshCw size={14} className={cn(isProcessing && statusText.includes(dateKey) && "animate-spin")} />
                   </button>

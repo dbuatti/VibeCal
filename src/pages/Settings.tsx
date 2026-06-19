@@ -283,6 +283,13 @@ const Settings = () => {
       <div className="space-y-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2 space-y-8">
+            {/* Section: Calendar Integration */}
+            <div className="flex items-center gap-3 pt-6 pb-2">
+              <div className="h-px flex-1 bg-gray-100" />
+              <span className="text-[9px] font-black text-gray-300 uppercase tracking-[0.25em]">Calendar Integration</span>
+              <div className="h-px flex-1 bg-gray-100" />
+            </div>
+
             {/* Timezone Card */}
             <Card className="border-none shadow-sm rounded-2xl bg-white">
               <CardHeader className="pb-4">
@@ -335,12 +342,26 @@ const Settings = () => {
               </CardContent>
             </Card>
 
+            {/* Section: Scheduling Rules */}
+            <div className="flex items-center gap-3 pt-6 pb-2">
+              <div className="h-px flex-1 bg-gray-100" />
+              <span className="text-[9px] font-black text-gray-300 uppercase tracking-[0.25em]">Scheduling Rules</span>
+              <div className="h-px flex-1 bg-gray-100" />
+            </div>
+
             <WorkWindowSettings settings={settings} setSettings={setSettings} />
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <KeywordManager title="Movable" icon={Sparkles} iconColor="text-indigo-600" keywords={settings.movable_keywords} onAdd={(kw) => handleAddKeyword(kw, 'movable')} onRemove={(kw) => handleRemoveKeyword(kw, 'movable')} badgeVariant="indigo" />
               <KeywordManager title="Locked" icon={Ban} iconColor="text-red-500" keywords={settings.locked_keywords} onAdd={(kw) => handleAddKeyword(kw, 'locked')} onRemove={(kw) => handleRemoveKeyword(kw, 'locked')} badgeVariant="red" />
               <KeywordManager title="Work Detection" icon={Briefcase} iconColor="text-amber-500" keywords={settings.work_keywords} onAdd={(kw) => handleAddKeyword(kw, 'work')} onRemove={(kw) => handleRemoveKeyword(kw, 'work')} badgeVariant="amber" />
+            </div>
+
+            {/* Section: AI & Personalization */}
+            <div className="flex items-center gap-3 pt-6 pb-2">
+              <div className="h-px flex-1 bg-gray-100" />
+              <span className="text-[9px] font-black text-gray-300 uppercase tracking-[0.25em]">AI &amp; Personalization</span>
+              <div className="h-px flex-1 bg-gray-100" />
             </div>
 
             <IntelligenceCenter naturalLanguageRules={settings.natural_language_rules} onRulesChange={(rules) => setSettings(prev => ({ ...prev, natural_language_rules: rules }))} movableKeywords={settings.movable_keywords} lockedKeywords={settings.locked_keywords} />

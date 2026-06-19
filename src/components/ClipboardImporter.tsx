@@ -40,6 +40,40 @@ const ClipboardImporter = ({ isOpen, onClose, onCreated }: ClipboardImporterProp
   const [parseError, setParseError] = useState<string | null>(null);
   const [isParsing, setIsParsing] = useState(false);
   const [createResults, setCreateResults] = useState<Array<{ title: string; success: boolean; error?: string }>>([]);
+  const [quickAddTitle, setQuickAddTitle] = useState('');
+
+  const handleQuickAdd = async () => {
+    const title = quickAddTitle.trim();
+    if (!title) return;
+    const now = new Date();
+    const later = new Date(now.getTime() + 30 * 60000);
+    const quickEvent = {
+      title,
+      startDateTime: now.toISOString(),
+      endDateTime: later.toISOString(),
+      location: null,
+      notes: null,
+      status: 'confirmed' as const,
+    };
+    setEvents([quickEvent]);
+    setQuickAddTitle('');
+    setStep('creating');
+    try {
+      const { data, error } = await supabase.functions.invoke('create-appointment', {
+        body: { events: [quickEvent] },
+      });
+      if (error) throw error;
+      if (data.successCount > 0) {
+        showSuccess(`"${title}" added now — 30 min`);
+        onCreated();
+        setTimeout(() => handleClose(), 1000);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed';
+      showError(msg);
+      setStep('paste');
+    }
+  };
 
   const handleParse = async () => {
     if (rawText.trim().length < 5) {
@@ -186,6 +220,30 @@ const ClipboardImporter = ({ isOpen, onClose, onCreated }: ClipboardImporterProp
 
         {step === 'paste' && (
           <div className="space-y-4 py-4">
+            {/* Quick Add — instant event creation for ADHD timeblindness */}
+            <div className="bg-indigo-50/50 rounded-2xl border border-indigo-100 p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Clock size={14} className="text-indigo-500" />
+                <span className="text-[9px] font-black text-indigo-600 uppercase tracking-widest">Quick Add — starts now, 30 min</span>
+              </div>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="e.g. Warm up vocal exercises..."
+                  value={quickAddTitle}
+                  onChange={(e) => setQuickAddTitle(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleQuickAdd()}
+                  className="bg-white border-indigo-200 rounded-xl h-10 font-medium text-sm"
+                />
+                <Button
+                  onClick={handleQuickAdd}
+                  disabled={quickAddTitle.trim().length === 0}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-5 h-10 font-black text-[9px] uppercase tracking-widest shrink-0 shadow-sm"
+                >
+                  <Plus size={14} className="mr-1" /> Add Now
+                </Button>
+              </div>
+            </div>
+
             <div className="flex items-center justify-between">
               <Label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Paste your text</Label>
               <Button
