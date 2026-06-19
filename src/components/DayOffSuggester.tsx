@@ -169,7 +169,7 @@ const DayOffSuggester: React.FC<DayOffSuggesterProps> = ({
       else if (overloadRatio > 1.0) urgency = 'high';
       else if (overloadRatio > 0.7) urgency = 'moderate';
 
-      return { week, days, best, alreadyHasDayOff, overload, urgency, overloadRatio };
+      return { week, days, best, alreadyHasDayOff, existingDayOffCount, overload, urgency, overloadRatio };
     });
   }, [weekDays, daysOffPerWeek, threshold]);
 
@@ -339,7 +339,7 @@ const DayOffSuggester: React.FC<DayOffSuggesterProps> = ({
       )}
 
       {/* Per-week suggestions */}
-      {weekSuggestions.map(({ week, days, best, alreadyHasDayOff, overload, urgency, overloadRatio }) => {
+      {weekSuggestions.map(({ week, days, best, alreadyHasDayOff, existingDayOffCount, overload, urgency, overloadRatio }) => {
         const cfg = urgencyConfig[urgency];
         const isCurrentWeek = isWithinInterval(new Date(), { start: week.weekStart, end: week.weekEnd });
         return (
