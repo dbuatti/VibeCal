@@ -6,6 +6,7 @@ import Layout from '@/components/Layout';
 import PageHeader from '@/components/PageHeader';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
+import { useSyncCalendars } from '@/hooks/useSyncCalendars';
 import { 
   Lock, 
   Unlock, 
@@ -59,6 +60,7 @@ const ProviderIcon = ({ provider }: { provider: string }) => {
 
 const Vet = () => {
   const navigate = useNavigate();
+  const { syncCalendars } = useSyncCalendars();
   const [loading, setLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusText, setStatusText] = useState('');
@@ -98,20 +100,12 @@ const Vet = () => {
     setIsProcessing(true);
     setStatusText('Performing full system sync...');
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      let token = session?.provider_token;
-      if (!token && user) {
-        const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
-        token = profile?.google_access_token;
-      }
-
       setStatusText('Syncing calendars...');
-      await Promise.allSettled([
-        supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: token } }),
-        supabase.functions.invoke('sync-apple-calendar')
-      ]);
+      const result = await syncCalendars();
+      if (!result.success) {
+        setIsProcessing(false);
+        return;
+      }
       
       setStatusText('AI is vetting your schedule...');
       const { data: settings } = await supabase.from('user_settings').select('movable_keywords, locked_keywords, work_keywords, natural_language_rules').single();
@@ -160,18 +154,11 @@ const Vet = () => {
     setIsProcessing(true);
     setStatusText('Restoring original calendar times...');
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const { data: { user } } = await supabase.auth.getUser();
-      let token = session?.provider_token;
-      if (!token && user) {
-        const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
-        token = profile?.google_access_token;
+      const result = await syncCalendars();
+      if (!result.success) {
+        setIsProcessing(false);
+        return;
       }
-
-      await Promise.allSettled([
-        supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: token } }),
-        supabase.functions.invoke('sync-apple-calendar')
-      ]);
 
       await fetchEvents();
       showSuccess("Positions reset to original calendar times!");
@@ -221,19 +208,12 @@ const Vet = () => {
     try {
       const start = toDate(`${dateKey}T00:00:00`, { timeZone: timezone }).toISOString();
       const end = toDate(`${dateKey}T23:59:59`, { timeZone: timezone }).toISOString();
-      
-      const { data: { session } } = await supabase.auth.getSession();
-      const { data: { user } } = await supabase.auth.getUser();
-      let token = session?.provider_token;
-      if (!token && user) {
-        const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
-        token = profile?.google_access_token;
-      }
 
-      await Promise.allSettled([
-        supabase.functions.invoke('sync-calendar', { body: { timeMin: start, timeMax: end, googleAccessToken: token } }),
-        supabase.functions.invoke('sync-apple-calendar', { body: { timeMin: start, timeMax: end } })
-      ]);
+      const result = await syncCalendars({ timeMin: start, timeMax: end });
+      if (!result.success) {
+        setIsProcessing(false);
+        return;
+      }
 
       await fetchEvents();
       showSuccess(`Refreshed events for ${dateKey}`);

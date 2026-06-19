@@ -1,17 +1,19 @@
 "use client";
 
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Layout from '@/components/Layout';
 import PageHeader from '@/components/PageHeader';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { History as HistoryIcon, TrendingUp, Calendar, Filter, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
+import { History as HistoryIcon, TrendingUp, Sparkles, Filter, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { supabase } from '@/lib/supabase';
 import { format, parseISO, subDays, startOfDay } from 'date-fns';
 import { cn } from '@/lib/utils';
 
 const History = () => {
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [history, setHistory] = useState<any[]>([]);
   const [chartData, setChartData] = useState<any[]>([]);
@@ -160,6 +162,25 @@ const History = () => {
               </div>
             )}
           </div>
+        </div>
+      </div>
+
+      {/* Run Optimiser CTA */}
+      <div className="mt-10 bg-gradient-to-br from-indigo-600 to-indigo-800 rounded-[2.5rem] p-10 text-white shadow-2xl">
+        <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+          <div className="space-y-2">
+            <h2 className="text-2xl font-black tracking-tight">Ready for a fresh analysis?</h2>
+            <p className="text-indigo-100 font-medium">
+              Let AI reshuffle your day for peak focus and energy alignment.
+            </p>
+          </div>
+          <button
+            onClick={() => navigate('/optimise')}
+            className="shrink-0 bg-white text-indigo-600 hover:bg-indigo-50 rounded-2xl px-10 h-14 font-black text-xs uppercase tracking-widest shadow-xl transition-all hover:scale-105 active:scale-95 flex items-center gap-3"
+          >
+            <Sparkles size={18} />
+            Run Optimiser
+          </button>
         </div>
       </div>
     </Layout>

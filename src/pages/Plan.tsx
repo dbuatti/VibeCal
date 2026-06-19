@@ -6,6 +6,7 @@ import Layout from '@/components/Layout';
 import PageHeader from '@/components/PageHeader';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
+import { useSyncCalendars } from '@/hooks/useSyncCalendars';
 import DayByDayPlanner from '@/components/DayByDayPlanner';
 import RequirementsForm from '@/components/RequirementsForm';
 import PlanInitialView from '@/components/plan/PlanInitialView';
@@ -26,6 +27,7 @@ type PlanStep = 'initial' | 'analysis' | 'vetting_tasks' | 'requirements' | 'act
 
 const Plan = () => {
   const navigate = useNavigate();
+  const { syncCalendars } = useSyncCalendars();
   const [loading, setLoading] = useState(true);
   const [currentStep, setCurrentStep] = useState<PlanStep>('initial');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -116,41 +118,20 @@ const Plan = () => {
       if (!user) return;
 
       if (!skipSync) {
-        setStatusText('Authenticating...');
-        setProgress(15);
-        
-        if (session?.provider_token) {
-          const updates: any = { google_access_token: session.provider_token };
-          if (session.provider_refresh_token) {
-            updates.google_refresh_token = session.provider_refresh_token;
-          }
-          await supabase.from('profiles').update(updates).eq('id', user.id);
-        }
-
         setStatusText('Syncing calendars...');
         setProgress(30);
-        
-        const syncPromises = [
-          supabase.functions.invoke('sync-calendar'),
-          supabase.functions.invoke('sync-apple-calendar')
-        ];
-
-        const results = await Promise.allSettled(syncPromises);
-        setProgress(60);
-        
-        const googleResult = results[0];
-        if (googleResult.status === 'fulfilled') {
-          const { error } = googleResult.value;
-          if (error) {
-            const errorMsg = (error?.message || "").toLowerCase();
-            if (errorMsg.includes("401") || errorMsg.includes("unauthorized") || errorMsg === "auth_expired") {
-              setTokenMissing(true);
-              setIsProcessing(false);
-              showError("Google session expired. Please reconnect.");
-              return;
-            }
-          }
+        const result = await syncCalendars();
+        if (result.tokenMissing) {
+          setTokenMissing(true);
+          setIsProcessing(false);
+          showError("Google session expired. Please reconnect.");
+          return;
         }
+        if (!result.success) {
+          setIsProcessing(false);
+          return;
+        }
+        setProgress(60);
       } else {
         setStatusText('Loading cached data...');
         setProgress(50);

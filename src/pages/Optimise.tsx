@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Sparkles, RefreshCw, Calendar, Clock, Lock, Unlock, ChevronRight, ListOrdered, BrainCircuit, Inbox, ChevronLeft } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
+import { useSyncCalendars } from '@/hooks/useSyncCalendars';
 import { format, nextSaturday } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { useNavigate } from 'react-router-dom';
@@ -24,6 +25,7 @@ const DAYS = [
 
 const Optimise = () => {
   const navigate = useNavigate();
+  const { syncCalendars } = useSyncCalendars();
   const [currentStep, setCurrentStep] = useState<Step>('initial');
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusText, setStatusText] = useState('');
@@ -57,11 +59,11 @@ const Optimise = () => {
     setIsProcessing(true);
     setStatusText('Syncing Calendars...');
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.provider_token) {
-        await supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: session.provider_token } });
+      const result = await syncCalendars();
+      if (!result.success) {
+        setIsProcessing(false);
+        return;
       }
-      await supabase.functions.invoke('sync-apple-calendar');
       const { data: fetchedEvents } = await supabase.from('calendar_events_cache').select('*').order('start_time', { ascending: true });
       setEvents(fetchedEvents || []);
       setCurrentStep('vetting');

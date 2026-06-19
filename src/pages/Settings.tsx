@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Label } from '@/components/ui/label';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
+import { useSyncCalendars } from '@/hooks/useSyncCalendars';
 import { cn } from '@/lib/utils';
 import { Save, Sparkles, Ban, Briefcase, RefreshCw, Link2, AlertCircle, CheckCircle2, Globe, Settings as SettingsIcon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -42,6 +43,7 @@ const GeminiLogo = ({ className }: { className?: string }) => (
 
 const Settings = () => {
   const navigate = useNavigate();
+  const { syncCalendars } = useSyncCalendars();
   const [loading, setLoading] = useState(true);
   const [isTesting, setIsTesting] = useState(false);
   const [calendars, setCalendars] = useState<any[]>([]);
@@ -242,9 +244,12 @@ const Settings = () => {
         const updates: any = { google_access_token: session.provider_token };
         if (session.provider_refresh_token) updates.google_refresh_token = session.provider_refresh_token;
         await supabase.from('profiles').update(updates).eq('id', user.id);
-        await supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: session.provider_token } });
-      } else await supabase.functions.invoke('sync-calendar', { body: {} });
-      if (profile.apple_id && profile.apple_app_password) await supabase.functions.invoke('sync-apple-calendar');
+      }
+      const result = await syncCalendars();
+      if (!result.success) {
+        setIsTesting(false);
+        return;
+      }
       await fetchCalendars();
       showSuccess('Calendar list refreshed!');
       await checkGoogleConnection();

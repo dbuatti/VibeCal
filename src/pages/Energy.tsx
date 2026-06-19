@@ -1,10 +1,12 @@
 "use client";
 
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Layout from '@/components/Layout';
 import PageHeader from '@/components/PageHeader';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
+import { useSyncCalendars } from '@/hooks/useSyncCalendars';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, Cell, ReferenceLine,
@@ -13,7 +15,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Activity, RefreshCw, AlertTriangle, TrendingUp, Gauge, Sparkles,
   CalendarClock, Lightbulb, ShieldCheck, CalendarOff, Layers, Target,
-  CalendarHeart, Plus, Clock,
+  CalendarHeart, Plus, Clock, ArrowRight, Brain, CheckSquare,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -106,6 +108,8 @@ const eventInterval = (e: CachedEvent): Interval | null => {
 };
 
 const Energy = () => {
+  const navigate = useNavigate();
+  const { syncCalendars } = useSyncCalendars();
   const [loading, setLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusText, setStatusText] = useState('');
@@ -167,32 +171,14 @@ const Energy = () => {
   const handleSync = async () => {
     setIsProcessing(true);
     setStatusText('Syncing calendars...');
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('Not authenticated');
-
-      let token = session?.provider_token;
-      if (!token) {
-        const { data: profile } = await supabase.from('profiles').select('google_access_token').eq('id', user.id).single();
-        token = profile?.google_access_token;
-      }
-
-      await Promise.allSettled([
-        supabase.functions.invoke('sync-calendar', { body: { googleAccessToken: token } }),
-        supabase.functions.invoke('sync-apple-calendar'),
-      ]);
-
+    const result = await syncCalendars();
+    if (result.success) {
       setStatusText('Classifying events...');
       await loadData();
       showSuccess('Calendar synced and analysed');
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Sync failed';
-      showError('Sync failed: ' + msg);
-    } finally {
-      setIsProcessing(false);
-      setStatusText('');
     }
+    setIsProcessing(false);
+    setStatusText('');
   };
 
   // Group events into contiguous Monday-Sunday weeks.
@@ -1132,6 +1118,51 @@ const Energy = () => {
               ))}
             </CardContent>
           </Card>
+
+          {/* Navigation CTAs — page-to-page links */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <button
+              onClick={() => navigate('/plan')}
+              className="p-6 rounded-[2rem] bg-gradient-to-br from-indigo-600 to-indigo-800 text-white text-left space-y-3 shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all group"
+            >
+              <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-md">
+                <Brain size={20} />
+              </div>
+              <div>
+                <p className="font-black text-sm tracking-tight">Daily Plan</p>
+                <p className="text-indigo-100 font-medium text-xs opacity-80">Vet tasks and generate your daily schedule.</p>
+              </div>
+              <ArrowRight size={16} className="opacity-50 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
+            </button>
+
+            <button
+              onClick={() => navigate('/vet')}
+              className="p-6 rounded-[2rem] bg-white border border-gray-100 text-left space-y-3 shadow-md hover:scale-[1.02] active:scale-[0.98] transition-all group"
+            >
+              <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600">
+                <CheckSquare size={20} />
+              </div>
+              <div>
+                <p className="font-black text-sm text-gray-900 tracking-tight">Vet Tasks</p>
+                <p className="text-gray-500 font-medium text-xs">Lock your essential appointments.</p>
+              </div>
+              <ArrowRight size={16} className="text-indigo-400 opacity-50 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
+            </button>
+
+            <button
+              onClick={() => navigate('/optimise')}
+              className="p-6 rounded-[2rem] bg-white border border-gray-100 text-left space-y-3 shadow-md hover:scale-[1.02] active:scale-[0.98] transition-all group"
+            >
+              <div className="w-10 h-10 bg-purple-50 rounded-xl flex items-center justify-center text-purple-600">
+                <Sparkles size={20} />
+              </div>
+              <div>
+                <p className="font-black text-sm text-gray-900 tracking-tight">Optimiser</p>
+                <p className="text-gray-500 font-medium text-xs">Let AI reshuffle your day for peak focus.</p>
+              </div>
+              <ArrowRight size={16} className="text-purple-400 opacity-50 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
+            </button>
+          </div>
             </>
           )}
         </div>
