@@ -153,12 +153,14 @@ const DayOffSuggester: React.FC<DayOffSuggesterProps> = ({
   const weekSuggestions = useMemo(() => {
     return weekDays.map(({ week, days }) => {
       const scored = days.map((d) => ({ day: d, score: scoreDay(d) }));
-      const best = scored
-        .filter((s) => s.score < Infinity)
-        .sort((a, b) => a.score - b.score)
-        .slice(0, daysOffPerWeek)
-        .map((s) => s.day);
       const alreadyHasDayOff = days.some((d) => d.hasExistingDayOff);
+      const best = alreadyHasDayOff
+        ? []
+        : scored
+            .filter((s) => s.score < Infinity)
+            .sort((a, b) => a.score - b.score)
+            .slice(0, daysOffPerWeek)
+            .map((s) => s.day);
       const overload = week.totalWorkHours > threshold;
       const overloadRatio = week.totalWorkHours / threshold;
 
