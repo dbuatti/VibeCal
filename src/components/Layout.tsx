@@ -29,7 +29,7 @@ const Layout = ({ children }: LayoutProps) => {
         />
       </div>
 
-      <TopNav />
+      <TopNav isSyncing={isSyncing} onSync={handleGlobalSync} />
 
       <main className="flex-1 transition-all duration-700 ease-in-out relative z-10">
         <div className="mx-auto p-6 md:p-12 max-w-6xl animate-in fade-in slide-in-from-bottom-4 duration-1000">
