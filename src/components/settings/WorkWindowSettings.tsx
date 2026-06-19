@@ -24,20 +24,20 @@ const WorkWindowSettings = ({ settings, setSettings }: WorkWindowSettingsProps) 
       <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="space-y-2">
           <Label>Day Start</Label>
-          <input 
+          <Input 
             type="time" 
-            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             value={settings.day_start_time} 
             onChange={(e) => setSettings({...settings, day_start_time: e.target.value})}
+            className="h-12 rounded-xl"
           />
         </div>
         <div className="space-y-2">
           <Label>Day End</Label>
-          <input 
+          <Input 
             type="time" 
-            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             value={settings.day_end_time} 
             onChange={(e) => setSettings({...settings, day_end_time: e.target.value})}
+            className="h-12 rounded-xl"
           />
         </div>
         <div className="space-y-2">

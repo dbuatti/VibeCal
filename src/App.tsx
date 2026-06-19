@@ -35,7 +35,25 @@ const App = () => {
     return () => subscription.unsubscribe();
   }, []);
 
-  if (loading) return null;
+  if (loading) return (
+    <div className="min-h-screen flex items-center justify-center bg-[#FDFDFF]">
+      <div className="text-center space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
+        <div className="w-20 h-20 bg-indigo-50 rounded-[2.5rem] flex items-center justify-center mx-auto shadow-lg shadow-indigo-100">
+          <svg viewBox="0 0 24 24" className="w-10 h-10 text-indigo-600" fill="none" stroke="currentColor" strokeWidth="2">
+            <rect x="3" y="4" width="18" height="18" rx="2" />
+            <path d="M16 2v4M8 2v4M3 10h18" />
+          </svg>
+        </div>
+        <div className="space-y-2">
+          <h1 className="text-2xl font-black text-gray-900 tracking-tight">VibeCal</h1>
+          <p className="text-gray-400 font-medium text-sm">Loading your schedule...</p>
+        </div>
+        <div className="w-48 h-1.5 bg-gray-100 rounded-full overflow-hidden mx-auto">
+          <div className="h-full bg-indigo-600 rounded-full animate-pulse" style={{ width: '60%' }} />
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <QueryClientProvider client={queryClient}>

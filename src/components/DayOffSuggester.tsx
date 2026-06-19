@@ -258,6 +258,7 @@ const DayOffSuggester: React.FC<DayOffSuggesterProps> = ({
               <button
                 key={n}
                 onClick={() => setDaysOffPerWeek(n)}
+                aria-pressed={daysOffPerWeek === n}
                 className={cn(
                   'w-7 h-7 rounded-full text-[10px] font-black transition-all',
                   daysOffPerWeek === n ? 'bg-indigo-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-600'

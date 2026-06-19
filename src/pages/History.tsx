@@ -61,13 +61,10 @@ const History = () => {
         subtitle="Track your alignment and productivity trends."
         icon={HistoryIcon}
         actions={
-          <div className="flex gap-3">
-            <Button variant="outline" className="rounded-xl border-gray-200 font-bold text-xs uppercase tracking-widest h-12 px-6">
-              <Filter size={14} className="mr-2" /> Filter
-            </Button>
-            <Button variant="outline" className="rounded-xl border-gray-200 font-bold text-xs uppercase tracking-widest h-12 px-6">
-              <Calendar size={14} className="mr-2" /> Last 30 Days
-            </Button>
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
+              Last 30 days
+            </span>
           </div>
         }
       />

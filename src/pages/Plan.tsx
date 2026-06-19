@@ -643,9 +643,9 @@ const Plan = () => {
                 </PopoverContent>
               </Popover>
             ) : currentStep === 'requirements' && (
-              <Button variant="outline" className="bg-white border-gray-100 text-gray-500 rounded-xl font-black text-[9px] uppercase tracking-widest h-10 px-4 shadow-sm">
-                <Settings2 size={14} className="mr-2" /> Requirements
-              </Button>
+              <span className="inline-flex items-center gap-2 px-4 h-10 bg-indigo-50 text-indigo-600 rounded-xl font-black text-[9px] uppercase tracking-widest shadow-sm">
+                <Settings2 size={14} /> Requirements
+              </span>
             )}
             
             <div className="flex items-center gap-2">

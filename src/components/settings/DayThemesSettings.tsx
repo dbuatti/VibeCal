@@ -30,7 +30,7 @@ const DayThemesSettings = ({ themes, onThemeChange }: DayThemesSettingsProps) =>
       </CardHeader>
       <CardContent className="space-y-4">
         {themes.map((t, i) => (
-          <div key={i} className="flex items-center gap-4 p-3 bg-gray-50 rounded-xl">
+          <div key={i} className="flex items-center gap-4 p-3 bg-gray-50 rounded-xl border border-gray-100">
             <span className="w-24 font-bold text-gray-500">{t.label}</span>
             <Input 
               placeholder="e.g. Music, Admin, Deep Work" 

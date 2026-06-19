@@ -5,7 +5,7 @@ import {
   format, parseISO, isValid, isSameDay, isToday, addDays,
   startOfWeek, endOfWeek, isWithinInterval,
 } from 'date-fns';
-import { ChevronDown, ChevronUp, Maximize2, Minimize2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, Maximize2, Minimize2, Eye, EyeOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   CATEGORY_META,
@@ -199,15 +199,18 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
           ))}
         </div>
         <div className="flex items-center gap-3">
-          <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={hideBuffers}
-              onChange={(e) => setHideBuffers(e.target.checked)}
-              className="w-3.5 h-3.5 rounded accent-indigo-600"
-            />
-            <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Hide buffers & personal</span>
-          </label>
+          <button
+            onClick={() => setHideBuffers(!hideBuffers)}
+            className={cn(
+              "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-all text-[9px] font-black uppercase tracking-widest",
+              hideBuffers
+                ? "bg-indigo-50 text-indigo-600"
+                : "bg-gray-50 text-gray-400 hover:text-gray-600"
+            )}
+          >
+            {hideBuffers ? <EyeOff size={12} /> : <Eye size={12} />}
+            Hide buffers & personal
+          </button>
           <button
             onClick={toggleAll}
             className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-gray-50 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-all text-[9px] font-black uppercase tracking-widest"

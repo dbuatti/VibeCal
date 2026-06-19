@@ -206,7 +206,7 @@ const CalendarSettings = ({ calendars, isTesting, onDiscover, onToggle, onUpdate
                 <div className="py-10 text-center bg-gray-50 rounded-2xl border border-dashed border-gray-200 mx-6 mt-4">
                   <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">No calendars found</p>
                   <Button variant="link" onClick={onDiscover} className="text-indigo-600 text-[10px] font-black uppercase tracking-widest mt-2">
-                    Discover Now
+                    Find Calendars
                   </Button>
                 </div>
               )}

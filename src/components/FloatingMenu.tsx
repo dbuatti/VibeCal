@@ -41,13 +41,19 @@ const FloatingMenu = () => {
       {/* Backdrop Blur when open */}
       {isOpen && (
         <div 
+          aria-hidden="true"
           className="fixed inset-0 bg-white/40 backdrop-blur-md z-[-1] animate-in fade-in duration-500"
           onClick={() => setIsOpen(false)}
+          onKeyDown={(e) => e.key === 'Escape' && setIsOpen(false)}
         />
       )}
 
       {/* Menu Items */}
-      <div className={cn(
+      <div
+        role="dialog"
+        aria-label="Navigation menu"
+        onKeyDown={(e) => e.key === 'Escape' && setIsOpen(false)}
+        className={cn(
         "flex flex-col gap-4 transition-all duration-500 origin-bottom-right",
         isOpen ? "scale-100 opacity-100 translate-y-0" : "scale-50 opacity-0 translate-y-20 pointer-events-none"
       )}>

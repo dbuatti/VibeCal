@@ -155,7 +155,7 @@ const Index = () => {
                 </div>
               </div>
               <Button onClick={() => navigate('/plan')} variant="outline" className="rounded-2xl px-8 h-14 border-gray-100 font-black text-xs uppercase tracking-widest hover:bg-indigo-50 hover:text-indigo-600 transition-all">
-                Prepare Session
+                Optimise This Day
               </Button>
             </div>
           ) : (
