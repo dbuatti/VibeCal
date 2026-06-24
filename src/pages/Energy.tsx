@@ -769,6 +769,7 @@ const Energy = () => {
                   events={events}
                   categoriesByEvent={categoriesByEvent}
                   threshold={threshold}
+                  onDayOffCreated={() => loadData()}
                 />
               </CardContent>
             </Card>

@@ -21,7 +21,7 @@ export interface CategoryMeta {
 }
 
 export const CATEGORY_META: Record<AppointmentCategory, CategoryMeta> = {
-  mtt: { key: 'mtt', label: 'MTT', color: '#7C3AED', countsAsWork: true },
+  mtt: { key: 'mtt', label: 'Be You / Charity', color: '#7C3AED', countsAsWork: true },
   performance: { key: 'performance', label: 'Performance', color: '#E11D8E', countsAsWork: true },
   fnh: { key: 'fnh', label: 'FNH (Clinical)', color: '#0284C7', countsAsWork: true },
   coaching: { key: 'coaching', label: 'Voice / Piano Coaching', color: '#EA8A0C', countsAsWork: true },
@@ -45,11 +45,11 @@ export const CATEGORY_ORDER: AppointmentCategory[] = [
 
 const HEURISTICS: Array<{ category: AppointmentCategory; re: RegExp }> = [
   { category: 'buffer', re: /🚫|🔒|🌿|buffer|day off|rest|recovery|\bbreak\b/i },
+  { category: 'mtt', re: /\bmtt\b|melbourne theatre|pitch yourself/i },
   { category: 'fnh', re: /fnh|functional neuro|neuro.?health|peace framework|cranial|vestibular|primitive reflex|neuro assessment/i },
   { category: 'coaching', re: /voice|piano|coaching|singing|vocal|\blesson\b/i },
   { category: 'performance', re: /seussical|paw patrol|cabaret|carey|show|gig|concert|opening night|closing|tech rehears|dress rehears|performance|ceremony|cast call|cue to cue/i },
   { category: 'workshop', re: /mtfest|mt fest|workshop|masterclass|master class|seminar|\bintensive\b/i },
-  { category: 'mtt', re: /\bmtt\b|melbourne theatre|pitch yourself/i },
   { category: 'personal', re: /lunch|dinner|brunch|coffee|gym|workout|\bwalk\b|meditate|yoga|haircut|doctor|dentist|affirmat|daily affirm|journal|grocer/i },
 ];
 

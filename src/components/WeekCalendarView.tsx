@@ -1,11 +1,11 @@
 "use client";
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import {
   format, parseISO, isValid, isSameDay, isToday, addDays,
   startOfWeek, endOfWeek, isWithinInterval,
 } from 'date-fns';
-import { ChevronDown, ChevronUp, Maximize2, Minimize2, Eye, EyeOff } from 'lucide-react';
+import { ChevronDown, ChevronUp, Maximize2, Minimize2, Eye, EyeOff, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   CATEGORY_META,
@@ -90,6 +90,8 @@ const mergeIntervalsHours = (intervals: Interval[]): number => {
   return Math.max(0, total);
 };
 
+const LS_PREFIX = 'vibecal_calcom_blocked_';
+
 const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
   weeks,
   events,
@@ -98,6 +100,33 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
 }) => {
   const [expandedWeeks, setExpandedWeeks] = useState<Set<string>>(new Set());
   const [hideBuffers, setHideBuffers] = useState(true);
+  const [blockedWeeks, setBlockedWeeks] = useState<Set<string>>(() => {
+    const saved: Set<string> = new Set();
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(LS_PREFIX) && localStorage.getItem(key) === 'true') {
+        saved.add(key.replace(LS_PREFIX, ''));
+      }
+    }
+    return saved;
+  });
+
+  const keyForWeek = (weekStart: Date) => format(weekStart, 'yyyy-MM-dd');
+
+  const toggleBlocked = (weekStart: Date) => {
+    const key = keyForWeek(weekStart);
+    setBlockedWeeks((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+        localStorage.setItem(LS_PREFIX + key, 'false');
+      } else {
+        next.add(key);
+        localStorage.setItem(LS_PREFIX + key, 'true');
+      }
+      return next;
+    });
+  };
 
   const toggleWeek = (label: string) => {
     setExpandedWeeks((prev) => {
@@ -231,7 +260,8 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
             className={cn(
               'rounded-2xl border-2 p-5 transition-all',
               isCurrentWeek ? 'border-indigo-500 bg-indigo-50/40 shadow-md shadow-indigo-100' : 'border-gray-100 bg-white',
-              isExpanded && 'shadow-lg'
+              isExpanded && 'shadow-lg',
+              blockedWeeks.has(keyForWeek(week.weekStart)) && !isCurrentWeek && 'border-green-300 bg-green-50/20'
             )}
           >
             {/* Week header — always visible, clickable to toggle */}
@@ -259,6 +289,21 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
                 <span className={cn(over ? 'text-red-600' : 'text-gray-600')}>
                   {week.totalWorkHours}h load
                 </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); toggleBlocked(week.weekStart); }}
+                    className={cn(
+                      'text-[8px] font-black uppercase tracking-widest rounded-md px-2 py-1 transition-all flex items-center gap-1',
+                      blockedWeeks.has(keyForWeek(week.weekStart))
+                        ? 'bg-green-100 text-green-700 border border-green-300'
+                        : 'bg-gray-50 text-gray-400 hover:text-gray-600 border border-transparent hover:border-gray-200'
+                    )}
+                    aria-label={blockedWeeks.has(keyForWeek(week.weekStart)) ? 'Marked blocked in cal.com' : 'Mark as blocked in cal.com'}
+                  >
+                    <ExternalLink size={10} />
+                    {blockedWeeks.has(keyForWeek(week.weekStart)) ? 'cal.com blocked' : 'cal.com'}
+                  </button>
+                </div>
                 {isExpanded
                   ? <ChevronUp size={14} className="text-gray-400" />
                   : <ChevronDown size={14} className="text-gray-400" />}

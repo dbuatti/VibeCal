@@ -12,7 +12,7 @@ import {
 } from '@/lib/eventClassifier';
 import {
   CalendarHeart, Sun, Coffee, Clock, AlertCircle, CheckCircle2,
-  TrendingDown, ArrowRight, Settings2, CalendarPlus, Loader2,
+  TrendingDown, ArrowRight, Settings2, Plus, Loader2,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
@@ -46,6 +46,7 @@ interface DayOffSuggesterProps {
   events: CachedEvent[];
   categoriesByEvent: Record<string, AppointmentCategory>;
   threshold: number;
+  onDayOffCreated?: () => void;
 }
 
 interface DayLoad {
@@ -88,8 +89,46 @@ const DayOffSuggester: React.FC<DayOffSuggesterProps> = ({
   events,
   categoriesByEvent,
   threshold,
+  onDayOffCreated,
 }) => {
   const [daysOffPerWeek, setDaysOffPerWeek] = useState(1);
+  const [creatingDays, setCreatingDays] = useState<Set<string>>(new Set());
+
+  const handleCreateDayOff = async (day: DayLoad) => {
+    const dateKey = format(day.date, 'yyyy-MM-dd');
+    if (creatingDays.has(dateKey)) return;
+    setCreatingDays((prev) => new Set(prev).add(dateKey));
+    try {
+      const startDateTime = new Date(day.date);
+      startDateTime.setHours(9, 0, 0, 0);
+      const endDateTime = new Date(day.date);
+      endDateTime.setHours(21, 0, 0, 0);
+      const { data, error } = await supabase.functions.invoke('create-appointment', {
+        body: {
+          events: [{
+            title: '🌿 Day Off',
+            startDateTime: startDateTime.toISOString(),
+            endDateTime: endDateTime.toISOString(),
+            notes: 'Created by VibeCal Day Off Suggester',
+            status: 'confirmed',
+          }],
+        },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      showSuccess(`🌿 Day off created for ${format(day.date, 'EEEE, MMM d')}`);
+      onDayOffCreated?.();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to create day off';
+      showError(msg);
+    } finally {
+      setCreatingDays((prev) => {
+        const next = new Set(prev);
+        next.delete(dateKey);
+        return next;
+      });
+    }
+  };
 
   // Build day-level load for each week
   const weekDays: Array<{ week: WeekBucket; days: DayLoad[] }> = useMemo(() => {
@@ -427,9 +466,19 @@ const DayOffSuggester: React.FC<DayOffSuggesterProps> = ({
                     )}
                   >
                     {isSuggested && (
-                      <div className="absolute -top-2 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded-full bg-indigo-600 text-white text-[7px] font-black uppercase tracking-widest whitespace-nowrap z-10">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleCreateDayOff(day); }}
+                        disabled={creatingDays.has(format(day.date, 'yyyy-MM-dd'))}
+                        aria-label="Create day off"
+                        className="absolute -top-2 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded-full bg-indigo-600 text-white text-[7px] font-black uppercase tracking-widest whitespace-nowrap z-10 hover:bg-indigo-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1"
+                      >
+                        {creatingDays.has(format(day.date, 'yyyy-MM-dd')) ? (
+                          <Loader2 size={8} className="animate-spin" />
+                        ) : (
+                          <Plus size={8} />
+                        )}
                         Day off
-                      </div>
+                      </button>
                     )}
                     <div className="flex items-center justify-center gap-1 mb-1">
                       <span className="text-[8px] font-black text-gray-400 uppercase tracking-widest">{day.dayLabel}</span>

@@ -1,6 +1,6 @@
 // @ts-nocheck
 // Classifies calendar events into appointment-type categories using Gemini.
-// Categories: buffer, mtt, performance, fnh, coaching, workshop, personal, other
+// Categories: buffer, mtt (Be You charity), performance, fnh, coaching, workshop, personal, other
 // Deploy with: supabase functions deploy classify-event-types --project-ref <ref>
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -22,11 +22,11 @@ const CATEGORIES = [
 // is configured or the AI call fails.
 const HEURISTICS: Array<{ category: string; re: RegExp }> = [
   { category: 'buffer', re: /🚫|🔒|🌿|buffer|day off|rest|recovery|break/i },
+  { category: 'mtt', re: /\bmtt\b|melbourne theatre|pitch yourself|mtt masterclass|mtt class|mtt session/i },
   { category: 'fnh', re: /fnh|functional neuro|neuro.?health|peace framework|cranial|vestibular|primitive reflex|neuro assessment/i },
   { category: 'coaching', re: /voice|piano|coaching|lesson|singing|vocal/i },
   { category: 'performance', re: /seussical|paw patrol|cabaret|carey|show|gig|concert|opening night|closing|tech rehears|dress rehears|performance|ceremony|cast call|cue to cue/i },
   { category: 'workshop', re: /mtfest|mt fest|workshop|masterclass|master class|seminar| intensive /i },
-  { category: 'mtt', re: /\bmtt\b|melbourne theatre|pitch yourself|mtt masterclass|mtt class|mtt session/i },
   { category: 'personal', re: /lunch|dinner|brunch|coffee|gym|workout|walk|meditate|yoga|appointment|haircut|doctor|dentist|affirmat|daily affirm|journal|grocer/i },
 ];
 
@@ -65,7 +65,7 @@ Assign exactly ONE category to each event from this list: ${CATEGORIES.join(', '
 
 Category definitions:
 - buffer: recovery / transition blocks the user created around other events (titles often contain 🚫, 🔒, 🌿, "Buffer", "Day off", "Rest")
-- mtt: Melbourne Theatre Troupe classes, masterclasses, sessions (titles contain "MTT", "Pitch Yourself")
+- mtt: Be You charity work — Melbourne Theatre Troupe classes, masterclasses, sessions (titles contain "MTT", "Pitch Yourself")
 - performance: shows, gigs, concerts, musicals, rehearsals tied to a production (Seussical, Paw Patrol, cabaret, opening/closing night, tech/dress rehearsal, cast call)
 - fnh: Functional Neuro Health clinical assessments (PEACE Framework, cranial nerve, vestibular, primitive reflex)
 - coaching: Voice or piano coaching / lessons / singing
