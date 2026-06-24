@@ -36,8 +36,11 @@ Deno.serve(async (req) => {
     const userTimezone = profile?.timezone || 'Australia/Melbourne';
     
     if (!profile?.apple_id || !profile?.apple_app_password) {
+      console.error(`[${functionName}] No Apple credentials in profile`);
       return new Response(JSON.stringify({ error: "No Apple credentials configured" }), { status: 400, headers: corsHeaders });
     }
+
+    console.log(`[${functionName}] Credentials found for user ${user.id}`);
 
     // 3. Cleanup Step
     const todayStartISO = formatInTimeZone(new Date(), userTimezone, "yyyy-MM-dd'T'00:00:00XXX");
@@ -46,6 +49,7 @@ Deno.serve(async (req) => {
       method: 'DELETE',
       headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
     });
+    console.log(`[${functionName}] Cleanup done for events before ${todayStartISO}`);
 
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
     const headers = {
@@ -101,6 +105,7 @@ Deno.serve(async (req) => {
         discoveredCalendars.push({ user_id: user.id, calendar_id: href.startsWith('http') ? href : `${baseUrl}${href}`, calendar_name: name, provider: 'apple' });
       }
     }
+    console.log(`[${functionName}] Discovered ${discoveredCalendars.length} calendars: ${discoveredCalendars.map(c => c.calendar_name).join(', ') || 'none'}`);
 
     // 6. Sync Calendar List
     const existingCalsRes = await fetch(`${supabaseUrl}/rest/v1/user_calendars?user_id=eq.${user.id}&provider=eq.apple`, {
@@ -132,6 +137,7 @@ Deno.serve(async (req) => {
 
     // 7. Fetch Events
     const enabledCalendars = calendarsToUpsert.filter(c => c.is_enabled);
+    console.log(`[${functionName}] ${enabledCalendars.length} enabled calendars to fetch from`);
     const allEvents = [];
     
     const startRange = customMin ? new Date(customMin).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z' : 
@@ -141,6 +147,7 @@ Deno.serve(async (req) => {
 
     for (const cal of enabledCalendars) {
       try {
+        console.log(`[${functionName}] Fetching events from calendar: ${cal.calendar_name}`);
         const reportRes = await fetch(cal.calendar_id, {
           method: 'REPORT',
           headers: { ...headers, 'Content-Type': 'application/xml; charset=utf-8' },
@@ -156,9 +163,11 @@ Deno.serve(async (req) => {
               </C:filter>
             </C:calendar-query>`
         });
+        console.log(`[${functionName}] REPORT response status: ${reportRes.status} for ${cal.calendar_name}`);
 
         const reportText = await reportRes.text();
         const icsBlocks = reportText.match(/<[^>]*calendar-data[^>]*>([\s\S]*?)<\/[^>]*calendar-data>/gi) || [];
+        console.log(`[${functionName}] ${icsBlocks.length} ICS blocks from ${cal.calendar_name}`);
         
         for (let i = 0; i < icsBlocks.length; i++) {
           let icsData = icsBlocks[i].replace(/^<[^>]*calendar-data[^>]*>/i, '').replace(/<\/[^>]*calendar-data>$/i, '');
@@ -218,14 +227,18 @@ Deno.serve(async (req) => {
       } catch (err) { console.error(`[${functionName}] Error in ${cal.calendar_name}:`, err.message); }
     }
 
+    console.log(`[${functionName}] Total events parsed: ${allEvents.length}`);
     if (allEvents.length > 0) {
+      console.log(`[${functionName}] Upserting ${allEvents.length} events to cache`);
       await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
         method: 'POST',
         headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}`, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' },
         body: JSON.stringify(allEvents)
       });
+      console.log(`[${functionName}] Upsert complete`);
     }
 
+    console.log(`[${functionName}] Returning count: ${allEvents.length}`);
     return new Response(JSON.stringify({ count: allEvents.length }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });

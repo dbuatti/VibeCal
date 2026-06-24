@@ -116,8 +116,10 @@ Deno.serve(async (req) => {
     });
 
     // 5. Fetch Calendars
+    console.log(`[${functionName}] Fetching Google calendar list`);
     const listData = await fetchWithRetry('https://www.googleapis.com/calendar/v3/users/me/calendarList');
     const googleCalendars = (listData.items || []).filter(cal => !cal.id.includes('@import.calendar.google.com'));
+    console.log(`[${functionName}] Found ${googleCalendars.length} Google calendars`);
 
     // 6. Sync Calendar List
     const existingCalsRes = await fetch(`${supabaseUrl}/rest/v1/user_calendars?user_id=eq.${user.id}&provider=eq.google`, {
@@ -172,7 +174,9 @@ Deno.serve(async (req) => {
     if (!customMax) syncEndTime.setFullYear(syncEndTime.getFullYear() + 1);
 
     const allEvents = [];
+    console.log(`[${functionName}] ${enabledCalendarIds.length} enabled Google calendars to fetch from`);
     for (const calId of enabledCalendarIds) {
+      console.log(`[${functionName}] Fetching events for calendar: ${calId}`);
       const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?timeMin=${syncStartTime.toISOString()}&singleEvents=true&orderBy=startTime&timeMax=${syncEndTime.toISOString()}`;
       const data = await fetchWithRetry(url);
       
@@ -195,9 +199,12 @@ Deno.serve(async (req) => {
         };
       });
       allEvents.push(...events);
+      console.log(`[${functionName}] Calendar ${calId}: ${events.length} events`);
     }
 
+    console.log(`[${functionName}] Total events: ${allEvents.length}`);
     if (allEvents.length > 0) {
+      console.log(`[${functionName}] Upserting ${allEvents.length} events`);
       await fetch(`${supabaseUrl}/rest/v1/calendar_events_cache?on_conflict=user_id,event_id`, {
         method: 'POST',
         headers: { 
@@ -208,8 +215,10 @@ Deno.serve(async (req) => {
         },
         body: JSON.stringify(allEvents)
       });
+      console.log(`[${functionName}] Upsert complete`);
     }
 
+    console.log(`[${functionName}] Returning count: ${allEvents.length}`);
     return new Response(JSON.stringify({ count: allEvents.length }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
