@@ -36,7 +36,7 @@ Deno.serve(async (req) => {
     const userTimezone = profile?.timezone || 'Australia/Melbourne';
     
     if (!profile?.apple_id || !profile?.apple_app_password) {
-      return new Response(JSON.stringify({ count: 0, message: "No credentials" }), { headers: corsHeaders });
+      return new Response(JSON.stringify({ error: "No Apple credentials configured" }), { status: 400, headers: corsHeaders });
     }
 
     // 3. Cleanup Step
@@ -96,7 +96,8 @@ Deno.serve(async (req) => {
       const href = resp.match(/<[^:]*:?href[^>]*>([^<]+)<\/[^:]*:?href>/i)?.[1];
       const name = resp.match(/<[^:]*:?displayname[^>]*>([^<]+)<\/[^:]*:?displayname>/i)?.[1];
       const isCalendar = /resourcetype[^>]*>.*?calendar/is.test(resp);
-      if (href && isCalendar && name && !name.includes('@')) {
+      const calName = name || '';
+      if (href && isCalendar && name && !calName.toLowerCase().includes('reminder')) {
         discoveredCalendars.push({ user_id: user.id, calendar_id: href.startsWith('http') ? href : `${baseUrl}${href}`, calendar_name: name, provider: 'apple' });
       }
     }

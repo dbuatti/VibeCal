@@ -165,7 +165,8 @@ Deno.serve(async (req) => {
         const href = resp.match(/<[^:]*:?href[^>]*>([^<]+)<\/[^:]*:?href>/i)?.[1];
         const name = resp.match(/<[^:]*:?displayname[^>]*>([^<]+)<\/[^:]*:?displayname>/i)?.[1];
         const isCalendar = /resourcetype[^>]*>.*?calendar/is.test(resp);
-        if (href && isCalendar && name && !name.toLowerCase().includes('reminders') && !name.includes('@')) {
+        const calName = name || '';
+        if (href && isCalendar && name && !calName.toLowerCase().includes('reminder')) {
           targetCalendarUrl = href.startsWith('http') ? href : `${baseUrl}${href}`;
           targetCalendarName = name;
           break;

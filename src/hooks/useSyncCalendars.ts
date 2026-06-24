@@ -72,15 +72,43 @@ export function useSyncCalendars(): UseSyncCalendarsReturn {
       ]);
 
       const googleResult = results[0];
+      const appleResult = results[1];
+      let googleError: string | null = null;
+      let appleError: string | null = null;
+
       if (googleResult.status === 'fulfilled') {
+        const data = googleResult.value.data as Record<string, unknown> | undefined;
         const err = googleResult.value.error;
         if (err) {
-          const msg = (err.message || '').toLowerCase();
-          if (msg.includes('401') || msg.includes('unauthorized') || err === 'auth_expired') {
+          googleError = typeof err === 'string' ? err : (err as { message?: string }).message || 'Google sync failed';
+          const msg = googleError.toLowerCase();
+          if (msg.includes('401') || msg.includes('unauthorized') || googleError === 'auth_expired') {
             setIsSyncing(false);
             return { success: false, tokenMissing: true };
           }
+        } else if (data?.error) {
+          googleError = String(data.error);
         }
+      } else {
+        googleError = 'Google sync rejected';
+      }
+
+      if (appleResult.status === 'fulfilled') {
+        const data = appleResult.value.data as Record<string, unknown> | undefined;
+        const err = appleResult.value.error;
+        if (err) {
+          appleError = typeof err === 'string' ? err : (err as { message?: string }).message || 'Apple sync failed';
+        } else if (data?.error) {
+          appleError = String(data.error);
+        }
+      } else {
+        appleError = 'Apple sync rejected';
+      }
+
+      if (googleError && appleError) {
+        showError(`Sync failed: ${googleError} / ${appleError}`);
+        setIsSyncing(false);
+        return { success: false, tokenMissing: false };
       }
 
       const now = new Date();
