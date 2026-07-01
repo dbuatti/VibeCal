@@ -43,6 +43,7 @@ Deno.serve(async (req) => {
     console.log(`[${functionName}] Credentials found for user ${user.id}`);
 
     // 3. Cleanup Step — delete ALL existing Apple events from cache so stale/deleted entries don't persist
+    const todayStartISO = formatInTimeZone(new Date(), userTimezone, "yyyy-MM-dd'T'00:00:00XXX");
     const cleanupUrl = `${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&provider=eq.apple`;
     await fetch(cleanupUrl, {
       method: 'DELETE',
