@@ -42,6 +42,8 @@ interface WeekCalendarViewProps {
   events: CachedEvent[];
   categoriesByEvent: Record<string, AppointmentCategory>;
   threshold: number;
+  blockedWeeks?: Set<string>;
+  onToggleBlocked?: (weekStart: Date) => void;
 }
 
 interface DayColumn {
@@ -57,6 +59,7 @@ interface DayColumn {
     hours: number;
   }>;
   workHours: number;
+  isFreeDay: boolean;
 }
 
 const durationHours = (e: CachedEvent): number => {
@@ -97,10 +100,13 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
   events,
   categoriesByEvent,
   threshold,
+  blockedWeeks: externalBlocked,
+  onToggleBlocked,
 }) => {
   const [expandedWeeks, setExpandedWeeks] = useState<Set<string>>(new Set());
   const [hideBuffers, setHideBuffers] = useState(true);
-  const [blockedWeeks, setBlockedWeeks] = useState<Set<string>>(() => {
+  const [localBlocked, setLocalBlocked] = useState<Set<string>>(() => {
+    if (externalBlocked) return externalBlocked;
     const saved: Set<string> = new Set();
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
@@ -110,12 +116,17 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
     }
     return saved;
   });
+  const blockedWeeks = externalBlocked ?? localBlocked;
 
   const keyForWeek = (weekStart: Date) => format(weekStart, 'yyyy-MM-dd');
 
   const toggleBlocked = (weekStart: Date) => {
+    if (onToggleBlocked) {
+      onToggleBlocked(weekStart);
+      return;
+    }
     const key = keyForWeek(weekStart);
-    setBlockedWeeks((prev) => {
+    setLocalBlocked((prev) => {
       const next = new Set(prev);
       if (next.has(key)) {
         next.delete(key);
@@ -178,6 +189,18 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
           if (CATEGORY_META[de.category].countsAsWork) allWorkEvents.push(de);
         });
 
+        const freeDayStart = new Date(date);
+        freeDayStart.setHours(9, 0, 0, 0);
+        const freeDayEnd = new Date(date);
+        freeDayEnd.setHours(18, 0, 0, 0);
+        const hasEventInWindow = events.some(e => {
+          if (!e.start_time) return false;
+          const s = parseISO(e.start_time);
+          if (!isValid(s) || !isSameDay(s, date)) return false;
+          const en = e.end_time ? parseISO(e.end_time) : new Date(s.getTime() + 30 * 60 * 1000);
+          return s < freeDayEnd && en > freeDayStart;
+        });
+
         days.push({
           date,
           dayLabel: format(date, 'EEE'),
@@ -185,6 +208,7 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
           isToday: isToday(date),
           events: dayEvents,
           workHours: Math.round(workHours * 100) / 100,
+          isFreeDay: !hasEventInWindow,
         });
       }
       // Key events = top 4 work events by duration
@@ -368,7 +392,12 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
                         {day.dayNumber}
                       </span>
                     </div>
-                    {day.events.length === 0 ? (
+                    {day.events.length === 0 && day.isFreeDay ? (
+                      <div className="border-2 border-dashed border-green-200 rounded-lg p-3 text-center">
+                        <p className="text-[9px] font-black text-green-500 uppercase tracking-widest">FREE DAY</p>
+                        <p className="text-[7px] font-black text-gray-300 uppercase tracking-widest mt-0.5">9am–6pm available</p>
+                      </div>
+                    ) : day.events.length === 0 ? (
                       <p className="text-[8px] font-black text-gray-300 uppercase tracking-widest text-center py-4">No slots</p>
                     ) : (
                       <div className="space-y-1.5">
@@ -436,6 +465,8 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
                           </p>
                           <p className="text-[7px] font-black text-gray-300 uppercase tracking-widest">{day.events.length} appts</p>
                         </>
+                      ) : day.isFreeDay ? (
+                        <p className="text-[8px] font-black text-green-400 uppercase tracking-widest py-1">FREE</p>
                       ) : (
                         <p className="text-[7px] font-black text-gray-300 uppercase tracking-widest py-1">—</p>
                       )}

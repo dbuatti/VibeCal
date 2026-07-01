@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '@/components/Layout';
 import PageHeader from '@/components/PageHeader';
@@ -118,6 +118,8 @@ const Energy = () => {
   const [usedAI, setUsedAI] = useState(false);
   const [includeBuffers, setIncludeBuffers] = useState(false);
   const [threshold, setThreshold] = useState(DEFAULT_THRESHOLD);
+  const [blockedWeeks, setBlockedWeeks] = useState<Set<string>>(new Set());
+  const thresholdSaveRef = useRef<NodeJS.Timeout | null>(null);
   const [hasSyncedEver, setHasSyncedEver] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
   const [weekRange, setWeekRange] = useState<WeekRangeOption>(6);
@@ -156,6 +158,27 @@ const Energy = () => {
         setCategoriesByEvent(byEventId);
         setUsedAI(ai);
       }
+
+      // Load saved weekly goal from user_settings
+      const { data: settingsData } = await supabase
+        .from('user_settings')
+        .select('weekly_goal_hours')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      if (settingsData?.weekly_goal_hours) {
+        setThreshold(settingsData.weekly_goal_hours);
+      }
+
+      // Load blocked weeks from week_calendar_status
+      const { data: blockedData } = await supabase
+        .from('week_calendar_status')
+        .select('week_start_date')
+        .eq('user_id', user.id)
+        .eq('is_blocked', true);
+      if (blockedData) {
+        const blocked = new Set(blockedData.map((row: { week_start_date: string }) => row.week_start_date));
+        setBlockedWeeks(blocked);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to load calendar data';
       showError(msg);
@@ -180,6 +203,44 @@ const Energy = () => {
     setIsProcessing(false);
     setStatusText('');
   };
+
+  // Save threshold to backend with debounce
+  useEffect(() => {
+    const userPromise = supabase.auth.getUser();
+    userPromise.then(({ data: { user } }) => {
+      if (!user) return;
+      if (thresholdSaveRef.current) clearTimeout(thresholdSaveRef.current);
+      thresholdSaveRef.current = setTimeout(async () => {
+        await supabase
+          .from('user_settings')
+          .upsert({ user_id: user.id, weekly_goal_hours: threshold }, { onConflict: 'user_id' });
+      }, 800);
+    });
+  }, [threshold]);
+
+  const handleToggleBlocked = useCallback(async (weekStart: Date) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const weekKey = format(weekStart, 'yyyy-MM-dd');
+    const currentlyBlocked = blockedWeeks.has(weekKey);
+    setBlockedWeeks((prev) => {
+      const next = new Set(prev);
+      if (currentlyBlocked) next.delete(weekKey);
+      else next.add(weekKey);
+      return next;
+    });
+    if (currentlyBlocked) {
+      await supabase
+        .from('week_calendar_status')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('week_start_date', weekKey);
+    } else {
+      await supabase
+        .from('week_calendar_status')
+        .upsert({ user_id: user.id, week_start_date: weekKey, is_blocked: true }, { onConflict: 'user_id,week_start_date' });
+    }
+  }, [blockedWeeks]);
 
   // Group events into contiguous Monday-Sunday weeks.
   const weeks: WeekBucket[] = useMemo(() => {
@@ -729,6 +790,8 @@ const Energy = () => {
                   events={events}
                   categoriesByEvent={categoriesByEvent}
                   threshold={threshold}
+                  blockedWeeks={blockedWeeks}
+                  onToggleBlocked={handleToggleBlocked}
                 />
               </CardContent>
             </Card>
