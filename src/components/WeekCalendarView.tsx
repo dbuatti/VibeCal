@@ -410,29 +410,28 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
             {isExpanded ? (
               /* EXPANDED — full day columns with all appointments */
               <div className="grid grid-cols-7 gap-2">
-                {days.map((day) => {
-                  const dayKey = format(day.date, 'yyyy-MM-dd');
-                  const isDayBlocked = blockedDays.has(dayKey);
-                  return (
+                {days.map((day) => (
                   <div
-                    key={dayKey}
+                    key={format(day.date, 'yyyy-MM-dd')}
                     className={cn(
                       'rounded-xl border min-h-[120px] p-2 transition-all',
-                      isDayBlocked ? 'border-gray-300 bg-gray-200/50' : day.isToday ? 'border-indigo-300 bg-indigo-50/50' : 'border-gray-100 bg-gray-50/30'
+                      blockedDays.has(format(day.date, 'yyyy-MM-dd')) ? 'border-gray-300 bg-gray-200/50' : day.isToday ? 'border-indigo-300 bg-indigo-50/50' : 'border-gray-100 bg-gray-50/30'
                     )}
                   >
                     <div className="flex flex-col items-center gap-0.5 mb-1.5">
                       <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">{day.dayLabel}</span>
+                      {(() => { const b = blockedDays.has(format(day.date, 'yyyy-MM-dd')); return (
                       <button
                         onClick={() => toggleBlockedDay(day.date)}
                         className={cn(
                           'text-[7px] font-black uppercase tracking-widest rounded px-1.5 py-0.5 transition-all leading-tight',
-                          isDayBlocked ? 'bg-gray-400 text-white' : 'bg-gray-100 text-gray-300 hover:text-gray-500'
+                          b ? 'bg-gray-400 text-white' : 'bg-gray-100 text-gray-300 hover:text-gray-500'
                         )}
-                        aria-label={isDayBlocked ? 'Unblock this day' : 'Block this day'}
+                        aria-label={b ? 'Unblock this day' : 'Block this day'}
                       >
-                        {isDayBlocked ? 'BLOCKED' : '○'}
+                        {b ? 'BLOCKED' : '○'}
                       </button>
+                      ); })()}
                       <span className={cn(
                         'text-[10px] font-black w-5 h-5 rounded-full flex items-center justify-center',
                         day.isToday ? 'bg-indigo-600 text-white' : 'text-gray-400'
@@ -480,28 +479,26 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
                           );
                         })}
                       </div>
-                    )}
-                  </div>
-                ))}
+                      )}
+                    </div>
+                  ))}
               </div>
             ) : (
               /* COLLAPSED — summary: daily hour totals + key events */
               <div className="space-y-3">
                 {/* Daily hour totals — compact strip */}
                 <div className="grid grid-cols-7 gap-1.5">
-                  {days.map((day) => {
-                    const isDayBlocked = blockedDays.has(format(day.date, 'yyyy-MM-dd'));
-                    return (
+                  {days.map((day) => (
                     <div
                       key={format(day.date, 'yyyy-MM-dd')}
                       className={cn(
                         'rounded-lg p-1.5 text-center transition-all',
-                        isDayBlocked ? 'bg-gray-200/50 border border-gray-300' : day.isToday ? 'bg-indigo-50 border border-indigo-200' : 'bg-gray-50/50 border border-gray-100'
+                        blockedDays.has(format(day.date, 'yyyy-MM-dd')) ? 'bg-gray-200/50 border border-gray-300' : day.isToday ? 'bg-indigo-50 border border-indigo-200' : 'bg-gray-50/50 border border-gray-100'
                       )}
                     >
                       <div className="flex items-center justify-center gap-1 mb-0.5">
                         <span className="text-[8px] font-black text-gray-400 uppercase tracking-widest">{day.dayLabel}</span>
-                        {isDayBlocked && <span className="text-[5px] font-black text-gray-500 uppercase tracking-widest bg-gray-300/50 rounded px-1">BLOCKED</span>}
+                        {blockedDays.has(format(day.date, 'yyyy-MM-dd')) && <span className="text-[5px] font-black text-gray-500 uppercase tracking-widest bg-gray-300/50 rounded px-1">BLOCKED</span>}
                         <span className={cn(
                           'text-[8px] font-black w-3.5 h-3.5 rounded-full flex items-center justify-center',
                           day.isToday ? 'bg-indigo-600 text-white' : 'text-gray-300'
@@ -511,7 +508,7 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
                       </div>
                       {day.workHours > 0 ? (
                         <>
-                          <p className={cn('text-xs font-black', day.isToday ? 'text-indigo-600' : 'text-gray-700')}>
+                          <p className={cn('text-xs font-black', day.isToday ? 'bg-indigo-600 text-white' : 'text-gray-700')}>
                             {day.workHours}h
                           </p>
                           <p className="text-[7px] font-black text-gray-300 uppercase tracking-widest">{day.events.length} appts</p>
