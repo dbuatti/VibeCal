@@ -42,14 +42,13 @@ Deno.serve(async (req) => {
 
     console.log(`[${functionName}] Credentials found for user ${user.id}`);
 
-    // 3. Cleanup Step
-    const todayStartISO = formatInTimeZone(new Date(), userTimezone, "yyyy-MM-dd'T'00:00:00XXX");
-    const cleanupUrl = `${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&provider=eq.apple&start_time=lt.${encodeURIComponent(todayStartISO)}`;
+    // 3. Cleanup Step — delete ALL existing Apple events from cache so stale/deleted entries don't persist
+    const cleanupUrl = `${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&provider=eq.apple`;
     await fetch(cleanupUrl, {
       method: 'DELETE',
       headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
     });
-    console.log(`[${functionName}] Cleanup done for events before ${todayStartISO}`);
+    console.log(`[${functionName}] Cleanup done — deleted all Apple events from cache`);
 
     const auth = btoa(`${profile.apple_id}:${profile.apple_app_password}`);
     const headers = {
