@@ -119,6 +119,7 @@ const Energy = () => {
   const [includeBuffers, setIncludeBuffers] = useState(false);
   const [threshold, setThreshold] = useState(DEFAULT_THRESHOLD);
   const [blockedWeeks, setBlockedWeeks] = useState<Set<string>>(new Set());
+  const [blockedDays, setBlockedDays] = useState<Set<string>>(new Set());
   const thresholdSaveRef = useRef<NodeJS.Timeout | null>(null);
   const [hasSyncedEver, setHasSyncedEver] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
@@ -178,6 +179,17 @@ const Energy = () => {
       if (blockedData) {
         const blocked = new Set(blockedData.map((row: { week_start_date: string }) => row.week_start_date));
         setBlockedWeeks(blocked);
+      }
+
+      // Load blocked days from day_status
+      const { data: dayData } = await supabase
+        .from('day_status')
+        .select('date')
+        .eq('user_id', user.id)
+        .eq('is_blocked', true);
+      if (dayData) {
+        const blocked = new Set(dayData.map((row: { date: string }) => row.date));
+        setBlockedDays(blocked);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to load calendar data';
@@ -241,6 +253,27 @@ const Energy = () => {
         .upsert({ user_id: user.id, week_start_date: weekKey, is_blocked: true }, { onConflict: 'user_id,week_start_date' });
     }
   }, [blockedWeeks]);
+
+  const handleToggleBlockedDay = useCallback(async (date: Date) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const dateKey = format(date, 'yyyy-MM-dd');
+    const currentlyBlocked = blockedDays.has(dateKey);
+    setBlockedDays((prev) => {
+      const next = new Set(prev);
+      if (currentlyBlocked) next.delete(dateKey);
+      else next.add(dateKey);
+      return next;
+    });
+    try {
+      const { error } = await supabase.functions.invoke('block-day', {
+        body: { date: dateKey, blocked: !currentlyBlocked },
+      });
+      if (error) console.error('block-day error:', error);
+    } catch (err) {
+      console.error('Failed to block day:', err);
+    }
+  }, [blockedDays]);
 
   // Group events into contiguous Monday-Sunday weeks.
   const weeks: WeekBucket[] = useMemo(() => {
