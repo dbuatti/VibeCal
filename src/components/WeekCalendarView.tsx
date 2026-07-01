@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import {
   format, parseISO, isValid, isSameDay, isToday, addDays,
   startOfWeek, endOfWeek, isWithinInterval,
@@ -108,6 +108,13 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
   onToggleBlockedDay,
 }) => {
   const [expandedWeeks, setExpandedWeeks] = useState<Set<string>>(new Set());
+  const hasAutoExpanded = useRef(false);
+  useEffect(() => {
+    if (weeks.length > 0 && !hasAutoExpanded.current) {
+      hasAutoExpanded.current = true;
+      setExpandedWeeks(new Set(weeks.map(w => w.label)));
+    }
+  }, [weeks]);
   const [hideBuffers, setHideBuffers] = useState(true);
   const [localBlocked, setLocalBlocked] = useState<Set<string>>(() => {
     if (externalBlocked) return externalBlocked;
@@ -324,9 +331,12 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
             )}
           >
             {/* Week header — always visible, clickable to toggle */}
-            <button
+            <div
               onClick={() => toggleWeek(week.label)}
-              className="flex items-center justify-between w-full mb-4 flex-wrap gap-2 text-left"
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleWeek(week.label); } }}
+              role="button"
+              tabIndex={0}
+              className="flex items-center justify-between w-full mb-4 flex-wrap gap-2 text-left cursor-pointer"
             >
               <div className="flex items-center gap-2.5">
                 {isCurrentWeek && <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />}
@@ -367,7 +377,7 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
                   ? <ChevronUp size={14} className="text-gray-400" />
                   : <ChevronDown size={14} className="text-gray-400" />}
               </div>
-            </button>
+            </div>
 
             {/* Capacity bar — always visible */}
             <div className="flex items-center gap-3 mb-4">

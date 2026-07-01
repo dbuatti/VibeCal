@@ -120,9 +120,10 @@ const Energy = () => {
   const [threshold, setThreshold] = useState(DEFAULT_THRESHOLD);
   const [blockedWeeks, setBlockedWeeks] = useState<Set<string>>(new Set());
   const [blockedDays, setBlockedDays] = useState<Set<string>>(new Set());
-  const thresholdSaveRef = useRef<NodeJS.Timeout | null>(null);
+  const isBlockingRef = useRef(false);
+  const [thresholdStatus, setThresholdStatus] = useState<'saved' | 'saving' | ''>('');
   const [hasSyncedEver, setHasSyncedEver] = useState(false);
-  const [viewMode, setViewMode] = useState<ViewMode>('overview');
+  const [viewMode, setViewMode] = useState<ViewMode>('calendar');
   const [weekRange, setWeekRange] = useState<WeekRangeOption>(6);
   const [showImporter, setShowImporter] = useState(false);
   const [now, setNow] = useState(new Date());
@@ -181,7 +182,14 @@ const Energy = () => {
         setBlockedWeeks(blocked);
       }
 
-      // Load blocked days from day_status
+      // Sync blocked days from cal.com to day_status (pulls blocks created in cal.com directly)
+      try {
+        await supabase.functions.invoke('sync-calendar-status', {});
+      } catch (_syncErr) {
+        // Non-fatal — fallback to day_status cache
+      }
+
+      // Load blocked days from day_status (now includes cal.com-synced data)
       const { data: dayData } = await supabase
         .from('day_status')
         .select('date')
@@ -216,19 +224,22 @@ const Energy = () => {
     setStatusText('');
   };
 
-  // Save threshold to backend with debounce
-  useEffect(() => {
-    const userPromise = supabase.auth.getUser();
-    userPromise.then(({ data: { user } }) => {
-      if (!user) return;
-      if (thresholdSaveRef.current) clearTimeout(thresholdSaveRef.current);
-      thresholdSaveRef.current = setTimeout(async () => {
-        await supabase
-          .from('user_settings')
-          .upsert({ user_id: user.id, weekly_goal_hours: threshold }, { onConflict: 'user_id' });
-      }, 800);
-    });
-  }, [threshold]);
+  // Save threshold to backend immediately
+  const saveThreshold = useCallback(async (value: number) => {
+    setThresholdStatus('saving');
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { setThresholdStatus(''); return; }
+    const { error } = await supabase
+      .from('user_settings')
+      .upsert({ user_id: user.id, weekly_goal_hours: value }, { onConflict: 'user_id' });
+    if (error) {
+      console.error('Failed to save weekly goal:', error.message);
+      setThresholdStatus('');
+    } else {
+      setThresholdStatus('saved');
+      setTimeout(() => setThresholdStatus(''), 2000);
+    }
+  }, []);
 
   const handleToggleBlocked = useCallback(async (weekStart: Date) => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -255,8 +266,10 @@ const Energy = () => {
   }, [blockedWeeks]);
 
   const handleToggleBlockedDay = useCallback(async (date: Date) => {
+    if (isBlockingRef.current) return;
+    isBlockingRef.current = true;
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) { isBlockingRef.current = false; return; }
     const dateKey = format(date, 'yyyy-MM-dd');
     const currentlyBlocked = blockedDays.has(dateKey);
     setBlockedDays((prev) => {
@@ -272,6 +285,8 @@ const Energy = () => {
       if (error) console.error('block-day error:', error);
     } catch (err) {
       console.error('Failed to block day:', err);
+    } finally {
+      isBlockingRef.current = false;
     }
   }, [blockedDays]);
 
@@ -825,6 +840,8 @@ const Energy = () => {
                   threshold={threshold}
                   blockedWeeks={blockedWeeks}
                   onToggleBlocked={handleToggleBlocked}
+                  blockedDays={blockedDays}
+                  onToggleBlockedDay={handleToggleBlockedDay}
                 />
               </CardContent>
             </Card>
@@ -1165,7 +1182,11 @@ const Energy = () => {
                     </div>
                   )}
                 </div>
-                <Slider value={[threshold]} onValueChange={(v) => setThreshold(v[0])} min={5} max={40} step={1} className="py-2" />
+                <div className="flex items-center gap-2">
+                  <Slider value={[threshold]} onValueChange={(v) => setThreshold(v[0])} onValueCommit={(v) => saveThreshold(v[0])} min={5} max={40} step={1} className="py-2 flex-1" />
+                  {thresholdStatus === 'saving' && <span className="text-[9px] font-black text-amber-500 uppercase tracking-widest shrink-0">Saving…</span>}
+                  {thresholdStatus === 'saved' && <span className="text-[9px] font-black text-green-600 uppercase tracking-widest shrink-0">Saved</span>}
+                </div>
                 <div className="flex justify-between text-[10px] font-black text-gray-400 uppercase tracking-widest">
                   <span>5h</span><span>20h</span><span>40h</span>
                 </div>
@@ -1173,7 +1194,7 @@ const Energy = () => {
                   {[20, 25, 30, 35].map((preset) => (
                     <button
                       key={preset}
-                      onClick={() => setThreshold(preset)}
+                      onClick={() => { setThreshold(preset); saveThreshold(preset); }}
                       className={cn(
                         'flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all',
                         threshold === preset ? 'bg-indigo-600 text-white shadow-sm' : 'bg-gray-50 text-gray-400 hover:bg-gray-100'
