@@ -137,6 +137,12 @@ const Energy = () => {
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    const handler = () => loadData();
+    window.addEventListener('vibecal:sync-complete', handler);
+    return () => window.removeEventListener('vibecal:sync-complete', handler);
+  }, [loadData]);
+
   const loadData = useCallback(async () => {
     setLoading(true);
     try {

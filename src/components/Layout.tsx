@@ -12,7 +12,10 @@ const Layout = ({ children }: LayoutProps) => {
   const { isSyncing, syncCalendars } = useSyncCalendars();
 
   const handleGlobalSync = async () => {
-    await syncCalendars();
+    const result = await syncCalendars();
+    if (result.success) {
+      window.dispatchEvent(new CustomEvent('vibecal:sync-complete'));
+    }
   };
 
   return (

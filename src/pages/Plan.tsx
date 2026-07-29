@@ -107,6 +107,12 @@ const Plan = () => {
     fetchData();
   }, []);
 
+  useEffect(() => {
+    const handler = () => fetchData();
+    window.addEventListener('vibecal:sync-complete', handler);
+    return () => window.removeEventListener('vibecal:sync-complete', handler);
+  }, []);
+
   const runAnalysis = async (skipSync = false, forceVetRedirect = false) => {
     setIsProcessing(true);
     setTokenMissing(false);

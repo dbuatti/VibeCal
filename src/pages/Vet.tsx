@@ -96,6 +96,12 @@ const Vet = () => {
     fetchEvents();
   }, []);
 
+  useEffect(() => {
+    const handler = () => fetchEvents();
+    window.addEventListener('vibecal:sync-complete', handler);
+    return () => window.removeEventListener('vibecal:sync-complete', handler);
+  }, []);
+
   const handleFullSync = async () => {
     setIsProcessing(true);
     setStatusText('Performing full system sync...');

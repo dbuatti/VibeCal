@@ -46,7 +46,11 @@ async function copyEvents(months: number) {
       const time = isValid(s) ? format(s, 'HH:mm') : '?';
       const end = parseISO(e.end_time);
       const endTime = isValid(end) ? format(end, 'HH:mm') : '?';
-      const dur = e.duration_minutes ? `${e.duration_minutes}m` : '?';
+      const dur = e.duration_minutes
+        ? `${e.duration_minutes}m`
+        : e.start_time && e.end_time
+          ? `${Math.round((end.getTime() - s.getTime()) / 60000)}m`
+          : '?';
       const title = (e.title || '').replace(/\|/g, '-');
       const cal = e.source_calendar || '';
       return `${date} | ${day} | ${time}-${endTime} | ${dur.padStart(5)} | ${title} | ${cal}`;
