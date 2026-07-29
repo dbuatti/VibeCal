@@ -230,30 +230,21 @@ Deno.serve(async (req) => {
 
             const rruleLine = unfolded.match(/RRULE:(.*)/i);
             if (rruleLine) {
-              let rruleStr = rruleLine[1].trim().replace(/\\;/g, ';').replace(/\\,/g, ',');
-              const dtstartDate = new Date(startTime);
+              const rruleStr = rruleLine[1].trim().replace(/\\;/g, ';').replace(/\\,/g, ',');
               const tzid = (unfolded.match(/DTSTART;TZID=([^:]+):/i) || [])[1];
-              // Adjust BYDAY to UTC day-of-week (rrule library operates in runtime timezone = UTC)
-              if (tzid) {
-                const DAYS = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
-                const utcDay = DAYS[dtstartDate.getUTCDay()];
-                const localDayNum = parseInt(formatInTimeZone(dtstartDate, tzid, 'i'));
-                const localDay = DAYS[localDayNum % 7];
-                if (localDay !== utcDay) {
-                  const shift = DAYS.indexOf(localDay) - DAYS.indexOf(utcDay);
-                  rruleStr = rruleStr.replace(/BYDAY=([A-Z,]+)/, (match, daysStr) => {
-                    const shifted = daysStr.split(',').map(d => {
-                      const idx = DAYS.indexOf(d);
-                      return idx === -1 ? d : DAYS[((idx - shift) % 7 + 7) % 7];
-                    }).join(',');
-                    return `BYDAY=${shifted}`;
-                  });
-                }
-              }
+              // Parse RAW ICS local date+time (wall-clock time, not UTC)
+              const rawStart = startMatch[1].trim();
+              const localY = parseInt(rawStart.substring(0, 4));
+              const localM = parseInt(rawStart.substring(4, 6)) - 1;
+              const localD = parseInt(rawStart.substring(6, 8));
+              const localH = parseInt(rawStart.substring(9, 11));
+              const localMin = parseInt(rawStart.substring(11, 13));
+              const localSec = parseInt(rawStart.substring(13, 15)) || 0;
+              // Use midnight UTC of the LOCAL date as dtstart — keeps UTC dates aligned with local dates
+              const dtstartDate = new Date(Date.UTC(localY, localM, localD, 0, 0, 0));
               try {
                 const rruleOpts = RRule.parseString(rruleStr);
                 rruleOpts.dtstart = dtstartDate;
-                if (tzid) rruleOpts.tzid = tzid;
                 const rule = new RRule(rruleOpts);
                 const rangeEnd = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000);
                 const rangeStart = parseISO(todayStartISO);
@@ -270,17 +261,16 @@ Deno.serve(async (req) => {
                   }
                 }
                 for (const occDate of occurrences) {
-                  const occLocalDate = formatInTimeZone(occDate, tzid || userTimezone, 'yyyyMMdd');
-                  if (exdateLocalDates.has(occLocalDate)) continue;
-                  const occStartDate = new Date(Date.UTC(
-                    occDate.getUTCFullYear(), occDate.getUTCMonth(), occDate.getUTCDate(),
-                    dtstartDate.getUTCHours(), dtstartDate.getUTCMinutes(), dtstartDate.getUTCSeconds()
-                  ));
-                  const occStart = occStartDate.toISOString();
-                  const occEnd = new Date(occStartDate.getTime() + durationMs).toISOString();
+                  // Get the local date in user's timezone, combine with original local wall-clock time
+                  const occLocalDate = formatInTimeZone(occDate, tzid || userTimezone, 'yyyy-MM-dd');
+                  if (exdateLocalDates.has(occLocalDate.replace(/-/g, ''))) continue;
+                  const occDtStr = `${occLocalDate}T${String(localH).padStart(2,'0')}:${String(localMin).padStart(2,'0')}:${String(localSec).padStart(2,'0')}`;
+                  const occInTz = toDate(occDtStr, { timeZone: tzid || userTimezone });
+                  const occStart = occInTz.toISOString();
+                  const occEnd = new Date(occInTz.getTime() + durationMs).toISOString();
                   allEvents.push({
                     user_id: user.id,
-                    event_id: `${uidMatch[1].trim()}_${formatInTimeZone(occStartDate, 'UTC', 'yyyyMMdd')}`,
+                    event_id: `${uidMatch[1].trim()}_${formatInTimeZone(occInTz, tzid || userTimezone, 'yyyyMMdd')}`,
                     title,
                     start_time: occStart,
                     end_time: occEnd,
