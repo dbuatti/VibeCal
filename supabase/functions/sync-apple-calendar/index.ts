@@ -148,8 +148,11 @@ Deno.serve(async (req) => {
     for (const cal of enabledCalendars) {
       try {
         console.log(`[${functionName}] Fetching events from calendar: ${cal.calendar_name}`);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 45000);
         const reportRes = await fetch(cal.calendar_id, {
           method: 'REPORT',
+          signal: controller.signal,
           headers: { ...headers, 'Content-Type': 'application/xml; charset=utf-8' },
           body: `<?xml version="1.0" encoding="utf-8" ?>
             <C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
@@ -164,6 +167,7 @@ Deno.serve(async (req) => {
             </C:calendar-query>`
         });
         console.log(`[${functionName}] REPORT response status: ${reportRes.status} for ${cal.calendar_name}`);
+        clearTimeout(timeoutId);
 
         const reportText = await reportRes.text();
         const icsBlocks = reportText.match(/<[^>]*calendar-data[^>]*>([\s\S]*?)<\/[^>]*calendar-data>/gi) || [];
