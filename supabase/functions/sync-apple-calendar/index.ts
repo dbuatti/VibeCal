@@ -153,7 +153,7 @@ Deno.serve(async (req) => {
           headers: { ...headers, 'Content-Type': 'application/xml; charset=utf-8' },
           body: `<?xml version="1.0" encoding="utf-8" ?>
             <C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
-              <D:prop><C:calendar-data/></D:prop>
+              <D:prop><C:calendar-data><C:expand start="${startRange}" end="${endRange}"/></C:calendar-data></D:prop>
               <C:filter>
                 <C:comp-filter name="VCALENDAR">
                   <C:comp-filter name="VEVENT">
@@ -176,6 +176,7 @@ Deno.serve(async (req) => {
           const unfolded = icsData.replace(/\r\n\s/g, '');
           const summaryMatch = unfolded.match(/SUMMARY:(.*)/i);
           const uidMatch = unfolded.match(/UID:(.*)/i);
+          const ridMatch = unfolded.match(/RECURRENCE-ID(?:;[^:]*)?:(\d{8}T\d{6}Z?)/i);
           
           // Improved regex to handle parameters like ;TZID=...
           const startMatch = unfolded.match(/DTSTART(?:;[^:]*)?:(\d{8}T\d{6}Z?)/i);
@@ -209,9 +210,10 @@ Deno.serve(async (req) => {
             const durationMinutes = Math.round((new Date(endTime).getTime() - new Date(startTime).getTime()) / 60000);
 
             if (!isBefore(parseISO(startTime), parseISO(todayStartISO))) {
+              const rid = ridMatch?.[1] ? ridMatch[1].trim() : null;
               allEvents.push({
                 user_id: user.id,
-                event_id: uidMatch[1].trim(),
+                event_id: rid ? `${uidMatch[1].trim()}_${rid}` : uidMatch[1].trim(),
                 title: title,
                 start_time: startTime,
                 end_time: endTime,
