@@ -216,6 +216,11 @@ Deno.serve(async (req) => {
             if (durationMatch) {
               const dh = parseInt(durationMatch[1] || '0'), dm = parseInt(durationMatch[2] || '0'), ds = parseInt(durationMatch[3] || '0');
               durationMs = ((dh * 3600) + (dm * 60) + ds) * 1000;
+            } else if (durationMs > 86400000) {
+              const [sH, sM] = [new Date(startTime).getUTCHours(), new Date(startTime).getUTCMinutes()];
+              const [eH, eM] = [new Date(endTime).getUTCHours(), new Date(endTime).getUTCMinutes()];
+              durationMs = ((eH * 3600 + eM * 60) - (sH * 3600 + sM * 60)) * 1000;
+              if (durationMs <= 0) durationMs += 86400000;
             }
             if (durationMs <= 0 || durationMs > 86400000) {
               console.warn(`[${functionName}] Suspicious duration ${Math.round(durationMs/3600000)}h for "${title}", defaulting to 60min`);
@@ -228,7 +233,6 @@ Deno.serve(async (req) => {
               const rruleStr = rruleLine[1].trim().replace(/\\;/g, ';').replace(/\\,/g, ',');
               const dtstartDate = new Date(startTime);
               const tzid = (unfolded.match(/DTSTART;TZID=([^:]+):/i) || [])[1];
-              console.log(`[${functionName}] RRULE "${title}": start=${startTime} end=${endTime} dur=${Math.round(durationMs/60000)}min rrule=${rruleStr} tzid=${tzid}`);
               try {
                 const rruleOpts = RRule.parseString(rruleStr);
                 rruleOpts.dtstart = dtstartDate;
@@ -251,11 +255,15 @@ Deno.serve(async (req) => {
                 for (const occDate of occurrences) {
                   const occKey = formatInTimeZone(occDate, 'UTC', "yyyyMMdd'T'HHmmss'Z'");
                   if (exdates.has(occKey)) continue;
-                  const occStart = occDate.toISOString();
-                  const occEnd = new Date(occDate.getTime() + durationMs).toISOString();
+                  const occStartDate = new Date(Date.UTC(
+                    occDate.getUTCFullYear(), occDate.getUTCMonth(), occDate.getUTCDate(),
+                    dtstartDate.getUTCHours(), dtstartDate.getUTCMinutes(), dtstartDate.getUTCSeconds()
+                  ));
+                  const occStart = occStartDate.toISOString();
+                  const occEnd = new Date(occStartDate.getTime() + durationMs).toISOString();
                   allEvents.push({
                     user_id: user.id,
-                    event_id: `${uidMatch[1].trim()}_${formatInTimeZone(occDate, 'UTC', 'yyyyMMdd')}`,
+                    event_id: `${uidMatch[1].trim()}_${formatInTimeZone(occStartDate, 'UTC', 'yyyyMMdd')}`,
                     title,
                     start_time: occStart,
                     end_time: occEnd,
