@@ -230,9 +230,26 @@ Deno.serve(async (req) => {
 
             const rruleLine = unfolded.match(/RRULE:(.*)/i);
             if (rruleLine) {
-              const rruleStr = rruleLine[1].trim().replace(/\\;/g, ';').replace(/\\,/g, ',');
+              let rruleStr = rruleLine[1].trim().replace(/\\;/g, ';').replace(/\\,/g, ',');
               const dtstartDate = new Date(startTime);
               const tzid = (unfolded.match(/DTSTART;TZID=([^:]+):/i) || [])[1];
+              // Adjust BYDAY to UTC day-of-week (rrule library operates in runtime timezone = UTC)
+              if (tzid) {
+                const DAYS = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+                const utcDay = DAYS[dtstartDate.getUTCDay()];
+                const localDayNum = parseInt(formatInTimeZone(dtstartDate, tzid, 'i'));
+                const localDay = DAYS[localDayNum % 7];
+                if (localDay !== utcDay) {
+                  const shift = DAYS.indexOf(localDay) - DAYS.indexOf(utcDay);
+                  rruleStr = rruleStr.replace(/BYDAY=([A-Z,]+)/, (match, daysStr) => {
+                    const shifted = daysStr.split(',').map(d => {
+                      const idx = DAYS.indexOf(d);
+                      return idx === -1 ? d : DAYS[((idx - shift) % 7 + 7) % 7];
+                    }).join(',');
+                    return `BYDAY=${shifted}`;
+                  });
+                }
+              }
               try {
                 const rruleOpts = RRule.parseString(rruleStr);
                 rruleOpts.dtstart = dtstartDate;
@@ -242,19 +259,19 @@ Deno.serve(async (req) => {
                 const rangeStart = parseISO(todayStartISO);
                 const occurrences = rule.between(rangeStart, rangeEnd, true);
                 const exdatesRaw = unfolded.match(/EXDATE(?:;[^:]*)?:([\d,;TZ=]+)/gi);
-                const exdates = new Set<string>();
+                const exdateLocalDates = new Set<string>();
                 if (exdatesRaw) {
                   for (const ex of exdatesRaw) {
                     const vals = (ex.match(/:([\d,TZ;=]+)/i)?.[1] || '').split(',');
                     for (const v of vals) {
-                      const m = v.match(/(\d{8}T\d{6}Z?)/);
-                      if (m) exdates.add(m[1]);
+                      const m = v.match(/(\d{8})T/);
+                      if (m) exdateLocalDates.add(m[1]);
                     }
                   }
                 }
                 for (const occDate of occurrences) {
-                  const occKey = formatInTimeZone(occDate, 'UTC', "yyyyMMdd'T'HHmmss'Z'");
-                  if (exdates.has(occKey)) continue;
+                  const occLocalDate = formatInTimeZone(occDate, tzid || userTimezone, 'yyyyMMdd');
+                  if (exdateLocalDates.has(occLocalDate)) continue;
                   const occStartDate = new Date(Date.UTC(
                     occDate.getUTCFullYear(), occDate.getUTCMonth(), occDate.getUTCDate(),
                     dtstartDate.getUTCHours(), dtstartDate.getUTCMinutes(), dtstartDate.getUTCSeconds()
