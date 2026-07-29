@@ -217,7 +217,7 @@ Deno.serve(async (req) => {
 
             const rruleLine = unfolded.match(/RRULE:(.*)/i);
             if (rruleLine) {
-              const rruleStr = rruleLine[1].trim();
+              const rruleStr = rruleLine[1].trim().replace(/\\;/g, ';').replace(/\\,/g, ',');
               const dtstartDate = new Date(startTime);
               const tzid = (unfolded.match(/DTSTART;TZID=([^:]+):/i) || [])[1];
               try {
