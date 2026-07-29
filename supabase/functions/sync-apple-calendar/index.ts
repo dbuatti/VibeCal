@@ -212,7 +212,15 @@ Deno.serve(async (req) => {
             }
 
             const title = summaryMatch?.[1]?.trim() || 'Untitled';
-            const durationMs = new Date(endTime).getTime() - new Date(startTime).getTime();
+            let durationMs = new Date(endTime).getTime() - new Date(startTime).getTime();
+            if (durationMatch) {
+              const dh = parseInt(durationMatch[1] || '0'), dm = parseInt(durationMatch[2] || '0'), ds = parseInt(durationMatch[3] || '0');
+              durationMs = ((dh * 3600) + (dm * 60) + ds) * 1000;
+            }
+            if (durationMs <= 0 || durationMs > 86400000) {
+              console.warn(`[${functionName}] Suspicious duration ${Math.round(durationMs/3600000)}h for "${title}", defaulting to 60min`);
+              durationMs = 3600000;
+            }
             const durationMinutes = Math.round(durationMs / 60000);
 
             const rruleLine = unfolded.match(/RRULE:(.*)/i);
@@ -220,6 +228,7 @@ Deno.serve(async (req) => {
               const rruleStr = rruleLine[1].trim().replace(/\\;/g, ';').replace(/\\,/g, ',');
               const dtstartDate = new Date(startTime);
               const tzid = (unfolded.match(/DTSTART;TZID=([^:]+):/i) || [])[1];
+              console.log(`[${functionName}] RRULE "${title}": start=${startTime} end=${endTime} dur=${Math.round(durationMs/60000)}min rrule=${rruleStr} tzid=${tzid}`);
               try {
                 const rruleOpts = RRule.parseString(rruleStr);
                 rruleOpts.dtstart = dtstartDate;
