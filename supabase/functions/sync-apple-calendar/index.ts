@@ -45,6 +45,8 @@ Deno.serve(async (req) => {
 
     // 3. Cleanup Step — delete ALL existing Apple events from cache so stale/deleted entries don't persist
     const todayStartISO = formatInTimeZone(new Date(), userTimezone, "yyyy-MM-dd'T'00:00:00XXX");
+    const LOOKBACK_DAYS = 90;
+    const lookbackStartDate = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
     const cleanupUrl = `${supabaseUrl}/rest/v1/calendar_events_cache?user_id=eq.${user.id}&provider=eq.apple`;
     await fetch(cleanupUrl, {
       method: 'DELETE',
@@ -142,7 +144,7 @@ Deno.serve(async (req) => {
     const allEvents = [];
     
     const startRange = customMin ? new Date(customMin).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z' : 
-                      new Date(todayStartISO).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+                      lookbackStartDate.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     const endRange = customMax ? new Date(customMax).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z' : 
                     new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
@@ -247,7 +249,7 @@ Deno.serve(async (req) => {
                 rruleOpts.dtstart = dtstartDate;
                 const rule = new RRule(rruleOpts);
                 const rangeEnd = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000);
-                const rangeStart = parseISO(todayStartISO);
+                const rangeStart = lookbackStartDate;
                 const occurrences = rule.between(rangeStart, rangeEnd, true);
                 const exdatesRaw = unfolded.match(/EXDATE(?:;[^:]*)?:([\d,;TZ=]+)/gi);
                 const exdateLocalDates = new Set<string>();
@@ -283,7 +285,7 @@ Deno.serve(async (req) => {
                 }
               } catch (e) {
                 console.error(`[${functionName}] RRULE parse error for "${title}": ${rruleStr}`, e.message);
-                if (!isBefore(parseISO(startTime), parseISO(todayStartISO))) {
+                if (!isBefore(parseISO(startTime), lookbackStartDate)) {
                   const rid = ridMatch?.[1] ? ridMatch[1].trim() : null;
                   allEvents.push({
                     user_id: user.id,
@@ -297,7 +299,7 @@ Deno.serve(async (req) => {
                 }
               }
             } else {
-              if (!isBefore(parseISO(startTime), parseISO(todayStartISO))) {
+              if (!isBefore(parseISO(startTime), lookbackStartDate)) {
                 const rid = ridMatch?.[1] ? ridMatch[1].trim() : null;
                 allEvents.push({
                   user_id: user.id,
