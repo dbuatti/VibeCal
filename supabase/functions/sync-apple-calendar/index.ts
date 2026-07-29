@@ -1,7 +1,8 @@
 // @ts-nocheck
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
 import { toDate, formatInTimeZone } from 'https://esm.sh/date-fns-tz@3.2.0?deps=date-fns@3.6.0'
-import { addMinutes, parseISO, isBefore, startOfDay } from 'https://esm.sh/date-fns@3.6.0'
+import { addMinutes, parseISO, isBefore, startOfDay, differenceInMinutes } from 'https://esm.sh/date-fns@3.6.0'
+import { RRule, RRuleSet, rrulestr } from 'https://esm.sh/rrule@2.8.1'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -211,22 +212,79 @@ Deno.serve(async (req) => {
             }
 
             const title = summaryMatch?.[1]?.trim() || 'Untitled';
-            const durationMinutes = Math.round((new Date(endTime).getTime() - new Date(startTime).getTime()) / 60000);
+            const durationMs = new Date(endTime).getTime() - new Date(startTime).getTime();
+            const durationMinutes = Math.round(durationMs / 60000);
 
-            if (!isBefore(parseISO(startTime), parseISO(todayStartISO))) {
-              const rid = ridMatch?.[1] ? ridMatch[1].trim() : null;
-              allEvents.push({
-                user_id: user.id,
-                event_id: rid ? `${uidMatch[1].trim()}_${rid}` : uidMatch[1].trim(),
-                title: title,
-                start_time: startTime,
-                end_time: endTime,
-                duration_minutes: durationMinutes,
-                provider: 'apple',
-                source_calendar: labelMap[cal.calendar_id] || cal.calendar_name,
-                source_calendar_id: cal.calendar_id,
-                last_synced_at: new Date().toISOString()
-              });
+            const rruleLine = unfolded.match(/RRULE:(.*)/i);
+            if (rruleLine) {
+              const rruleStr = rruleLine[1].trim();
+              const dtstartDate = new Date(startTime);
+              const tzid = (unfolded.match(/DTSTART;TZID=([^:]+):/i) || [])[1];
+              try {
+                const rruleOpts = RRule.parseString(rruleStr);
+                rruleOpts.dtstart = dtstartDate;
+                if (tzid) rruleOpts.tzid = tzid;
+                const rule = new RRule(rruleOpts);
+                const rangeEnd = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000);
+                const rangeStart = parseISO(todayStartISO);
+                const occurrences = rule.between(rangeStart, rangeEnd, true);
+                const exdatesRaw = unfolded.match(/EXDATE(?:;[^:]*)?:([\d,;TZ=]+)/gi);
+                const exdates = new Set<string>();
+                if (exdatesRaw) {
+                  for (const ex of exdatesRaw) {
+                    const vals = (ex.match(/:([\d,TZ;=]+)/i)?.[1] || '').split(',');
+                    for (const v of vals) {
+                      const m = v.match(/(\d{8}T\d{6}Z?)/);
+                      if (m) exdates.add(m[1]);
+                    }
+                  }
+                }
+                for (const occDate of occurrences) {
+                  const occKey = formatInTimeZone(occDate, 'UTC', "yyyyMMdd'T'HHmmss'Z'");
+                  if (exdates.has(occKey)) continue;
+                  const occStart = occDate.toISOString();
+                  const occEnd = new Date(occDate.getTime() + durationMs).toISOString();
+                  allEvents.push({
+                    user_id: user.id,
+                    event_id: `${uidMatch[1].trim()}_${formatInTimeZone(occDate, 'UTC', 'yyyyMMdd')}`,
+                    title,
+                    start_time: occStart,
+                    end_time: occEnd,
+                    duration_minutes: Math.round(durationMs / 60000),
+                    provider: 'apple',
+                    source_calendar: labelMap[cal.calendar_id] || cal.calendar_name,
+                    source_calendar_id: cal.calendar_id,
+                    last_synced_at: new Date().toISOString()
+                  });
+                }
+              } catch (e) {
+                console.error(`[${functionName}] RRULE parse error for "${title}": ${rruleStr}`, e.message);
+                if (!isBefore(parseISO(startTime), parseISO(todayStartISO))) {
+                  const rid = ridMatch?.[1] ? ridMatch[1].trim() : null;
+                  allEvents.push({
+                    user_id: user.id,
+                    event_id: rid ? `${uidMatch[1].trim()}_${rid}` : uidMatch[1].trim(),
+                    title, start_time: startTime, end_time: endTime,
+                    duration_minutes: durationMinutes, provider: 'apple',
+                    source_calendar: labelMap[cal.calendar_id] || cal.calendar_name,
+                    source_calendar_id: cal.calendar_id,
+                    last_synced_at: new Date().toISOString()
+                  });
+                }
+              }
+            } else {
+              if (!isBefore(parseISO(startTime), parseISO(todayStartISO))) {
+                const rid = ridMatch?.[1] ? ridMatch[1].trim() : null;
+                allEvents.push({
+                  user_id: user.id,
+                  event_id: rid ? `${uidMatch[1].trim()}_${rid}` : uidMatch[1].trim(),
+                  title, start_time: startTime, end_time: endTime,
+                  duration_minutes: durationMinutes, provider: 'apple',
+                  source_calendar: labelMap[cal.calendar_id] || cal.calendar_name,
+                  source_calendar_id: cal.calendar_id,
+                  last_synced_at: new Date().toISOString()
+                });
+              }
             }
           }
         }
