@@ -6,7 +6,7 @@ import Layout from '@/components/Layout';
 import PageHeader from '@/components/PageHeader';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
-import { useSyncCalendars } from '@/hooks/useSyncCalendars';
+import { useSync } from '@/contexts/SyncContext';
 import { 
   Lock, 
   Unlock, 

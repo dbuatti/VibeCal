@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Sparkles, RefreshCw, Calendar, Clock, Lock, Unlock, ChevronRight, ListOrdered, BrainCircuit, Inbox, ChevronLeft } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
-import { useSyncCalendars } from '@/hooks/useSyncCalendars';
+import { useSync } from '@/contexts/SyncContext';
 import { format, nextSaturday } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { useNavigate } from 'react-router-dom';
@@ -25,7 +25,7 @@ const DAYS = [
 
 const Optimise = () => {
   const navigate = useNavigate();
-  const { syncCalendars } = useSyncCalendars();
+  const { syncCalendars } = useSync();
   const [currentStep, setCurrentStep] = useState<Step>('initial');
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusText, setStatusText] = useState('');

@@ -114,6 +114,7 @@ export function useSyncCalendars(): UseSyncCalendarsReturn {
       setLastSyncedAt(now);
       saveLastSynced();
       setIsSyncing(false);
+      window.dispatchEvent(new CustomEvent('vibecal:sync-complete'));
       return { success: true, tokenMissing: false };
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Sync failed';

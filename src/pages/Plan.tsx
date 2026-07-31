@@ -6,7 +6,7 @@ import Layout from '@/components/Layout';
 import PageHeader from '@/components/PageHeader';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
-import { useSyncCalendars } from '@/hooks/useSyncCalendars';
+import { useSync } from '@/contexts/SyncContext';
 import DayByDayPlanner from '@/components/DayByDayPlanner';
 import RequirementsForm from '@/components/RequirementsForm';
 import PlanInitialView from '@/components/plan/PlanInitialView';
@@ -27,7 +27,7 @@ type PlanStep = 'initial' | 'analysis' | 'vetting_tasks' | 'requirements' | 'act
 
 const Plan = () => {
   const navigate = useNavigate();
-  const { syncCalendars } = useSyncCalendars();
+  const { syncCalendars } = useSync();
   const [loading, setLoading] = useState(true);
   const [currentStep, setCurrentStep] = useState<PlanStep>('initial');
   const [isProcessing, setIsProcessing] = useState(false);

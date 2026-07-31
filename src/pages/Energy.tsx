@@ -6,7 +6,7 @@ import Layout from '@/components/Layout';
 import PageHeader from '@/components/PageHeader';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
-import { useSyncCalendars } from '@/hooks/useSyncCalendars';
+import { useSync } from '@/contexts/SyncContext';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, Cell, ReferenceLine,
@@ -17,6 +17,10 @@ import {
   CalendarClock, Lightbulb, ShieldCheck, CalendarOff, Layers, Target,
   CalendarHeart, Plus, Clock, ArrowRight, Brain, CheckSquare,
 } from 'lucide-react';
+import StatCard from '@/components/StatCard';
+import { durationHours, mergeIntervalsHours, eventInterval } from '@/utils/eventUtils';
+import { LS_KEYS } from '@/utils/constants';
+import type { CachedEvent, WeekBucket } from '@/types/events';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
@@ -40,76 +44,11 @@ type ViewMode = 'overview' | 'calendar' | 'dayoff';
 type WeekRangeOption = 1 | 4 | 6 | 8 | 12;
 const WEEK_RANGE_OPTIONS: WeekRangeOption[] = [1, 4, 6, 8, 12];
 
-interface CachedEvent {
-  event_id: string;
-  title: string;
-  start_time: string;
-  end_time: string;
-  duration_minutes: number | null;
-  provider: string;
-  source_calendar: string | null;
-  is_locked: boolean | null;
-}
-
-interface WeekBucket {
-  weekStart: Date;
-  weekEnd: Date;
-  label: string;
-  rangeLabel: string;
-  totalWorkHours: number;
-  byCategory: Record<AppointmentCategory, number>;
-  eventCount: number;
-  hasDayOff: boolean;
-  categoriesPresent: AppointmentCategory[];
-  pctOfGoal: number;
-}
-
-const DEFAULT_THRESHOLD = 30; // hrs/week — weekly goal
-
-const durationHours = (e: CachedEvent): number => {
-  if (e.duration_minutes && e.duration_minutes > 0) return e.duration_minutes / 60;
-  if (e.start_time && e.end_time) {
-    const s = parseISO(e.start_time);
-    const en = parseISO(e.end_time);
-    if (isValid(s) && isValid(en)) return Math.max(0, (en.getTime() - s.getTime()) / 3600000);
-  }
-  return 0;
-};
-
-// Merge overlapping [start, end] intervals and return net covered hours.
-// Prevents double-counting when events overlap (e.g. a show + dinner at the same time).
-interface Interval { start: number; end: number }
-
-const mergeIntervalsHours = (intervals: Interval[]): number => {
-  if (intervals.length === 0) return 0;
-  const sorted = [...intervals].sort((a, b) => a.start - b.start);
-  let total = 0;
-  let curStart = sorted[0].start;
-  let curEnd = sorted[0].end;
-  for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i].start <= curEnd) {
-      curEnd = Math.max(curEnd, sorted[i].end);
-    } else {
-      total += (curEnd - curStart) / 3600000;
-      curStart = sorted[i].start;
-      curEnd = sorted[i].end;
-    }
-  }
-  total += (curEnd - curStart) / 3600000;
-  return Math.max(0, total);
-};
-
-const eventInterval = (e: CachedEvent): Interval | null => {
-  if (!e.start_time || !e.end_time) return null;
-  const s = parseISO(e.start_time);
-  const en = parseISO(e.end_time);
-  if (!isValid(s) || !isValid(en)) return null;
-  return { start: s.getTime(), end: en.getTime() };
-};
+const DEFAULT_THRESHOLD = 30;
 
 const Energy = () => {
   const navigate = useNavigate();
-  const { syncCalendars } = useSyncCalendars();
+  const { syncCalendars } = useSync();
   const [loading, setLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusText, setStatusText] = useState('');
@@ -128,7 +67,7 @@ const Energy = () => {
   const [showImporter, setShowImporter] = useState(false);
   const [now, setNow] = useState(new Date());
   const [celebrationStreak, setCelebrationStreak] = useState(() => {
-    const saved = localStorage.getItem('vibecal_streak');
+    const saved = localStorage.getItem(LS_KEYS.STREAK);
     return saved ? JSON.parse(saved) : { count: 0, lastWeek: '' };
   });
 
@@ -619,7 +558,7 @@ const Energy = () => {
       ? { count: celebrationStreak.count + 1, lastWeek: weekId }
       : { count: 0, lastWeek: '' };
     setCelebrationStreak(newStreak);
-    localStorage.setItem('vibecal_streak', JSON.stringify(newStreak));
+    localStorage.setItem(LS_KEYS.STREAK, JSON.stringify(newStreak));
   }, [weeks, threshold, celebrationStreak.lastWeek]);
 
   if (loading) {
@@ -1298,40 +1237,6 @@ const Energy = () => {
         onCreated={() => loadData()}
       />
     </Layout>
-  );
-};
-
-interface StatCardProps {
-  icon: LucideIcon;
-  label: string;
-  value: string;
-  sub?: string;
-  accent: 'indigo' | 'amber' | 'red' | 'green' | 'purple';
-}
-
-const StatCard = ({ icon: Icon, label, value, sub, accent }: StatCardProps) => {
-  const accents: Record<string, string> = {
-    indigo: 'bg-indigo-50 text-indigo-600',
-    amber: 'bg-amber-50 text-amber-600',
-    red: 'bg-red-50 text-red-600',
-    green: 'bg-green-50 text-green-600',
-    purple: 'bg-purple-50 text-purple-600',
-  };
-  return (
-    <Card className="border-none shadow-sm rounded-2xl bg-white overflow-hidden hover:shadow-md transition-shadow">
-      <CardContent className="p-4 flex items-center gap-3">
-        <div className={cn('w-9 h-9 rounded-xl flex items-center justify-center shrink-0', accents[accent])}>
-          <Icon size={16} />
-        </div>
-        <div className="min-w-0">
-          <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest leading-tight">{label}</p>
-          <div className="flex items-baseline gap-1">
-            <h3 className="text-xl font-black text-gray-900 leading-none">{value}</h3>
-            {sub && <span className="text-[8px] font-black text-gray-400 uppercase tracking-widest">{sub}</span>}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
   );
 };
 

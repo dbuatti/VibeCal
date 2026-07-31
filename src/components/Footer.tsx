@@ -1,22 +1,12 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { RefreshCw, Activity, Brain, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-const STORAGE_KEY = 'vibecal_last_synced_at';
+import { useSync } from '@/contexts/SyncContext';
 
 interface FooterProps {
   isSyncing: boolean;
   onSync: () => void;
-}
-
-function loadLastSynced(): Date | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? new Date(raw) : null;
-  } catch {
-    return null;
-  }
 }
 
 function timeAgo(date: Date): string {
@@ -30,7 +20,15 @@ function timeAgo(date: Date): string {
 }
 
 const Footer = ({ isSyncing, onSync }: FooterProps) => {
-  const lastSyncedAt = loadLastSynced();
+  const { lastSyncedAt } = useSync();
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const syncedLabel = lastSyncedAt ? timeAgo(lastSyncedAt) : null;
 
   return (
     <footer className="border-t border-gray-100 bg-white/80 backdrop-blur-xl mt-16">
@@ -39,8 +37,8 @@ const Footer = ({ isSyncing, onSync }: FooterProps) => {
           {lastSyncedAt ? (
             <span>
               Last synced{' '}
-              <span className="font-bold text-gray-500">
-                {timeAgo(lastSyncedAt)}
+              <span className="font-bold text-gray-500" key={syncedLabel}>
+                {syncedLabel}
               </span>
             </span>
           ) : (

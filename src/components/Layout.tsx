@@ -2,20 +2,17 @@ import React from 'react';
 import FloatingMenu from './FloatingMenu';
 import TopNav from './TopNav';
 import Footer from './Footer';
-import { useSyncCalendars } from '@/hooks/useSyncCalendars';
+import { useSync } from '@/contexts/SyncContext';
 
 interface LayoutProps {
   children: React.ReactNode;
 }
 
 const Layout = ({ children }: LayoutProps) => {
-  const { isSyncing, syncCalendars } = useSyncCalendars();
+  const { isSyncing, syncCalendars } = useSync();
 
   const handleGlobalSync = async () => {
-    const result = await syncCalendars();
-    if (result.success) {
-      window.dispatchEvent(new CustomEvent('vibecal:sync-complete'));
-    }
+    await syncCalendars();
   };
 
   return (

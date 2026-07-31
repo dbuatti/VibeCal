@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { SyncProvider } from "./contexts/SyncContext";
 import Energy from "./pages/Energy";
 import Optimise from "./pages/Optimise";
 import Settings from "./pages/Settings";
@@ -64,6 +65,7 @@ const App = () => {
             v7_relativeSplatPath: true 
           }}
         >
+          <SyncProvider>
           <ErrorBoundary>
             <Routes>
               <Route path="/login" element={!session ? <Login /> : <Navigate to="/" replace />} />
@@ -78,6 +80,7 @@ const App = () => {
               <Route path="*" element={<NotFound />} />
             </Routes>
           </ErrorBoundary>
+          </SyncProvider>
         </BrowserRouter>
       </TooltipProvider>
     </QueryClientProvider>
