@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Activity, Brain, CheckSquare, Sparkles, History, Settings, RefreshCw, ClipboardList } from 'lucide-react';
+import { Activity, Brain, CheckSquare, Sparkles, History, Settings, RefreshCw, ClipboardList, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
@@ -121,8 +121,8 @@ const TopNav = ({ isSyncing, onSync }: TopNavProps) => {
                   : 'text-gray-400 hover:text-gray-600'
               )}
             >
-              <ClipboardList size={10} />
-              3m
+              {copying === 3 ? <Loader2 size={10} className="animate-spin" /> : <ClipboardList size={10} />}
+              {copying === 3 ? 'Copying...' : '3m'}
             </button>
             <button
               onClick={() => handleCopy(6)}
@@ -135,8 +135,8 @@ const TopNav = ({ isSyncing, onSync }: TopNavProps) => {
                   : 'text-gray-400 hover:text-gray-600'
               )}
             >
-              <ClipboardList size={10} />
-              6m
+              {copying === 6 ? <Loader2 size={10} className="animate-spin" /> : <ClipboardList size={10} />}
+              {copying === 6 ? 'Copying...' : '6m'}
             </button>
           </div>
 
