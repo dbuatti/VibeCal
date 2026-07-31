@@ -88,6 +88,8 @@ const FloatingMenu = () => {
       {/* Toggle Button */}
       <Button
         onClick={() => setIsOpen(!isOpen)}
+        aria-label={isOpen ? 'Close navigation menu' : 'Open navigation menu'}
+        aria-expanded={isOpen}
         className={cn(
           "w-14 h-14 rounded-2xl shadow-2xl transition-all duration-500 hover:scale-110 active:scale-90 border-2 border-white",
           isOpen ? "bg-gray-900 rotate-90" : "bg-indigo-600"
