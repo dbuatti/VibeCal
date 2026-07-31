@@ -16,30 +16,8 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { showSuccess, showError } from '@/utils/toast';
-
-interface CachedEvent {
-  event_id: string;
-  title: string;
-  start_time: string;
-  end_time: string;
-  duration_minutes: number | null;
-  provider: string;
-  source_calendar: string | null;
-  is_locked: boolean | null;
-}
-
-interface WeekBucket {
-  weekStart: Date;
-  weekEnd: Date;
-  label: string;
-  rangeLabel: string;
-  totalWorkHours: number;
-  byCategory: Record<AppointmentCategory, number>;
-  eventCount: number;
-  hasDayOff: boolean;
-  categoriesPresent: AppointmentCategory[];
-  pctOfGoal: number;
-}
+import type { CachedEvent, WeekBucket } from '@/types/events';
+import { mergeIntervalsHours } from '@/utils/eventUtils';
 
 interface DayOffSuggesterProps {
   weeks: WeekBucket[];
@@ -60,27 +38,6 @@ interface DayLoad {
   hasExistingDayOff: boolean;
   isWeekend: boolean;
 }
-
-interface Interval { start: number; end: number }
-
-const mergeIntervalsHours = (intervals: Interval[]): number => {
-  if (intervals.length === 0) return 0;
-  const sorted = [...intervals].sort((a, b) => a.start - b.start);
-  let total = 0;
-  let curStart = sorted[0].start;
-  let curEnd = sorted[0].end;
-  for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i].start <= curEnd) {
-      curEnd = Math.max(curEnd, sorted[i].end);
-    } else {
-      total += (curEnd - curStart) / 3600000;
-      curStart = sorted[i].start;
-      curEnd = sorted[i].end;
-    }
-  }
-  total += (curEnd - curStart) / 3600000;
-  return Math.max(0, total);
-};
 
 const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 

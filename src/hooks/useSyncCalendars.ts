@@ -1,8 +1,7 @@
 import { useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { showError } from '@/utils/toast';
-
-const STORAGE_KEY = 'vibecal_last_synced_at';
+import { LS_KEYS } from '@/utils/constants';
 
 export interface SyncResult {
   success: boolean;
@@ -17,7 +16,7 @@ export interface UseSyncCalendarsReturn {
 
 function loadLastSynced(): Date | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(LS_KEYS.LAST_SYNCED_AT);
     return raw ? new Date(raw) : null;
   } catch {
     return null;
@@ -26,7 +25,7 @@ function loadLastSynced(): Date | null {
 
 function saveLastSynced() {
   try {
-    localStorage.setItem(STORAGE_KEY, new Date().toISOString());
+    localStorage.setItem(LS_KEYS.LAST_SYNCED_AT, new Date().toISOString());
   } catch {
     // localStorage unavailable
   }

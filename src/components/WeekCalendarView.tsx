@@ -12,30 +12,9 @@ import {
   CATEGORY_ORDER,
   type AppointmentCategory,
 } from '@/lib/eventClassifier';
-
-interface CachedEvent {
-  event_id: string;
-  title: string;
-  start_time: string;
-  end_time: string;
-  duration_minutes: number | null;
-  provider: string;
-  source_calendar: string | null;
-  is_locked: boolean | null;
-}
-
-interface WeekBucket {
-  weekStart: Date;
-  weekEnd: Date;
-  label: string;
-  rangeLabel: string;
-  totalWorkHours: number;
-  byCategory: Record<AppointmentCategory, number>;
-  eventCount: number;
-  hasDayOff: boolean;
-  categoriesPresent: AppointmentCategory[];
-  pctOfGoal: number;
-}
+import type { CachedEvent, WeekBucket } from '@/types/events';
+import { durationHours, mergeIntervalsHours } from '@/utils/eventUtils';
+import { LS_KEYS } from '@/utils/constants';
 
 interface WeekCalendarViewProps {
   weeks: WeekBucket[];
@@ -64,39 +43,6 @@ interface DayColumn {
   isFreeDay: boolean;
 }
 
-const durationHours = (e: CachedEvent): number => {
-  if (e.duration_minutes && e.duration_minutes > 0) return e.duration_minutes / 60;
-  if (e.start_time && e.end_time) {
-    const s = parseISO(e.start_time);
-    const en = parseISO(e.end_time);
-    if (isValid(s) && isValid(en)) return Math.max(0, (en.getTime() - s.getTime()) / 3600000);
-  }
-  return 0;
-};
-
-interface Interval { start: number; end: number }
-
-const mergeIntervalsHours = (intervals: Interval[]): number => {
-  if (intervals.length === 0) return 0;
-  const sorted = [...intervals].sort((a, b) => a.start - b.start);
-  let total = 0;
-  let curStart = sorted[0].start;
-  let curEnd = sorted[0].end;
-  for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i].start <= curEnd) {
-      curEnd = Math.max(curEnd, sorted[i].end);
-    } else {
-      total += (curEnd - curStart) / 3600000;
-      curStart = sorted[i].start;
-      curEnd = sorted[i].end;
-    }
-  }
-  total += (curEnd - curStart) / 3600000;
-  return Math.max(0, total);
-};
-
-const LS_PREFIX = 'vibecal_calcom_blocked_';
-
 const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
   weeks,
   events,
@@ -121,8 +67,8 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
     const saved: Set<string> = new Set();
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key?.startsWith(LS_PREFIX) && localStorage.getItem(key) === 'true') {
-        saved.add(key.replace(LS_PREFIX, ''));
+      if (key?.startsWith(LS_KEYS.CALCOM_BLOCKED) && localStorage.getItem(key) === 'true') {
+        saved.add(key.replace(LS_KEYS.CALCOM_BLOCKED, ''));
       }
     }
     return saved;
@@ -132,8 +78,8 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
     const saved: Set<string> = new Set();
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key?.startsWith('vibecal_day_blocked_') && localStorage.getItem(key) === 'true') {
-        saved.add(key.replace('vibecal_day_blocked_', ''));
+      if (key?.startsWith(LS_KEYS.DAY_BLOCKED) && localStorage.getItem(key) === 'true') {
+        saved.add(key.replace(LS_KEYS.DAY_BLOCKED, ''));
       }
     }
     return saved;
@@ -153,10 +99,10 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
       const next = new Set(prev);
       if (next.has(key)) {
         next.delete(key);
-        localStorage.setItem(LS_PREFIX + key, 'false');
+        localStorage.setItem(LS_KEYS.CALCOM_BLOCKED + key, 'false');
       } else {
         next.add(key);
-        localStorage.setItem(LS_PREFIX + key, 'true');
+        localStorage.setItem(LS_KEYS.CALCOM_BLOCKED + key, 'true');
       }
       return next;
     });
@@ -172,10 +118,10 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
       const next = new Set(prev);
       if (next.has(key)) {
         next.delete(key);
-        localStorage.setItem('vibecal_day_blocked_' + key, 'false');
+        localStorage.setItem(LS_KEYS.DAY_BLOCKED + key, 'false');
       } else {
         next.add(key);
-        localStorage.setItem('vibecal_day_blocked_' + key, 'true');
+        localStorage.setItem(LS_KEYS.DAY_BLOCKED + key, 'true');
       }
       return next;
     });
@@ -477,7 +423,7 @@ const WeekCalendarView: React.FC<WeekCalendarViewProps> = ({
                               <div className="flex items-center gap-1 mb-0.5">
                                 {!isBuffer && <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: meta.color }} />}
                                 <span className={cn('font-bold truncate', isBuffer ? 'text-gray-400' : 'text-gray-700')}>
-                                  {isBuffer ? '🚫' : ''} {event.title.length > 16 ? event.title.slice(0, 14) + '…' : event.title}
+                                  {isBuffer ? '🚫' : ''} {event.title}
                                 </span>
                               </div>
                               {timeLabel && (
